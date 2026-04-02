@@ -189,6 +189,10 @@
     <button id="load-model-btn" class="primary">Load Model (~380 MB, cached after first load)</button>
     <button id="resume-btn" hidden disabled>Resume last session</button>
     <button id="open-btn" disabled>Open Folder</button>
+    <div style="display:flex;gap:10px">
+      <button id="recenter-btn" disabled style="flex:1">⌖ Recenter</button>
+      <button id="reset-btn" disabled style="flex:1">Reset</button>
+    </div>
   </div>
 </header>
 
@@ -225,6 +229,8 @@ env.cacheDir = 'models';
 const loadModelBtn = document.getElementById('load-model-btn');
 const resumeBtn    = document.getElementById('resume-btn');
 const openBtn      = document.getElementById('open-btn');
+const recenterBtn  = document.getElementById('recenter-btn');
+const resetBtn     = document.getElementById('reset-btn');
 const progressBar  = document.getElementById('progress-bar');
 const statusEl     = document.getElementById('status');
 const canvas       = document.getElementById('canvas');
@@ -306,16 +312,18 @@ async function collectImages(dirHandle) {
 }
 
 // ── Thumbnail preloader ────────────────────────────────────────────────────────
+// Creates 96×96 ImageBitmap objects — browser discards the full-res decode immediately,
+// saving 50–200× memory vs keeping full <img> elements alive.
 async function preloadThumbnails(files) {
   const thumbs = new Array(files.length);
   for (let i = 0; i < files.length; i++) {
     if (!files[i].objectURL) files[i].objectURL = URL.createObjectURL(files[i].file);
-    const img = new Image();
-    img.src = files[i].objectURL;
-    thumbs[i] = img;
+    try {
+      thumbs[i] = await createImageBitmap(files[i].file, { resizeWidth: 96, resizeHeight: 96, resizeQuality: 'low' });
+    } catch {
+      thumbs[i] = null;
+    }
   }
-  // Wait a tick for images to start loading
-  await new Promise(r => setTimeout(r, 0));
   return thumbs;
 }
 
@@ -386,8 +394,10 @@ function kmeans(points, k, maxIter = 60) {
 }
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
-const THUMB_WORLD = 48;  // thumbnail size in world units
-const MIN_DIST    = 56;  // minimum center-to-center distance in world units
+const THUMB_WORLD   = 48;   // thumbnail size in world units
+const MIN_DIST      = 56;   // minimum center-to-center distance in world units
+const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
+const fullImages    = new Map(); // index → HTMLImageElement, loaded on demand, evicted when off-screen
 
 function resizeCanvas() {
   const wrap = canvas.parentElement;
@@ -466,6 +476,35 @@ function fitCamera() {
   camera.scale = Math.min(scX, scY);
 }
 
+function resetAll() {
+  // Free 96×96 ImageBitmaps
+  for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
+  // Evict any loaded full images
+  for (const img of fullImages.values()) img.src = '';
+  fullImages.clear();
+  // Revoke object URLs
+  for (const f of state.files) {
+    if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
+  }
+  // Reset state
+  state.phase = 'idle'; state.files = []; state.vectors = [];
+  state.points = []; state.clusters = null; state.thumbnails = [];
+  // Clear localStorage session
+  localStorage.removeItem('po_fileKeys');
+  localStorage.removeItem('po_umapPoints');
+  localStorage.removeItem('po_clusters');
+  // Clear canvas + camera
+  camera.x = 0; camera.y = 0; camera.scale = 1;
+  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+  // Reset UI
+  recenterBtn.disabled = true;
+  resetBtn.disabled = true;
+  resumeBtn.hidden = true;
+  openBtn.disabled = false;
+  setProgress(0);
+  setStatus('Cleared. Open a folder to start.');
+}
+
 const CLUSTER_COLORS = ['#f87171','#fb923c','#facc15','#4ade80','#38bdf8','#818cf8','#f472b6','#a78bfa'];
 
 function render() {
@@ -475,11 +514,13 @@ function render() {
   const thumbs = state.thumbnails;
   if (!pts.length) return;
 
-  const s   = camera.scale;
-  const cxW = canvas.width  / 2;
-  const cyW = canvas.height / 2;
+  const s        = camera.scale;
+  const cxW      = canvas.width  / 2;
+  const cyW      = canvas.height / 2;
   const drawSize = THUMB_WORLD * s;
   const half     = drawSize / 2;
+  const useFull  = drawSize > FULL_LOD_SIZE;
+  const drawnFull = useFull ? new Set() : null;
 
   for (let i = 0; i < pts.length; i++) {
     const sx = (pts[i][0] - camera.x) * s + cxW;
@@ -490,24 +531,59 @@ function render() {
         sy + half < 0 || sy - half > canvas.height) continue;
 
     const clr = state.clusters?.length ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length] : '#6b7280';
-    const thumb = thumbs[i];
+    let drawn = false;
 
-    if (thumb && thumb.complete && thumb.width > 0) {
-      ctx.globalAlpha = 0.9;
-      ctx.drawImage(thumb, sx - half, sy - half, drawSize, drawSize);
-      ctx.globalAlpha = 1.0;
-      ctx.strokeStyle = clr;
-      ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
-      ctx.strokeRect(sx - half, sy - half, drawSize, drawSize);
-    } else {
-      const r = Math.max(3, half * 0.3);
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, Math.PI * 2);
-      ctx.fillStyle = clr;
-      ctx.globalAlpha = 0.8;
-      ctx.fill();
-      ctx.globalAlpha = 1;
+    // Full-res LOD: load and draw when zoomed in enough
+    if (useFull) {
+      drawnFull.add(i);
+      let fullImg = fullImages.get(i);
+      if (!fullImg) {
+        fullImg = new Image();
+        fullImg.onload = render;  // re-render once decoded
+        fullImg.src = state.files[i].objectURL;
+        fullImages.set(i, fullImg);
+      }
+      if (fullImg.complete && fullImg.naturalWidth > 0) {
+        ctx.globalAlpha = 0.9;
+        ctx.drawImage(fullImg, sx - half, sy - half, drawSize, drawSize);
+        ctx.globalAlpha = 1.0;
+        ctx.strokeStyle = clr;
+        ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
+        ctx.strokeRect(sx - half, sy - half, drawSize, drawSize);
+        drawn = true;
+      }
+      // fall through to thumbnail while full image is still loading
     }
+
+    if (!drawn) {
+      const thumb = thumbs[i];
+      if (thumb && thumb.width > 0) {
+        ctx.globalAlpha = 0.9;
+        ctx.drawImage(thumb, sx - half, sy - half, drawSize, drawSize);
+        ctx.globalAlpha = 1.0;
+        ctx.strokeStyle = clr;
+        ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
+        ctx.strokeRect(sx - half, sy - half, drawSize, drawSize);
+      } else {
+        const r = Math.max(3, half * 0.3);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fillStyle = clr;
+        ctx.globalAlpha = 0.8;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  // Evict full images no longer visible at full LOD (mark-and-sweep)
+  if (useFull) {
+    for (const [idx, img] of fullImages) {
+      if (!drawnFull.has(idx)) { img.src = ''; fullImages.delete(idx); }
+    }
+  } else {
+    for (const img of fullImages.values()) img.src = '';
+    fullImages.clear();
   }
 }
 
@@ -691,6 +767,8 @@ async function run(dirHandle) {
     render();
     setProgress(100);
     setStatus(`${files.length} images — tap to view · ${k} clusters`);
+    recenterBtn.disabled = false;
+    resetBtn.disabled = false;
 
     // Save session for fast resume on reload
     state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
@@ -748,6 +826,8 @@ resumeBtn.addEventListener('click', async () => {
     render();
     setProgress(100);
     setStatus(`${matched.length} images — resumed from session`);
+    recenterBtn.disabled = false;
+    resetBtn.disabled = false;
   } catch (err) {
     if (err.name !== 'AbortError') setStatus(`Error: ${err.message}`);
   }
@@ -862,6 +942,9 @@ canvas.addEventListener('wheel', (e) => {
   camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor));
   render();
 }, { passive: false });
+
+recenterBtn.addEventListener('click', () => { fitCamera(); render(); });
+resetBtn.addEventListener('click', resetAll);
 
 modalClose.addEventListener('click', () => {
   modal.classList.remove('open');
