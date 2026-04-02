@@ -22,14 +22,14 @@
       display: flex;
       flex-direction: column;
       align-items: stretch;
-      padding: 14px;
+      padding: 8px 10px;
       border-bottom: 1px solid #1f2937;
       flex-shrink: 0;
-      gap: 12px;
+      gap: 6px;
     }
 
     h1 {
-      font-size: 14px;
+      font-size: 12px;
       font-weight: 600;
       color: #6b7280;
       letter-spacing: 0.08em;
@@ -37,19 +37,19 @@
       text-align: center;
     }
 
-    .controls { display: flex; gap: 10px; flex-direction: column; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; }
 
     button {
-      padding: 11px 14px;
+      padding: 7px 10px;
       border-radius: 6px;
       border: 1px solid #374151;
       background: #1f2937;
       color: #d1d5db;
-      font-size: 14px;
+      font-size: 13px;
       cursor: pointer;
       transition: background 0.12s, border-color 0.12s;
       font-weight: 500;
-      min-height: 44px;
+      min-height: 36px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -58,6 +58,9 @@
     button:disabled { opacity: 0.45; cursor: default; }
     button.primary { background: #4f46e5; border-color: #4338ca; color: #fff; }
     button.primary:hover:not(:disabled) { background: #4338ca; }
+    #load-model-btn, #resume-btn { flex: 1 1 100%; }
+    #open-btn { flex: 1 1 auto; }
+    #recenter-btn, #reset-btn { flex: 0 0 auto; }
 
     /* ── Progress bar ── */
     #progress-wrap { height: 2px; background: #1f2937; flex-shrink: 0; }
@@ -189,10 +192,8 @@
     <button id="load-model-btn" class="primary">Load Model (~380 MB, cached after first load)</button>
     <button id="resume-btn" hidden disabled>Resume last session</button>
     <button id="open-btn" disabled>Open Folder</button>
-    <div style="display:flex;gap:10px">
-      <button id="recenter-btn" disabled style="flex:1">⌖ Recenter</button>
-      <button id="reset-btn" disabled style="flex:1">Reset</button>
-    </div>
+    <button id="recenter-btn" disabled>⌖ Recenter</button>
+    <button id="reset-btn" disabled>Reset</button>
   </div>
 </header>
 
@@ -312,14 +313,14 @@ async function collectImages(dirHandle) {
 }
 
 // ── Thumbnail preloader ────────────────────────────────────────────────────────
-// Creates 96×96 ImageBitmap objects — browser discards the full-res decode immediately,
-// saving 50–200× memory vs keeping full <img> elements alive.
+// Creates 96-width ImageBitmap objects preserving aspect ratio — browser discards the
+// full-res decode immediately, saving 50–200× memory vs keeping full <img> elements alive.
 async function preloadThumbnails(files) {
   const thumbs = new Array(files.length);
   for (let i = 0; i < files.length; i++) {
     if (!files[i].objectURL) files[i].objectURL = URL.createObjectURL(files[i].file);
     try {
-      thumbs[i] = await createImageBitmap(files[i].file, { resizeWidth: 96, resizeHeight: 96, resizeQuality: 'low' });
+      thumbs[i] = await createImageBitmap(files[i].file, { resizeWidth: 96, resizeQuality: 'low' });
     } catch {
       thumbs[i] = null;
     }
@@ -500,6 +501,8 @@ function resetAll() {
   recenterBtn.disabled = true;
   resetBtn.disabled = true;
   resumeBtn.hidden = true;
+  resumeBtn.disabled = true;
+  resumeBtn.classList.remove('primary');
   openBtn.disabled = false;
   setProgress(0);
   setStatus('Cleared. Open a folder to start.');
@@ -544,12 +547,15 @@ function render() {
         fullImages.set(i, fullImg);
       }
       if (fullImg.complete && fullImg.naturalWidth > 0) {
+        const ratio = fullImg.naturalWidth / fullImg.naturalHeight;
+        const dw = ratio >= 1 ? drawSize : drawSize * ratio;
+        const dh = ratio >= 1 ? drawSize / ratio : drawSize;
         ctx.globalAlpha = 0.9;
-        ctx.drawImage(fullImg, sx - half, sy - half, drawSize, drawSize);
+        ctx.drawImage(fullImg, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
         ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
-        ctx.strokeRect(sx - half, sy - half, drawSize, drawSize);
+        ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
         drawn = true;
       }
       // fall through to thumbnail while full image is still loading
@@ -558,12 +564,15 @@ function render() {
     if (!drawn) {
       const thumb = thumbs[i];
       if (thumb && thumb.width > 0) {
+        const ratio = thumb.width / thumb.height;
+        const dw = ratio >= 1 ? drawSize : drawSize * ratio;
+        const dh = ratio >= 1 ? drawSize / ratio : drawSize;
         ctx.globalAlpha = 0.9;
-        ctx.drawImage(thumb, sx - half, sy - half, drawSize, drawSize);
+        ctx.drawImage(thumb, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
         ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
-        ctx.strokeRect(sx - half, sy - half, drawSize, drawSize);
+        ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
       } else {
         const r = Math.max(3, half * 0.3);
         ctx.beginPath();
