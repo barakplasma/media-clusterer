@@ -186,7 +186,7 @@
 <header>
   <h1>Photo Organizer</h1>
   <div class="controls">
-    <button id="load-model-btn" class="primary">Load Model</button>
+    <button id="load-model-btn" class="primary">Load Model (~380 MB, cached after first load)</button>
     <button id="resume-btn" hidden disabled>Resume last session</button>
     <button id="open-btn" disabled>Open Folder</button>
   </div>
@@ -897,7 +897,7 @@ loadModelBtn.disabled = true;
     await loadModel();
   } catch (err) {
     loadModelBtn.disabled = false;
-    setStatus(`Model failed to load: ${err.message}. Click "Load Model" to retry.`);
+    setStatus(`Model failed to load: ${err.message}. Tap "Load Model" to retry.`);
   }
 })();
 </script>
