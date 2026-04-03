@@ -1149,7 +1149,7 @@ dom.fileInput.addEventListener('change', async () => {
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i];
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-    if (IMAGE_EXTS.has(ext)) {
+    if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
       files.push({
         name: file.webkitRelativePath || file.name,
         size: file.size,
@@ -1191,8 +1191,9 @@ dom.resumeBtn.addEventListener('click', async () => {
       for (let i = 0; i < fileList.length; i++) {
         const file = fileList[i];
         const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-        if (IMAGE_EXTS.has(ext)) {
+        if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
           files.push({
+
             name: file.webkitRelativePath || file.name,
             size: file.size,
             lastModified: file.lastModified,
@@ -1211,6 +1212,7 @@ dom.resumeBtn.addEventListener('click', async () => {
     }
 
     state.files = matched;
+    state.rawPoints = savedPoints;
     state.points = savedPoints.slice(0, matched.length);
     state.clusters = new Int32Array(savedClusters.slice(0, matched.length));
     state.thumbnails = await preloadThumbnails(matched);

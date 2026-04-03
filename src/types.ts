@@ -143,7 +143,7 @@ export interface PipelineOptions {
 }
 
 export interface PipelineInstance {
-  (input: string | URL | Blob | any, options?: InferenceOptions): Promise<PipelineOutput>;
+  (input: string | URL | Blob | object, options?: InferenceOptions): Promise<PipelineOutput>;
 }
 
 export interface InferenceOptions extends Record<string, unknown> {
