@@ -1,7 +1,7 @@
 {
-  "name": "photo-organizer",
-  "version": "2.0.0",
-  "description": "Local AI photo organizer with semantic search",
+  "name": "media-clusterer",
+  "version": "2.1.0",
+  "description": "Local AI media clusterer with semantic search for photos and videos",
   "type": "module",
   "scripts": {
     "dev": "vite",

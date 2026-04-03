@@ -1,5 +1,5 @@
 /**
- * Main application logic for Photo Organizer
+ * Main application logic for Media Clusterer
  */
 
 import { pipeline, env, RawImage } from '@huggingface/transformers';
@@ -247,7 +247,7 @@ async function searchImages(query: string) {
     state.searchResults = sortBySimilarity(scores);
 
     const topScore = scores[state.searchResults[0]];
-    const statusMsg = `${state.vectors.length} images · top match: ${(topScore * 100).toFixed(0)}% similar`;
+    const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
     setStatus(statusMsg);
     if (dom.statsEl) dom.statsEl.textContent = statusMsg;
   } catch (err) {
@@ -779,7 +779,7 @@ async function processFiles(files: PhotoFile[]) {
     return;
   }
   state.files = files;
-  setStatus(`Found ${files.length} images. Loading thumbnails…`);
+  setStatus(`Found ${files.length} media files. Loading thumbnails…`);
 
   try {
     state.thumbnails = await preloadThumbnails(files);
@@ -802,8 +802,8 @@ async function processFiles(files: PhotoFile[]) {
     fitCamera();
     scheduleRender();
     setProgress(100);
-    const finalMsg = `${files.length} images · ${k} clusters`;
-    setStatus(`${files.length} images — tap to view · ${k} clusters`);
+    const finalMsg = `${files.length} media files · ${k} clusters`;
+    setStatus(`${files.length} media files — tap to view · ${k} clusters`);
     if (dom.statsEl) dom.statsEl.textContent = finalMsg;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
@@ -1141,8 +1141,8 @@ dom.resumeBtn.addEventListener('click', async () => {
     fitCamera();
     scheduleRender();
     setProgress(100);
-    const finalMsg = `${matched.length} images · restored`;
-    setStatus(`${matched.length} images — resumed from session`);
+    const finalMsg = `${matched.length} media files · restored`;
+    setStatus(`${matched.length} media files — resumed from session`);
     if (dom.statsEl) dom.statsEl.textContent = finalMsg;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;

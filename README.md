@@ -1,16 +1,17 @@
-# Photo Organizer 📸 ✨
+# Media Clusterer 📸 🎥 ✨
 
-A high-performance, **zero-server**, local AI photo organizer that runs entirely in your browser using **WebGPU** and **Transformers.js**.
+A high-performance, **zero-server**, local AI media management tool that runs entirely in your browser using **WebGPU** and **Transformers.js**.
 
 ---
 
 ## 🚀 Key Features
 
-- **Semantic Search**: Find photos by description (e.g., "sunset at the beach", "golden retriever puppy") using multimodal AI.
-- **Privacy First**: No photos are uploaded. No server involved. Everything happens locally on your device.
+- **Semantic Search**: Find photos and videos by description (e.g., "surfing at sunset", "golden retriever puppy") using multimodal AI.
+- **Video Support**: Supports **MP4** and **WEBM** files. Automatically extracts thumbnails for embedding and visualization.
+- **Privacy First**: No media is uploaded. No server involved. Everything happens locally on your device.
 - **WebGPU Powered**: Blazing fast embeddings and projections using your GPU.
-- **Infinite Canvas**: Explore thousands of photos in a fluid, 2D map powered by UMAP dimensionality reduction.
-- **Cluster Visualization**: Visually similar photos are automatically grouped and colored using k-means clustering.
+- **Infinite Canvas**: Explore thousands of media files in a fluid, 2D map powered by UMAP dimensionality reduction.
+- **Cluster Visualization**: Visually similar media are automatically grouped and colored using k-means clustering.
 - **Smart Caching**: Embeddings are cached in IndexedDB for instant re-opening of previously processed folders.
 - **Safari/iOS Compatible**: Robust fallbacks for mobile browsers without File System Access API or WebGPU.
 
@@ -61,11 +62,12 @@ npm test
 
 ## 📜 How it Works
 
-1.  **Loading**: The app loads two specialized models: one for vision (images) and one for text (search queries).
-2.  **Embedding**: Images are processed in small batches to generate 768-dimensional semantic vectors.
-3.  **UMAP**: These high-dimensional vectors are projected into a 2D space while preserving local relationships.
-4.  **Clustering**: k-means identifies clusters of similar images for color-coding.
-5.  **Search**: Text queries are embedded into the same vector space, allowing for direct comparison with images via cosine similarity.
+1.  **Loading**: The app loads two specialized models: one for vision (images/video frames) and one for text (search queries).
+2.  **Thumbnail Extraction**: For videos, a representative frame is captured.
+3.  **Embedding**: Media is processed in small batches to generate 768-dimensional semantic vectors.
+4.  **UMAP**: These high-dimensional vectors are projected into a 2D space while preserving local relationships.
+5.  **Clustering**: k-means identifies clusters of similar media for color-coding.
+6.  **Search**: Text queries are embedded into the same vector space, allowing for direct comparison with media via cosine similarity.
 
 ---
 
