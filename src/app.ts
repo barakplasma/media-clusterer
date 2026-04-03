@@ -895,7 +895,7 @@ dom.canvas.addEventListener('pointermove', (e) => {
 
 dom.canvas.addEventListener('pointerup', (e) => {
   e.preventDefault();
-  const wasSingleTap = pointers.size === 1 && dragMoved < 8;
+  const wasSingleTap = pointers.size === 1 && dragMoved < 15;
   pointers.delete(e.pointerId);
   if (pointers.size < 2) lastPinchDist = 0;
 
