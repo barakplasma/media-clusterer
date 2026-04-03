@@ -1,53 +1,74 @@
-# Photo Organizer
+# Media Clusterer 📸 🎥 ✨
 
-A zero-server, zero-upload photo organizer that runs entirely in your browser.
+A high-performance, **zero-server**, local AI media management tool that runs entirely in your browser using **WebGPU** and **Transformers.js**.
 
-Pick a local folder of images → the app embeds them with a local AI vision model on your GPU → projects them into a 2D map where visually similar photos cluster together → explore on an infinite canvas.
+---
 
-**Live**: https://photo-organizer.526462738.xyz  
-**Mirror**: https://barakplasma.github.io/photo-organizer/
+## 🚀 Key Features
 
-## How it works
+- **Semantic Search**: Find photos and videos by description (e.g., "surfing at sunset", "golden retriever puppy") using multimodal AI.
+- **Video Support**: Supports **MP4** and **WEBM** files. Automatically extracts thumbnails for embedding and visualization.
+- **Privacy First**: No media is uploaded. No server involved. Everything happens locally on your device.
+- **WebGPU Powered**: Blazing fast embeddings and projections using your GPU.
+- **Infinite Canvas**: Explore thousands of media files in a fluid, 2D map powered by UMAP dimensionality reduction.
+- **Cluster Visualization**: Visually similar media are automatically grouped and colored using k-means clustering.
+- **Smart Caching**: Embeddings are cached in IndexedDB for instant re-opening of previously processed folders.
+- **Safari/iOS Compatible**: Robust fallbacks for mobile browsers without File System Access API or WebGPU.
 
-1. **Load Model** — downloads `nomic-ai/nomic-embed-vision-v1.5` (≈380 MB, cached after first load) and runs it on WebGPU (falls back to CPU if unavailable)
-2. **Open Folder** — pick any local folder; images are embedded in batches of 8, embeddings cached in IndexedDB so re-opening the same folder is instant
-3. **Explore** — a 2D UMAP projection clusters visually similar images; tap any image to view full-size; pan with one finger, pinch to zoom
-4. **Resume** — after a successful run, reload the page and tap "Resume last session" to restore the canvas without re-embedding or re-running UMAP
+## 🛠️ Technology Stack
 
-## Privacy
+- **Language**: TypeScript (Strict, zero `any`)
+- **AI Engine**: [Transformers.js](https://huggingface.co/docs/transformers.js) (Nomic-Embed-Vision-v1.5 & Nomic-Embed-Text-v1.5)
+- **Build Tool**: [Vite](https://vitejs.dev/)
+- **Projections**: [UMAP-JS](https://github.com/PAIR-code/umap-js)
+- **Storage**: IndexedDB & LocalStorage
+- **Deployment**: Kubernetes + Caddy (Static Hosting)
 
-Nothing leaves your device. No server, no upload, no analytics. The AI model runs locally via [transformers.js](https://huggingface.co/docs/transformers.js) on WebGPU.
+## 📦 Project Structure
 
-## Requirements
-
-- Chrome 113+ or Edge 113+ (WebGPU + File System Access API)
-- Works best with a GPU; falls back to CPU (slower embedding)
-
-## Stack
-
-| Part | What |
-|---|---|
-| Embeddings | `nomic-ai/nomic-embed-vision-v1.5` via `@huggingface/transformers@4` |
-| Dimensionality reduction | [umap-js](https://github.com/PAIR-code/umap-js) v1.4.0, main thread |
-| Clustering | k-means on 2D UMAP output, k = min(8, ⌈√(n/2)⌉) |
-| Rendering | HTML5 Canvas with camera pan/zoom, pointer events |
-| Cache | IndexedDB for embeddings, localStorage for session UMAP layout |
-| Hosting | Caddy on k3s + Cloudflare tunnel; GitHub Pages mirror |
-
-## Files
-
-```
-index.html       — entire app, single self-contained file
-umap-js.min.js   — umap-js v1.4.0 UMD bundle (served as static asset)
+```text
+index.html       — Main application entry & UI
+src/
+  app.ts         — Core application lifecycle & event handling
+  db.ts          — IndexedDB storage management
+  embeddings.ts  — AI model normalization & vector extraction
+  similarity.ts  — Vector similarity search algorithms
+  types.ts       — Shared TypeScript interfaces & types
+public/
+  umap-js.min.js — UMAP dimensionality reduction library
 ```
 
-## Development
+## 👨‍💻 Development
 
-Edit `index.html` directly — no build step.
+### Setup
 
 ```bash
-# Serve locally (requires HTTPS for File System Access API — use ngrok or caddy)
-caddy file-server --browse --listen :8080
+# Install dependencies
+npm install
+
+# Start dev server
+npm run dev
 ```
 
-The k8s deployment at `photo-organizer.526462738.xyz` serves directly from this repo folder via a hostPath volume — saving `index.html` here is instantly live.
+### Production Build
+
+```bash
+# Build and type-check
+npm run build
+
+# Run tests (one-off)
+npm test
+```
+
+## 📜 How it Works
+
+1.  **Loading**: The app loads two specialized models: one for vision (images/video frames) and one for text (search queries).
+2.  **Thumbnail Extraction**: For videos, a representative frame is captured.
+3.  **Embedding**: Media is processed in small batches to generate 768-dimensional semantic vectors.
+4.  **UMAP**: These high-dimensional vectors are projected into a 2D space while preserving local relationships.
+5.  **Clustering**: k-means identifies clusters of similar media for color-coding.
+6.  **Search**: Text queries are embedded into the same vector space, allowing for direct comparison with media via cosine similarity.
+
+---
+
+*Built with ❤️ for privacy and high-performance web computing.*

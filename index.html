@@ -3,129 +3,260 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Photo Organizer — Local AI</title>
+  <title>Media Clusterer — Local AI</title>
   <style>
+    :root {
+      --bg: #0b0e14;
+      --surface: #161b22;
+      --surface-hover: #1c2128;
+      --border: #30363d;
+      --primary: #58a6ff;
+      --primary-hover: #1f6feb;
+      --accent: #8957e5;
+      --text-main: #c9d1d9;
+      --text-dim: #8b949e;
+      --success: #3fb950;
+      --radius: 8px;
+      --transition: 0.15s cubic-bezier(0.33, 1, 0.68, 1);
+    }
+
+    :root.light-mode {
+      --bg: #ffffff;
+      --surface: #f6f8fa;
+      --surface-hover: #eaeef2;
+      --border: #d0d7de;
+      --primary: #0969da;
+      --primary-hover: #0550ae;
+      --accent: #8250df;
+      --text-main: #1f2328;
+      --text-dim: #636c76;
+    }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      background: #0d1117;
-      color: #e5e7eb;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
       height: 100dvh;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      -webkit-font-smoothing: antialiased;
     }
 
     /* ── Header ── */
     header {
       display: flex;
       flex-direction: column;
-      align-items: stretch;
-      padding: 8px 10px;
-      border-bottom: 1px solid #1f2937;
-      flex-shrink: 0;
-      gap: 6px;
+      padding: 12px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+      z-index: 10;
+      max-width: 400px;
+      width: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      border-bottom-right-radius: var(--radius);
+      border-right: 1px solid var(--border);
+      box-shadow: 2px 2px 12px rgba(0,0,0,0.2);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
 
     h1 {
-      font-size: 12px;
+      font-size: 14px;
       font-weight: 600;
-      color: #6b7280;
-      letter-spacing: 0.08em;
+      color: var(--primary);
       text-transform: uppercase;
-      text-align: center;
+      letter-spacing: 0.05em;
     }
 
-    .controls { display: flex; flex-wrap: wrap; gap: 8px; }
+    .controls { 
+      display: flex; 
+      gap: 8px;
+      flex-wrap: wrap;
+    }
 
     button {
-      padding: 7px 10px;
-      border-radius: 6px;
-      border: 1px solid #374151;
-      background: #1f2937;
-      color: #d1d5db;
+      padding: 8px 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-main);
       font-size: 13px;
+      font-weight: 600;
       cursor: pointer;
-      transition: background 0.12s, border-color 0.12s;
-      font-weight: 500;
-      min-height: 36px;
+      transition: all var(--transition);
       display: flex;
       align-items: center;
       justify-content: center;
+      gap: 6px;
+      user-select: none;
     }
-    button:hover:not(:disabled) { background: #374151; }
-    button:disabled { opacity: 0.45; cursor: default; }
-    button.primary { background: #4f46e5; border-color: #4338ca; color: #fff; }
-    button.primary:hover:not(:disabled) { background: #4338ca; }
+
+    button:hover:not(:disabled) {
+      background: var(--surface-hover);
+      border-color: var(--text-dim);
+    }
+
+    button:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      background: var(--primary);
+      border-color: var(--primary-hover);
+      color: #ffffff;
+    }
+
+    button.primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+      box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
+    }
+
     #load-model-btn { flex: 1 1 100%; }
     #resume-btn { flex: 1; }
     #open-btn { flex: 1; }
 
     /* ── Progress bar ── */
-    #progress-wrap { height: 2px; background: #1f2937; flex-shrink: 0; }
+    #progress-wrap {
+      height: 4px;
+      background: rgba(48, 54, 61, 0.5);
+      position: relative;
+      overflow: hidden;
+    }
+
     #progress-bar {
       height: 100%;
-      background: linear-gradient(90deg, #4f46e5, #818cf8);
+      background: linear-gradient(90deg, var(--primary), var(--accent));
       width: 0%;
-      transition: width 0.25s ease;
+      transition: width 0.3s ease;
+      box-shadow: 0 0 8px var(--primary);
     }
 
     /* ── Status ── */
     #status {
-      padding: 10px 14px;
-      font-size: 13px;
-      color: #9ca3af;
-      flex-shrink: 0;
-      min-height: 32px;
+      padding: 0 4px;
+      font-size: 12px;
+      color: var(--text-dim);
+      background: transparent;
       display: flex;
       align-items: center;
-      line-height: 1.4;
+      min-height: 20px;
     }
 
     /* ── Canvas area ── */
     #canvas-wrap {
       flex: 1;
       position: relative;
-      overflow: hidden;
+      background: radial-gradient(circle at center, #161b22 0%, #0b0e14 100%);
+      width: 100%;
+      height: 100%;
     }
 
     canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
     canvas:active { cursor: grabbing; }
 
-    /* ── Search panel (coming soon) ── */
-    #search-panel {
-      padding: 8px 10px;
+    /* ── Bottom Panel ── */
+    #bottom-panel {
+      padding: 12px 16px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      z-index: 10;
+    }
+
+    .panel-row {
       display: flex;
       align-items: center;
       gap: 10px;
-      background: #0d1117;
-      border-top: 1px solid #1f2937;
-      flex-shrink: 0;
-      flex-wrap: wrap;
+      width: 100%;
     }
-    #search-panel button { flex: 0 0 auto; padding: 6px 10px; min-height: 32px; font-size: 12px; }
-    #search-panel input {
+
+    #search-wrap {
       flex: 1;
-      min-width: 140px;
-      padding: 10px 12px;
-      background: #1f2937;
-      border: 1px solid #374151;
-      border-radius: 6px;
-      color: #6b7280;
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    #search-wrap.loading::after {
+      content: "";
+      position: absolute;
+      right: 36px;
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #search-input {
+      width: 100%;
+      padding: 10px 36px 10px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text-main);
       font-size: 14px;
       outline: none;
-      cursor: not-allowed;
-      min-height: 40px;
+      transition: border-color var(--transition), box-shadow var(--transition);
     }
-    .badge {
-      font-size: 12px;
-      color: #6b7280;
-      border: 1px solid #374151;
-      border-radius: 14px;
-      padding: 4px 10px;
-      white-space: nowrap;
-      font-weight: 500;
+
+    #search-input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
+    }
+
+    #search-input:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    #search-clear-btn {
+      position: absolute;
+      right: 8px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 16px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    #search-clear-btn:hover {
+      color: var(--text-main);
+      background: var(--border);
+    }
+
+    .utility-btns {
+      display: flex;
+      gap: 8px;
     }
 
     /* ── Modal ── */
@@ -133,932 +264,359 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.85);
-      z-index: 999;
+      background: rgba(0, 0, 0, 0.9);
+      z-index: 1000;
       align-items: center;
       justify-content: center;
       padding: 20px;
+      backdrop-filter: blur(4px);
     }
-    #modal.open { display: flex; }
+
+    #modal.open { display: flex; animation: fadeIn 0.2s ease-out; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
     #modal-content {
-      background: #1f2937;
+      background: var(--surface);
+      border: 1px solid var(--border);
       border-radius: 12px;
-      max-width: 92vw;
-      max-height: 92dvh;
+      max-width: 98vw;
+      width: fit-content;
+      max-height: 98dvh;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+      position: relative;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.5);
     }
+
     #modal-img {
-      flex: 1;
-      min-height: 0;
-      max-height: calc(92dvh - 60px);
-      width: 100%;
+      max-width: 100%;
+      max-height: calc(98dvh - 60px);
       object-fit: contain;
-      background: #0d1117;
+      background: #000;
+      border-radius: 12px 12px 0 0;
     }
+
+      border-radius: 12px 12px 0 0;
+    }
+
     #modal-name {
-      padding: 12px 16px;
-      font-size: 14px;
-      color: #d1d5db;
-      border-top: 1px solid #374151;
-      white-space: pre-wrap;
-      word-break: break-all;
-      overflow-y: auto;
-      max-height: 80px;
+      padding: 16px;
+      font-size: 13px;
+      color: var(--text-main);
+      text-align: center;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
+
     #modal-close {
       position: absolute;
-      top: 16px;
-      right: 16px;
-      background: #1f2937;
-      border: 1px solid #374151;
-      color: #d1d5db;
-      width: 40px;
-      height: 40px;
-      border-radius: 6px;
-      font-size: 20px;
-      cursor: pointer;
+      top: -16px;
+      right: -16px;
+      width: 32px;
+      height: 32px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
+      cursor: pointer;
+      font-size: 18px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 1001;
+    }
+
+    /* ── About Modal ── */
+    #about-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      backdrop-filter: blur(8px);
+    }
+
+    #about-modal.open { display: flex; animation: fadeIn 0.2s ease-out; }
+
+    #about-content {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      max-width: 600px;
+      width: 100%;
+      max-height: 85dvh;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.5);
+      padding: 32px;
+      overflow-y: auto;
+    }
+
+    .about-section {
+      margin-bottom: 24px;
+    }
+
+    .about-section h2 {
+      font-size: 16px;
+      color: var(--primary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .about-section p {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text-main);
+      margin-bottom: 8px;
+    }
+
+    .about-section ul {
+      padding-left: 20px;
+      margin-bottom: 8px;
+    }
+
+    .about-section li {
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 4px;
+    }
+
+    #about-close {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    #about-close:hover { color: var(--text-main); }
+
+    @media (max-width: 600px) {
+      .brand h1 { font-size: 12px; }
+      button { padding: 6px 10px; font-size: 12px; }
+      #bottom-panel { padding: 10px; gap: 10px; }
+      #search-input { padding: 8px 32px 8px 10px; font-size: 13px; }
     }
   </style>
 </head>
 <body>
 
 <header>
-  <h1>Photo Organizer</h1>
-  <div class="controls">
-    <button id="load-model-btn" class="primary">Load Model (~380 MB, cached after first load)</button>
-    <button id="resume-btn" hidden disabled>Resume last session</button>
-    <button id="open-btn" disabled>Open Folder</button>
+  <div class="brand">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <h1>Media Clusterer</h1>
+      <button id="about-btn" style="padding: 2px 6px; font-size: 14px; background: transparent; border: none; color: var(--text-dim); cursor: pointer;" title="About & Instructions">ⓘ</button>
+      <button id="settings-btn" style="padding: 2px 6px; font-size: 14px; background: transparent; border: none; color: var(--text-dim); cursor: pointer;" title="Settings">⚙️</button>
+    </div>
+    <div id="model-badge" style="font-size: 10px; color: var(--text-dim); background: var(--border); padding: 2px 6px; border-radius: 4px;">Local AI</div>
   </div>
+  <div class="controls">
+    <button id="load-model-btn" class="primary">
+      <span>📥</span> Load AI Models (~380 MB)
+    </button>
+    <button id="resume-btn" hidden disabled>
+      <span>🔄</span> Resume Session
+    </button>
+    <button id="open-btn" disabled title="Only compatible media files will be processed">
+      <span>📂</span> Open Media Folder
+    </button>
+    <input type="file" id="file-input" multiple webkitdirectory accept="image/*,video/mp4,video/webm" hidden>
+  </div>
+  <div class="controls" id="header-controls" style="display: none; margin-top: 4px;">
+    <button id="header-recenter-btn" disabled title="Recenter View" style="flex: 1;">⌖</button>
+    <button id="header-reset-btn" disabled title="Reset All Data" style="flex: 1;">✕ Reset</button>
+  </div>
+  
+  <div id="progress-wrap"><div id="progress-bar"></div></div>
+  <div id="status">Loading library...</div>
 </header>
-
-<div id="progress-wrap"><div id="progress-bar"></div></div>
-<div id="status">Pick a folder of images to begin.</div>
 
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
 </div>
 
-<div id="search-panel">
-  <button id="recenter-btn" disabled>⌖ Recenter</button>
-  <button id="reset-btn" disabled>Reset</button>
-  <input id="search-input" disabled placeholder="e.g. sunset at the beach">
-  <span class="badge">Coming in v2</span>
+<div id="bottom-panel" style="display: none;">
+  <div class="panel-row">
+    <div id="search-wrap">
+      <input id="search-input" disabled placeholder="Describe photos or videos (e.g. 'surfing at sunset')">
+      <button id="search-clear-btn" hidden title="Clear search">✕</button>
+    </div>
+  </div>
+  <div class="panel-row" style="justify-content: space-between;">
+    <div class="utility-btns">
+      <button id="recenter-btn" disabled title="Recenter View">⌖ Recenter</button>
+      <button id="reset-btn" disabled title="Reset All Data">Reset</button>
+    </div>
+    <div id="stats" style="font-size: 11px; color: var(--text-dim);"></div>
+  </div>
 </div>
 
 <div id="modal">
-  <button id="modal-close">✕</button>
   <div id="modal-content">
-    <img id="modal-img" alt="">
+    <button id="modal-close" title="Close">✕</button>
+    <img id="modal-img" alt="Full view">
+    <video id="modal-video" controls loop style="max-width: 100%; max-height: calc(98dvh - 60px); display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
     <div id="modal-name"></div>
   </div>
 </div>
 
-<script type="module">
-// ── Imports ──────────────────────────────────────────────────────────────────
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4';
+<div id="about-modal" class="modal-overlay">
+  <div id="about-content" class="modal-box about-box">
+    <button id="about-close" class="close-x">✕</button>
+    
+    <div class="about-section">
+      <h2>📸 🎥 About Media Clusterer</h2>
+      <p>A high-performance, private-by-design media management tool. Everything happens locally on your device—no images or videos are ever uploaded to a server.</p>
+    </div>
 
-// Enable caching and local model access for persistent storage
-env.allowLocalModels = false;
-env.allowRemoteModels = true;
-env.cacheDir = 'models';
+    <div class="about-section">
+      <h2>🧠 How it Works</h2>
+      <p>The app uses <strong>WebGPU</strong> and <strong>Transformers.js</strong> to run AI models directly in your browser:</p>
+      <ul>
+        <li><strong>Nomic-Embed-Vision:</strong> Generates 768-dimensional vectors for every image and video frame.</li>
+        <li><strong>UMAP:</strong> Projects these high-dimensional vectors into the 2D map you see on the canvas.</li>
+        <li><strong>Semantic Search:</strong> Uses <strong>Nomic-Embed-Text</strong> to let you find media by natural language descriptions.</li>
+      </ul>
+    </div>
 
-// ── DOM ───────────────────────────────────────────────────────────────────────
-const loadModelBtn = document.getElementById('load-model-btn');
-const resumeBtn    = document.getElementById('resume-btn');
-const openBtn      = document.getElementById('open-btn');
-const recenterBtn  = document.getElementById('recenter-btn');
-const resetBtn     = document.getElementById('reset-btn');
-const progressBar  = document.getElementById('progress-bar');
-const statusEl     = document.getElementById('status');
-const canvas       = document.getElementById('canvas');
-const modal        = document.getElementById('modal');
-const modalClose   = document.getElementById('modal-close');
-const modalImg     = document.getElementById('modal-img');
-const modalName    = document.getElementById('modal-name');
+    <div class="about-section">
+      <h2>🛡️ Privacy Policy</h2>
+      <p>Zero tracking. Zero uploads. Your local folder stays local. Even the AI models are cached in your browser's IndexedDB for offline use.</p>
+    </div>
 
-// ── State ─────────────────────────────────────────────────────────────────────
-const state = {
-  phase: 'idle',      // idle | loading_model | model_ready | embedding | umap | done
-  files: [],          // { name, size, lastModified, file, objectURL }
-  vectors: [],        // Float32Array[768] per image
-  points: [],         // [x, y] in virtual world space (spread, no-overlap)
-  clusters: null,     // Int32Array cluster index per image
-  thumbnails: [],     // HTMLImageElement per image (preloaded)
-};
+    <div class="about-section">
+      <h2>🖱️ Navigation</h2>
+      <ul>
+        <li><strong>Pan:</strong> Click and drag the canvas.</li>
+        <li><strong>Zoom:</strong> Mouse wheel or pinch gesture.</li>
+        <li><strong>View:</strong> Tap any media to see it full-size.</li>
+        <li><strong>Search:</strong> Type a description to highlight matching media.</li>
+      </ul>
+    </div>
 
-// ── Camera (infinite canvas) ──────────────────────────────────────────────────
-const camera = { x: 0, y: 0, scale: 1 };
+    <div style="text-align: center; margin-top: 16px;">
+      <p style="font-size: 12px; color: var(--text-dim);">Media Clusterer 2.1 • Built with ❤️ for Privacy</p>
+    </div>
+  </div>
+</div>
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-const setStatus   = (msg) => { statusEl.textContent = msg; };
-const setProgress = (pct) => { progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`; };
+<div id="settings-modal" class="modal-overlay">
+  <div id="settings-content" class="modal-box">
+    <button id="settings-close" class="close-x">✕</button>
+    <h2 style="color: var(--primary); margin-bottom: 24px; font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 12px;">⚙️ Settings</h2>
+    
+    <div class="setting-item">
+      <label>Thumbnail Density</label>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 12px; color: var(--text-dim);">Tight</span>
+        <input type="range" id="density-slider" min="0.1" max="2.5" step="0.1" value="1.0" style="flex: 1;">
+        <span style="font-size: 12px; color: var(--text-dim);">Sparse</span>
+      </div>
+    </div>
 
-// ── Render scheduling (debounce to one frame) ───────────────────────────────────
-let renderPending = false;
-function scheduleRender() {
-  if (!renderPending) {
-    renderPending = true;
-    requestAnimationFrame(() => {
-      render();
-      renderPending = false;
-    });
+    <div class="setting-item">
+      <label>Render Budget (FPS vs Quality)</label>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 12px; color: var(--text-dim);">Fast</span>
+        <input type="range" id="draw-budget-slider" min="50" max="1000" step="50" value="400" style="flex: 1;">
+        <span style="font-size: 12px; color: var(--text-dim);">Best</span>
+      </div>
+    </div>
+
+    <div class="setting-item">
+      <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;">
+        <input type="checkbox" id="enable-search-toggle"> Enable Text Search (requires 134MB model)
+      </label>
+    </div>
+
+    <div class="setting-item">
+      <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;">
+        <input type="checkbox" id="loop-toggle" checked> Loop Videos by Default
+      </label>
+    </div>
+
+    <div class="setting-item">
+      <label>Appearance</label>
+      <select id="theme-select" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; outline: none;">
+        <option value="dark">Dark Theme</option>
+        <option value="light">Light Theme</option>
+        <option value="system">Follow System</option>
+      </select>
+    </div>
+
+    <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); text-align: center;">
+      Settings persist automatically in your browser cache.
+    </div>
+  </div>
+</div>
+
+<style>
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    backdrop-filter: blur(8px);
   }
-}
-
-// ── IndexedDB cache ───────────────────────────────────────────────────────────
-let _db;
-
-async function openDB() {
-  if (_db) return _db;
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open('photo-organizer-v1', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('embeddings');
-    req.onsuccess  = () => { _db = req.result; resolve(_db); };
-    req.onerror    = () => reject(req.error);
-  });
-}
-
-async function cacheGet(key) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const req = db.transaction('embeddings').objectStore('embeddings').get(key);
-    req.onsuccess = () => resolve(req.result ?? null);
-    req.onerror   = () => reject(req.error);
-  });
-}
-
-async function cachePut(key, value) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('embeddings', 'readwrite');
-    tx.objectStore('embeddings').put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror    = () => reject(tx.error);
-  });
-}
-
-// ── File collection ───────────────────────────────────────────────────────────
-const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','avif','bmp','tiff','tif','heic','heif']);
-
-async function collectImages(dirHandle) {
-  const files = [];
-  async function walk(handle, prefix) {
-    for await (const [name, entry] of handle.entries()) {
-      if (name.startsWith('.')) continue;
-      if (entry.kind === 'directory') {
-        await walk(entry, `${prefix}${name}/`);
-      } else {
-        const ext = name.split('.').pop()?.toLowerCase() ?? '';
-        if (IMAGE_EXTS.has(ext)) {
-          const file = await entry.getFile();
-          files.push({ name: `${prefix}${name}`, size: file.size, lastModified: file.lastModified, file, objectURL: null });
-        }
-      }
-    }
+  .modal-overlay.open { display: flex; animation: fadeIn 0.2s ease-out; }
+  .modal-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    max-width: 420px;
+    width: 100%;
+    position: relative;
+    box-shadow: 0 24px 48px rgba(0,0,0,0.5);
+    padding: 32px;
   }
-  await walk(dirHandle, '');
-  return files;
-}
-
-// ── Thumbnail preloader ────────────────────────────────────────────────────────
-// Creates 96-width ImageBitmap objects preserving aspect ratio — browser discards the
-// full-res decode immediately, saving 50–200× memory vs keeping full <img> elements alive.
-async function preloadThumbnails(files) {
-  const thumbs = new Array(files.length);
-  for (let i = 0; i < files.length; i++) {
-    if (!files[i].objectURL) files[i].objectURL = URL.createObjectURL(files[i].file);
-    try {
-      thumbs[i] = await createImageBitmap(files[i].file, { resizeWidth: 96, resizeQuality: 'low' });
-    } catch {
-      thumbs[i] = null;
-    }
+  .about-box { max-width: 600px; max-height: 85dvh; overflow-y: auto; }
+  .close-x {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 20px;
+    cursor: pointer;
+    transition: color 0.1s;
   }
-  return thumbs;
-}
-
-// ── IndexedDB batch write (20 embeddings per transaction) ─────────────────────
-async function cachePutBatch(entries) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('embeddings', 'readwrite');
-    const store = tx.objectStore('embeddings');
-    for (const [key, value] of entries) {
-      store.put(value, key);
-    }
-    tx.oncomplete = () => resolve();
-    tx.onerror    = () => reject(tx.error);
-  });
-}
-
-// ── Embedding helpers ─────────────────────────────────────────────────────────
-function l2normalize(arr) {
-  let norm = 0;
-  for (let i = 0; i < arr.length; i++) norm += arr[i] * arr[i];
-  norm = Math.sqrt(norm) || 1;
-  const out = new Float32Array(arr.length);
-  for (let i = 0; i < arr.length; i++) out[i] = arr[i] / norm;
-  return out;
-}
-
-function extractVector(output) {
-  // Unwrap pipeline output: Tensor, array of Tensors, or named object
-  let tensor = Array.isArray(output) ? output[0] : output;
-  if (tensor && typeof tensor === 'object' && !tensor.dims) {
-    tensor = tensor.last_hidden_state ?? tensor.pooler_output ?? Object.values(tensor)[0];
+  .close-x:hover { color: var(--text-main); }
+  .setting-item { margin-bottom: 24px; }
+  .setting-item label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 10px; color: var(--text-main); }
+  
+  input[type="range"] {
+    accent-color: var(--primary);
+    cursor: pointer;
   }
-  const dims       = tensor.dims;
-  const data       = tensor.data;
-  const hiddenSize = dims[dims.length - 1];
-  // CLS token: first hiddenSize values in the flat data array
-  const vec = new Float32Array(hiddenSize);
-  for (let i = 0; i < hiddenSize; i++) vec[i] = data[i];
-  return l2normalize(vec);
-}
-
-// ── k-means (runs on 2D UMAP output) ─────────────────────────────────────────
-function kmeans(points, k, maxIter = 60) {
-  const n = points.length;
-  if (n === 0) return new Int32Array(0);
-  k = Math.min(k, n);
-
-  const idx = Array.from({ length: n }, (_, i) => i);
-  for (let i = n - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [idx[i], idx[j]] = [idx[j], idx[i]];
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+    cursor: pointer;
   }
-  let centroids = idx.slice(0, k).map(i => [points[i][0], points[i][1]]);
-  const labels = new Int32Array(n);
+</style>
 
-  for (let iter = 0; iter < maxIter; iter++) {
-    let changed = false;
-    for (let i = 0; i < n; i++) {
-      let best = 0, bestD = Infinity;
-      const px = points[i][0], py = points[i][1];
-      for (let j = 0; j < k; j++) {
-        const dx = px - centroids[j][0], dy = py - centroids[j][1];
-        const d = dx * dx + dy * dy;
-        if (d < bestD) { bestD = d; best = j; }
-      }
-      if (labels[i] !== best) { labels[i] = best; changed = true; }
-    }
-    if (!changed) break;
-
-    const sx = new Float64Array(k), sy = new Float64Array(k), cnt = new Int32Array(k);
-    for (let i = 0; i < n; i++) {
-      sx[labels[i]] += points[i][0];
-      sy[labels[i]] += points[i][1];
-      cnt[labels[i]]++;
-    }
-    for (let j = 0; j < k; j++) {
-      if (cnt[j]) { centroids[j][0] = sx[j] / cnt[j]; centroids[j][1] = sy[j] / cnt[j]; }
-    }
-  }
-  return labels;
-}
-
-// ── Canvas ────────────────────────────────────────────────────────────────────
-const THUMB_WORLD   = 48;   // thumbnail size in world units
-const MIN_DIST      = 56;   // minimum center-to-center distance in world units
-const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
-const fullImages    = new Map(); // index → HTMLImageElement, loaded on demand, evicted when off-screen
-
-function resizeCanvas() {
-  const wrap = canvas.parentElement;
-  canvas.width  = wrap.clientWidth  || 800;
-  canvas.height = wrap.clientHeight || 600;
-}
-
-// Scale UMAP output to a virtual canvas sized for the data, then repel overlaps.
-// Images that are very similar (close in UMAP) will touch; others have natural gaps.
-function spreadPoints(umapPoints) {
-  const n = umapPoints.length;
-  if (n === 0) return [];
-
-  // Normalize to zero-centered unit space
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const [x, y] of umapPoints) {
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (y < minY) minY = y; if (y > maxY) maxY = y;
-  }
-  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  const r  = Math.max(maxX - cx, maxY - cy) || 1;
-
-  // Scale to a virtual canvas sized so avg spacing ≈ 1.4 thumbnails
-  // sqrt(n) * THUMB_WORLD gives "grid" density; 1.4× gives some breathing room
-  const vsize = Math.sqrt(n) * THUMB_WORLD * 1.4;
-  const pts = umapPoints.map(([x, y]) => [(x - cx) / r * vsize, (y - cy) / r * vsize]);
-
-  // Grid-based repulsion: push overlapping pairs apart (O(n) per iteration)
-  const CELL = THUMB_WORLD * 2;
-  for (let iter = 0; iter < 60; iter++) {
-    const grid = new Map();
-    for (let i = 0; i < n; i++) {
-      const gx = Math.floor(pts[i][0] / CELL), gy = Math.floor(pts[i][1] / CELL);
-      const key = `${gx},${gy}`;
-      if (!grid.has(key)) grid.set(key, []);
-      grid.get(key).push(i);
-    }
-    let moved = false;
-    for (let i = 0; i < n; i++) {
-      const gx = Math.floor(pts[i][0] / CELL), gy = Math.floor(pts[i][1] / CELL);
-      for (let dgx = -1; dgx <= 1; dgx++) for (let dgy = -1; dgy <= 1; dgy++) {
-        for (const j of (grid.get(`${gx+dgx},${gy+dgy}`) ?? [])) {
-          if (j <= i) continue;
-          const dx = pts[j][0] - pts[i][0], dy = pts[j][1] - pts[i][1];
-          const d2 = dx * dx + dy * dy;
-          if (d2 < THUMB_WORLD * THUMB_WORLD && d2 > 0) {
-            const dist = Math.sqrt(d2);
-            const push = (THUMB_WORLD - dist) / 2 + 0.1;
-            const nx = dx / dist, ny = dy / dist;
-            pts[i][0] -= nx * push; pts[i][1] -= ny * push;
-            pts[j][0] += nx * push; pts[j][1] += ny * push;
-            moved = true;
-          }
-        }
-      }
-    }
-    if (!moved) break;
-  }
-  return pts;
-}
-
-// Set camera so all points fit on screen with padding
-function fitCamera() {
-  const pts = state.points;
-  if (!pts.length) return;
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const [x, y] of pts) {
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (y < minY) minY = y; if (y > maxY) maxY = y;
-  }
-  const pad = THUMB_WORLD + 16;
-  const scX = (canvas.width  - pad * 2) / ((maxX - minX) || 1);
-  const scY = (canvas.height - pad * 2) / ((maxY - minY) || 1);
-  camera.x = (minX + maxX) / 2;
-  camera.y = (minY + maxY) / 2;
-  camera.scale = Math.min(scX, scY);
-}
-
-function resetAll() {
-  // Free 96×96 ImageBitmaps
-  for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
-  // Evict any loaded full images
-  for (const img of fullImages.values()) img.src = '';
-  fullImages.clear();
-  // Revoke object URLs
-  for (const f of state.files) {
-    if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
-  }
-  // Reset state
-  state.phase = 'idle'; state.files = []; state.vectors = [];
-  state.points = []; state.clusters = null; state.thumbnails = [];
-  // Clear localStorage session
-  localStorage.removeItem('po_fileKeys');
-  localStorage.removeItem('po_umapPoints');
-  localStorage.removeItem('po_clusters');
-  // Clear canvas + camera
-  camera.x = 0; camera.y = 0; camera.scale = 1;
-  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-  // Reset UI
-  recenterBtn.disabled = true;
-  resetBtn.disabled = true;
-  resumeBtn.hidden = true;
-  resumeBtn.disabled = true;
-  resumeBtn.classList.remove('primary');
-  openBtn.disabled = false;
-  setProgress(0);
-  setStatus('Cleared. Open a folder to start.');
-}
-
-const CLUSTER_COLORS = ['#f87171','#fb923c','#facc15','#4ade80','#38bdf8','#818cf8','#f472b6','#a78bfa'];
-
-function render() {
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const pts = state.points;
-  const thumbs = state.thumbnails;
-  if (!pts.length) return;
-
-  const s        = camera.scale;
-  const cxW      = canvas.width  / 2;
-  const cyW      = canvas.height / 2;
-  const drawSize = THUMB_WORLD * s;
-  const half     = drawSize / 2;
-  const useFull  = drawSize > FULL_LOD_SIZE;
-  const drawnFull = useFull ? new Set() : null;
-
-  for (let i = 0; i < pts.length; i++) {
-    const sx = (pts[i][0] - camera.x) * s + cxW;
-    const sy = (pts[i][1] - camera.y) * s + cyW;
-
-    // Frustum cull
-    if (sx + half < 0 || sx - half > canvas.width ||
-        sy + half < 0 || sy - half > canvas.height) continue;
-
-    const clr = state.clusters?.length ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length] : '#6b7280';
-    let drawn = false;
-
-    // Full-res LOD: load and draw when zoomed in enough
-    if (useFull) {
-      drawnFull.add(i);
-      let fullImg = fullImages.get(i);
-      if (!fullImg) {
-        fullImg = new Image();
-        fullImg.onload = render;  // re-render once decoded
-        fullImg.src = state.files[i].objectURL;
-        fullImages.set(i, fullImg);
-      }
-      if (fullImg.complete && fullImg.naturalWidth > 0) {
-        const ratio = fullImg.naturalWidth / fullImg.naturalHeight;
-        const dw = ratio >= 1 ? drawSize : drawSize * ratio;
-        const dh = ratio >= 1 ? drawSize / ratio : drawSize;
-        ctx.globalAlpha = 0.9;
-        ctx.drawImage(fullImg, sx - dw / 2, sy - dh / 2, dw, dh);
-        ctx.globalAlpha = 1.0;
-        ctx.strokeStyle = clr;
-        ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
-        ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
-        drawn = true;
-      }
-      // fall through to thumbnail while full image is still loading
-    }
-
-    if (!drawn) {
-      const thumb = thumbs[i];
-      if (thumb && thumb.width > 0) {
-        const ratio = thumb.width / thumb.height;
-        const dw = ratio >= 1 ? drawSize : drawSize * ratio;
-        const dh = ratio >= 1 ? drawSize / ratio : drawSize;
-        ctx.globalAlpha = 0.9;
-        ctx.drawImage(thumb, sx - dw / 2, sy - dh / 2, dw, dh);
-        ctx.globalAlpha = 1.0;
-        ctx.strokeStyle = clr;
-        ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
-        ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
-      } else {
-        const r = Math.max(3, half * 0.3);
-        ctx.beginPath();
-        ctx.arc(sx, sy, r, 0, Math.PI * 2);
-        ctx.fillStyle = clr;
-        ctx.globalAlpha = 0.8;
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-    }
-  }
-
-  // Evict full images no longer visible at full LOD (mark-and-sweep)
-  if (useFull) {
-    for (const [idx, img] of fullImages) {
-      if (!drawnFull.has(idx)) { img.src = ''; fullImages.delete(idx); }
-    }
-  } else {
-    for (const img of fullImages.values()) img.src = '';
-    fullImages.clear();
-  }
-}
-
-// ── UMAP main thread (simpler, no Worker) ───────────────────────────────────
-let UMAPLib = null;
-
-async function loadUMAPLib() {
-  if (UMAPLib) return;
-  const script = document.createElement('script');
-  script.src = 'umap-js.min.js';
-  document.head.appendChild(script);
-  return new Promise((resolve, reject) => {
-    script.onload = () => {
-      const exported = window.UMAP;
-      console.log('UMAP export:', exported, 'keys:', exported ? Object.keys(exported) : 'null');
-
-      // Try multiple fallbacks
-      if (typeof exported === 'function') {
-        UMAPLib = exported;
-      } else if (exported && typeof exported.default === 'function') {
-        UMAPLib = exported.default;
-      } else if (exported && typeof exported.UMAP === 'function') {
-        UMAPLib = exported.UMAP;
-      } else if (exported && typeof Object.values(exported)[0] === 'function') {
-        // Last resort: grab first function in the object
-        UMAPLib = Object.values(exported)[0];
-      } else {
-        const keys = exported ? Object.keys(exported) : [];
-        reject(new Error(`UMAP export shape unknown. Type: ${typeof exported}, Keys: ${keys.join(', ')}`));
-        return;
-      }
-      console.log('Loaded UMAP constructor:', UMAPLib.name);
-      resolve();
-    };
-    script.onerror = () => reject(new Error('Failed to load UMAP library'));
-  });
-}
-
-async function runUMAP(vectors, nNeighbors) {
-  try {
-    await loadUMAPLib();
-
-    setStatus('Projecting…');
-    const umap = new UMAPLib({ nComponents: 2, nNeighbors, minDist: 0.1 });
-    const embedding = await umap.fitAsync(vectors, (epoch) => {
-      setStatus(`Projecting… epoch ${epoch}`);
-    });
-    return embedding;
-  } catch (err) {
-    setStatus(`UMAP projection failed: ${err.message}`);
-    throw err;
-  }
-}
-
-// ── Model singleton ───────────────────────────────────────────────────────────
-let extractor = null;
-
-async function loadModel() {
-  if (extractor) return;
-  state.phase = 'loading_model';
-  setStatus('Loading model…');
-  setProgress(0);
-
-  const MODEL_SIZE_BYTES = 380 * 1024 * 1024;
-  const loaded = new Map();
-
-  const progressCb = (e) => {
-    if (e.status === 'progress') {
-      loaded.set(e.file, e.loaded ?? 0);
-      const total = [...loaded.values()].reduce((a, b) => a + b, 0);
-      const pct = Math.min(99, (total / MODEL_SIZE_BYTES) * 100);
-      setProgress(pct);
-      setStatus(`Loading model… ${pct.toFixed(0)}%`);
-    }
-  };
-
-  const tryLoad = (device) => pipeline(
-    'image-feature-extraction',
-    'nomic-ai/nomic-embed-vision-v1.5',
-    { device, dtype: 'fp32', progress_callback: progressCb }
-  );
-
-  try {
-    extractor = await tryLoad('webgpu');
-  } catch (gpuErr) {
-    console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
-    setStatus('WebGPU unavailable — using CPU (slower)…');
-    loaded.clear();
-    try {
-      extractor = await tryLoad('wasm');
-    } catch (wasmErr) {
-      setStatus('Failed to load model. Your browser may not support WebGPU or WASM.');
-      loadModelBtn.hidden = false;
-      throw wasmErr;
-    }
-  }
-  setProgress(100);
-
-  // Model loaded successfully
-  state.phase = 'model_ready';
-  setProgress(0);
-  loadModelBtn.hidden = true;
-  openBtn.disabled = false;
-  openBtn.classList.add('primary');
-  if (!resumeBtn.hidden) {
-    resumeBtn.disabled = false;
-    resumeBtn.classList.add('primary');
-    setStatus('Model ready — resume or open a folder.');
-  } else {
-    setStatus('Model ready — open a folder to start.');
-  }
-}
-
-// ── Embedding loop ────────────────────────────────────────────────────────────
-const BATCH_SIZE = 8;
-const WRITE_BATCH = 20;
-
-async function embedAll(files) {
-  state.phase = 'embedding';
-  const vectors = new Array(files.length);
-  let cacheHits = 0;
-  const writeQueue = [];
-
-  for (let i = 0; i < files.length; i += BATCH_SIZE) {
-    const batch = files.slice(i, Math.min(i + BATCH_SIZE, files.length));
-
-    await Promise.all(batch.map(async (f, bi) => {
-      const idx = i + bi;
-      const key = `${f.name}:${f.size}:${f.lastModified}`;
-
-      const cached = await cacheGet(key);
-      if (cached) { vectors[idx] = cached; cacheHits++; return; }
-
-      try {
-        if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
-        const output = await extractor(f.objectURL);
-        vectors[idx] = extractVector(output);
-        writeQueue.push([key, vectors[idx]]);
-      } catch (err) {
-        console.warn(`Skipping ${f.name}:`, err.message);
-        vectors[idx] = new Float32Array(768);
-      }
-    }));
-
-    // Flush write queue every WRITE_BATCH embeddings
-    let didFlush = false;
-    if (writeQueue.length >= WRITE_BATCH) {
-      await cachePutBatch(writeQueue);
-      writeQueue.length = 0;
-      didFlush = true;
-    }
-
-    const done = Math.min(i + BATCH_SIZE, files.length);
-
-    // Progressive render: show grid after first batch and each write batch flush
-    if (done === BATCH_SIZE || didFlush) {
-      state.phase = 'embedding';
-      resizeCanvas();
-      const cols = Math.ceil(Math.sqrt(files.length));
-      const spacing = 60;
-      state.points = Array.from({ length: done }, (_, j) => [
-        (j % cols) * spacing,
-        Math.floor(j / cols) * spacing
-      ]);
-      fitCamera();
-      render();
-    }
-    const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
-    setStatus(`Embedding ${done} / ${files.length} images…${fromCache}`);
-    setProgress((done / files.length) * 100);
-  }
-
-  // Final flush
-  if (writeQueue.length > 0) {
-    await cachePutBatch(writeQueue);
-  }
-
-  return vectors;
-}
-
-// ── Main run ──────────────────────────────────────────────────────────────────
-async function run(dirHandle) {
-  openBtn.disabled = true;
-  setProgress(0);
-
-  try {
-    setStatus('Scanning folder…');
-    const files = await collectImages(dirHandle);
-
-    if (files.length === 0) {
-      setStatus('No images found in that folder.');
-      return;
-    }
-    state.files = files;
-    setStatus(`Found ${files.length} images. Loading thumbnails…`);
-
-    // Preload thumbnails
-    state.thumbnails = await preloadThumbnails(files);
-    setStatus(`Found ${files.length} images.`);
-
-    // Embed (thumbnails already preloaded above)
-    const vectors = await embedAll(files);
-    state.vectors = vectors;
-
-    // UMAP
-    state.phase = 'umap';
-    setStatus('Running UMAP…');
-    setProgress(0);
-    const nNeighbors = Math.max(2, Math.min(15, files.length - 1));
-    const rawPoints = await runUMAP(vectors, nNeighbors);
-
-    // k-means on raw UMAP coords (before spread), then spread for display
-    const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(files.length / 2))));
-    state.clusters = kmeans(rawPoints, k);
-
-    // Render
-    state.phase = 'done';
-    resizeCanvas();
-    state.points = spreadPoints(rawPoints);
-    fitCamera();
-    render();
-    setProgress(100);
-    setStatus(`${files.length} images — tap to view · ${k} clusters`);
-    recenterBtn.disabled = false;
-    resetBtn.disabled = false;
-
-    // Save session for fast resume on reload
-    state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
-    try {
-      localStorage.setItem('po_fileKeys',   JSON.stringify(state.fileKeys));
-      localStorage.setItem('po_umapPoints', JSON.stringify(state.points));
-      localStorage.setItem('po_clusters',   JSON.stringify(Array.from(state.clusters)));
-    } catch (_) { /* quota exceeded — ignore */ }
-
-  } catch (err) {
-    console.error(err);
-    setStatus(`Error: ${err.message}`);
-  } finally {
-    openBtn.disabled = false;
-  }
-}
-
-// ── Event listeners ───────────────────────────────────────────────────────────
-loadModelBtn.addEventListener('click', async () => {
-  if (extractor) return;
-  loadModelBtn.disabled = true;
-  await loadUMAPLib();
-  await loadModel();
-});
-
-resumeBtn.addEventListener('click', async () => {
-  if (!('showDirectoryPicker' in window)) {
-    alert('File System Access API requires Chrome 86+ or Edge 86+.');
-    return;
-  }
-  const savedPoints  = JSON.parse(localStorage.getItem('po_umapPoints') || 'null');
-  const savedClusters = JSON.parse(localStorage.getItem('po_clusters')  || 'null');
-  const savedKeys    = JSON.parse(localStorage.getItem('po_fileKeys')   || 'null');
-  if (!savedPoints || !savedKeys) { await openBtn.click(); return; }
-
-  try {
-    const dir = await showDirectoryPicker({ mode: 'read' });
-    setStatus('Matching files…');
-    const files = await collectImages(dir);
-    const keyToFile = new Map(files.map(f => [`${f.name}:${f.size}:${f.lastModified}`, f]));
-    const matched = savedKeys.map(k => keyToFile.get(k)).filter(Boolean);
-
-    if (matched.length < savedKeys.length * 0.8) {
-      // Too many files missing — do a full run instead
-      await run(dir); return;
-    }
-
-    state.files      = matched;
-    state.points     = savedPoints.slice(0, matched.length);
-    state.clusters   = new Int32Array(savedClusters.slice(0, matched.length));
-    state.thumbnails = await preloadThumbnails(matched);
-    state.phase      = 'done';
-    resizeCanvas();
-    fitCamera();
-    render();
-    setProgress(100);
-    setStatus(`${matched.length} images — resumed from session`);
-    recenterBtn.disabled = false;
-    resetBtn.disabled = false;
-  } catch (err) {
-    if (err.name !== 'AbortError') setStatus(`Error: ${err.message}`);
-  }
-});
-
-openBtn.addEventListener('click', async () => {
-  if (!('showDirectoryPicker' in window)) {
-    alert('File System Access API requires Chrome 86+ or Edge 86+.');
-    return;
-  }
-  try {
-    const dir = await showDirectoryPicker({ mode: 'read' });
-    await run(dir);
-  } catch (err) {
-    if (err.name !== 'AbortError') setStatus(`Error: ${err.message}`);
-  }
-});
-
-// ── Pan + Pinch-zoom (pointer events = unified touch+mouse) ───────────────────
-const pointers = new Map();
-let lastPinchDist = 0;
-let dragMoved = 0;
-
-function pointerPos(e) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    cx: (e.clientX - rect.left) * (canvas.width  / rect.width),
-    cy: (e.clientY - rect.top)  * (canvas.height / rect.height),
-  };
-}
-
-canvas.addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  canvas.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  dragMoved = 0;
-});
-
-canvas.addEventListener('pointermove', (e) => {
-  e.preventDefault();
-  if (!pointers.has(e.pointerId)) return;
-  const prev = pointers.get(e.pointerId);
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-  if (pointers.size === 1) {
-    const dx = e.clientX - prev.x;
-    const dy = e.clientY - prev.y;
-    dragMoved += Math.abs(dx) + Math.abs(dy);
-    camera.x -= dx / camera.scale;
-    camera.y -= dy / camera.scale;
-    scheduleRender();
-  } else if (pointers.size === 2) {
-    const pts = [...pointers.values()];
-    const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (lastPinchDist > 0) {
-      const midX = (pts[0].x + pts[1].x) / 2;
-      const midY = (pts[0].y + pts[1].y) / 2;
-      const rect  = canvas.getBoundingClientRect();
-      const scaleRatio = canvas.width / rect.width;
-      const px = (midX - rect.left) * scaleRatio - canvas.width  / 2;
-      const py = (midY - rect.top)  * scaleRatio - canvas.height / 2;
-      const ratio = dist / lastPinchDist;
-      camera.x += px / camera.scale - px / (camera.scale * ratio);
-      camera.y += py / camera.scale - py / (camera.scale * ratio);
-      camera.scale = Math.max(0.05, Math.min(20, camera.scale * ratio));
-      scheduleRender();
-    }
-    lastPinchDist = dist;
-  }
-});
-
-canvas.addEventListener('pointerup', (e) => {
-  e.preventDefault();
-  const wasSingleTap = pointers.size === 1 && dragMoved < 8;
-  pointers.delete(e.pointerId);
-  if (pointers.size < 2) lastPinchDist = 0;
-
-  if (wasSingleTap && state.phase === 'done' && state.points.length) {
-    const { cx, cy } = pointerPos(e);
-    const wx = (cx - canvas.width  / 2) / camera.scale + camera.x;
-    const wy = (cy - canvas.height / 2) / camera.scale + camera.y;
-    const hitRadius = (THUMB_WORLD / 2) ** 2;
-    let closest = -1, minD = hitRadius * 4;
-    for (let i = 0; i < state.points.length; i++) {
-      const ddx = state.points[i][0] - wx, ddy = state.points[i][1] - wy;
-      const d = ddx * ddx + ddy * ddy;
-      if (d < minD) { minD = d; closest = i; }
-    }
-    if (closest >= 0) {
-      const f = state.files[closest];
-      modalImg.src = f.objectURL;
-      modalName.textContent = f.name.split('/').pop();
-      modal.classList.add('open');
-    }
-  }
-});
-
-canvas.addEventListener('pointercancel', (e) => {
-  pointers.delete(e.pointerId);
-  if (pointers.size < 2) lastPinchDist = 0;
-});
-
-canvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const factor = e.deltaY > 0 ? 0.88 : 1.14;
-  const rect = canvas.getBoundingClientRect();
-  const px = (e.clientX - rect.left) * (canvas.width  / rect.width)  - canvas.width  / 2;
-  const py = (e.clientY - rect.top)  * (canvas.height / rect.height) - canvas.height / 2;
-  camera.x += px / camera.scale - px / (camera.scale * factor);
-  camera.y += py / camera.scale - py / (camera.scale * factor);
-  camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor));
-  scheduleRender();
-}, { passive: false });
-
-recenterBtn.addEventListener('click', () => { fitCamera(); render(); });
-resetBtn.addEventListener('click', resetAll);
-
-modalClose.addEventListener('click', () => {
-  modal.classList.remove('open');
-});
-
-modal.addEventListener('click', (e) => {
-  if (e.target === modal) modal.classList.remove('open');
-});
-
-window.addEventListener('resize', () => {
-  resizeCanvas();
-  if (state.phase === 'done' && state.points.length) render();
-});
-
-// ── Init ──────────────────────────────────────────────────────────────────────
-resizeCanvas();
-
-// Show resume button if session data exists
-const _savedKeys = localStorage.getItem('po_fileKeys');
-if (_savedKeys) {
-  try {
-    const n = JSON.parse(_savedKeys).length;
-    resumeBtn.hidden = false;
-    resumeBtn.textContent = `Resume last session (${n} images)`;
-  } catch (_) { localStorage.clear(); }
-}
-
-// Auto-start model loading (no button click required)
-loadModelBtn.disabled = true;
-(async () => {
-  try {
-    await loadUMAPLib();
-    await loadModel();
-  } catch (err) {
-    loadModelBtn.hidden = false;
-    setStatus(`Model failed to load: ${err.message}. Tap "Load Model" to retry.`);
-  }
-})();
-</script>
+<script src="/umap-js.min.js"></script>
+<script type="module" src="/src/app.ts"></script>
 </body>
 </html>
