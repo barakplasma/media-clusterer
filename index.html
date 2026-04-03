@@ -196,7 +196,7 @@
 <header>
   <h1>Photo Organizer</h1>
   <div class="controls">
-    <button id="load-model-btn" class="primary">Load Model (~380 MB, cached after first load)</button>
+    <button id="load-model-btn" class="primary">Load Model (~514 MB, cached after first load)</button>
     <button id="resume-btn" hidden disabled>Resume last session</button>
     <button id="open-btn" disabled>Open Folder</button>
   </div>
@@ -391,10 +391,34 @@ function extractVector(output) {
   return l2normalize(vec);
 }
 
-// ── Text embedding (uses same model as images) ────────────────────────────────────
+// ── Text embedding (uses text model with search_query prefix) ─────────────────────
 async function embedText(text) {
-  const output = await extractor(text);
-  return extractVector(output);
+  // Add required task prefix for nomic-embed-text
+  const prefixed = `search_query: ${text}`;
+  const output = await textExtractor(prefixed, { pooling: 'mean' });
+
+  // Apply layer_norm and normalize (from nomic model card)
+  const dims = output.dims;
+  const data = output.data;
+  const hiddenSize = dims[dims.length - 1];
+
+  // Layer norm
+  const mean = data.reduce((a, b) => a + b, 0) / hiddenSize;
+  const variance = data.reduce((a, b) => a + (b - mean) ** 2, 0) / hiddenSize;
+  const epsilon = 1e-5;
+  const normalized = new Float32Array(hiddenSize);
+  for (let i = 0; i < hiddenSize; i++) {
+    normalized[i] = (data[i] - mean) / Math.sqrt(variance + epsilon);
+  }
+
+  // L2 normalize
+  let norm = 0;
+  for (let i = 0; i < hiddenSize; i++) norm += normalized[i] * normalized[i];
+  norm = Math.sqrt(norm) || 1;
+  const vec = new Float32Array(hiddenSize);
+  for (let i = 0; i < hiddenSize; i++) vec[i] = normalized[i] / norm;
+
+  return vec;
 }
 
 // ── Text search using similarity module ────────────────────────────────────────
@@ -745,7 +769,8 @@ async function runUMAP(vectors, nNeighbors) {
 }
 
 // ── Model singleton ───────────────────────────────────────────────────────────
-let extractor = null;  // Handles both images and text
+let extractor = null;      // Vision model (for images)
+let textExtractor = null;  // Text model (for search queries, aligned to vision space)
 
 async function loadModel() {
   if (extractor) return;
@@ -753,7 +778,7 @@ async function loadModel() {
   setStatus('Loading model…');
   setProgress(0);
 
-  const MODEL_SIZE_BYTES = 380 * 1024 * 1024;
+  const MODEL_SIZE_BYTES = 380 * 1024 * 1024 + 134 * 1024 * 1024;  // ~514MB total
   const loaded = new Map();
 
   const progressCb = (e) => {
@@ -767,7 +792,7 @@ async function loadModel() {
   };
 
   const tryLoad = (device) => pipeline(
-    'feature-extraction',
+    'image-feature-extraction',
     'nomic-ai/nomic-embed-vision-v1.5',
     { device, dtype: 'fp32', progress_callback: progressCb }
   );
@@ -788,9 +813,9 @@ async function loadModel() {
   }
   setProgress(100);
 
-  // Load text embedding model for search queries (Nomic text variant)
+  // Load text embedding model (aligned to vision space)
   setStatus('Loading text model for search…');
-  const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;  // ~134MB for nomic-embed-text
+  const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
   const textLoaded = new Map();
 
   const textProgressCb = (e) => {
@@ -806,11 +831,7 @@ async function loadModel() {
   const tryLoadText = (device) => pipeline(
     'feature-extraction',
     'nomic-ai/nomic-embed-text-v1.5',
-    {
-      device,
-      dtype: 'fp32',
-      progress_callback: textProgressCb
-    }
+    { device, dtype: 'fp32', progress_callback: textProgressCb }
   );
 
   try {
