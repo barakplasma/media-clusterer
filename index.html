@@ -184,6 +184,7 @@
       justify-content: center;
     }
   </style>
+  <script src="similarity.js"></script>
 </head>
 <body>
 
@@ -207,7 +208,7 @@
   <button id="recenter-btn" disabled>⌖ Recenter</button>
   <button id="reset-btn" disabled>Reset</button>
   <input id="search-input" disabled placeholder="e.g. sunset at the beach">
-  <span class="badge">Coming in v2</span>
+  <button id="search-clear-btn" hidden>✕</button>
 </div>
 
 <div id="modal">
@@ -240,6 +241,7 @@ const modal        = document.getElementById('modal');
 const modalClose   = document.getElementById('modal-close');
 const modalImg     = document.getElementById('modal-img');
 const modalName    = document.getElementById('modal-name');
+const searchClearBtn = document.getElementById('search-clear-btn');
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const state = {
@@ -249,6 +251,9 @@ const state = {
   points: [],         // [x, y] in virtual world space (spread, no-overlap)
   clusters: null,     // Int32Array cluster index per image
   thumbnails: [],     // HTMLImageElement per image (preloaded)
+  searchResults: null, // Int32Array of sorted indices, or null if no search
+  searchQuery: '',     // current search query
+  searchScores: null,  // Float32Array of similarity scores
 };
 
 // ── Camera (infinite canvas) ──────────────────────────────────────────────────
@@ -378,6 +383,37 @@ function extractVector(output) {
   const vec = new Float32Array(hiddenSize);
   for (let i = 0; i < hiddenSize; i++) vec[i] = data[i];
   return l2normalize(vec);
+}
+
+// ── Text embedding (multimodal model accepts text) ────────────────────────────
+async function embedText(text) {
+  const output = await extractor(text);
+  return extractVector(output);
+}
+
+// ── Text search using similarity module ────────────────────────────────────────
+async function searchImages(query) {
+  if (!query.trim() || !state.vectors.length) {
+    state.searchResults = null;
+    state.searchQuery = '';
+    state.searchScores = null;
+    return;
+  }
+
+  setStatus(`Searching for "${query}"…`);
+
+  const queryVector = await embedText(query);
+  state.searchQuery = query;
+
+  // Compute all similarities
+  const scores = allSimilarities(queryVector, state.vectors);
+  state.searchScores = scores;
+
+  // Sort indices by similarity
+  state.searchResults = sortBySimilarity(scores);
+
+  const topScore = scores[state.searchResults[0]];
+  setStatus(`${state.vectors.length} images · top match: ${(topScore * 100).toFixed(0)}% similar`);
 }
 
 // ── k-means (runs on 2D UMAP output) ─────────────────────────────────────────
@@ -517,6 +553,9 @@ function resetAll() {
   // Reset state
   state.phase = 'idle'; state.files = []; state.vectors = [];
   state.points = []; state.clusters = null; state.thumbnails = [];
+  state.searchResults = null;
+  state.searchQuery = '';
+  state.searchScores = null;
   // Clear localStorage session
   localStorage.removeItem('po_fileKeys');
   localStorage.removeItem('po_umapPoints');
@@ -527,6 +566,9 @@ function resetAll() {
   // Reset UI
   recenterBtn.disabled = true;
   resetBtn.disabled = true;
+  searchInput.disabled = true;
+  searchInput.value = '';
+  searchClearBtn.hidden = true;
   resumeBtn.hidden = true;
   resumeBtn.disabled = true;
   resumeBtn.classList.remove('primary');
@@ -544,6 +586,14 @@ function render() {
   const thumbs = state.thumbnails;
   if (!pts.length) return;
 
+  // Build rank lookup for search results
+  const rank = new Int32Array(pts.length);
+  if (state.searchResults) {
+    for (let i = 0; i < state.searchResults.length; i++) {
+      rank[state.searchResults[i]] = i;
+    }
+  }
+
   const s        = camera.scale;
   const cxW      = canvas.width  / 2;
   const cyW      = canvas.height / 2;
@@ -560,7 +610,21 @@ function render() {
     if (sx + half < 0 || sx - half > canvas.width ||
         sy + half < 0 || sy - half > canvas.height) continue;
 
-    const clr = state.clusters?.length ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length] : '#6b7280';
+    // Apply search highlighting
+    let alphaMultiplier = 1.0;
+    let highlightBorder = null;
+    if (state.searchResults) {
+      const r = rank[i];
+      if (r > 50) {
+        alphaMultiplier = 0.15;
+      } else if (r <= 10) {
+        highlightBorder = '#facc15';
+      } else if (r <= 30) {
+        highlightBorder = '#4ade80';
+      }
+    }
+
+    const clr = highlightBorder ?? (state.clusters?.length ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length] : '#6b7280');
     let drawn = false;
 
     // Full-res LOD: load and draw when zoomed in enough
@@ -577,7 +641,7 @@ function render() {
         const ratio = fullImg.naturalWidth / fullImg.naturalHeight;
         const dw = ratio >= 1 ? drawSize : drawSize * ratio;
         const dh = ratio >= 1 ? drawSize / ratio : drawSize;
-        ctx.globalAlpha = 0.9;
+        ctx.globalAlpha = 0.9 * alphaMultiplier;
         ctx.drawImage(fullImg, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
@@ -594,7 +658,7 @@ function render() {
         const ratio = thumb.width / thumb.height;
         const dw = ratio >= 1 ? drawSize : drawSize * ratio;
         const dh = ratio >= 1 ? drawSize / ratio : drawSize;
-        ctx.globalAlpha = 0.9;
+        ctx.globalAlpha = 0.9 * alphaMultiplier;
         ctx.drawImage(thumb, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
@@ -845,6 +909,7 @@ async function run(dirHandle) {
     setStatus(`${files.length} images — tap to view · ${k} clusters`);
     recenterBtn.disabled = false;
     resetBtn.disabled = false;
+    searchInput.disabled = false;
 
     // Save session for fast resume on reload
     state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
@@ -904,6 +969,7 @@ resumeBtn.addEventListener('click', async () => {
     setStatus(`${matched.length} images — resumed from session`);
     recenterBtn.disabled = false;
     resetBtn.disabled = false;
+    searchInput.disabled = false;
   } catch (err) {
     if (err.name !== 'AbortError') setStatus(`Error: ${err.message}`);
   }
@@ -1021,6 +1087,50 @@ canvas.addEventListener('wheel', (e) => {
 
 recenterBtn.addEventListener('click', () => { fitCamera(); render(); });
 resetBtn.addEventListener('click', resetAll);
+
+// ── Search input handling ─────────────────────────────────────────────────────
+let searchDebounce = null;
+
+searchInput.addEventListener('input', () => {
+  searchClearBtn.hidden = !searchInput.value.trim();
+
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(async () => {
+    if (searchInput.value.trim()) {
+      await searchImages(searchInput.value);
+    } else {
+      state.searchResults = null;
+      state.searchQuery = '';
+      state.searchScores = null;
+      searchClearBtn.hidden = true;
+      setStatus(`${state.files.length} images · tap to view`);
+    }
+    render();
+  }, 300);
+});
+
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    searchInput.value = '';
+    state.searchResults = null;
+    state.searchQuery = '';
+    state.searchScores = null;
+    searchClearBtn.hidden = true;
+    setStatus(`${state.files.length} images · tap to view`);
+    render();
+  }
+});
+
+searchClearBtn.addEventListener('click', () => {
+  searchInput.value = '';
+  state.searchResults = null;
+  state.searchQuery = '';
+  state.searchScores = null;
+  searchClearBtn.hidden = true;
+  searchInput.focus();
+  setStatus(`${state.files.length} images · tap to view`);
+  render();
+});
 
 modalClose.addEventListener('click', () => {
   modal.classList.remove('open');
