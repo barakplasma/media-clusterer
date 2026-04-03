@@ -43,7 +43,8 @@ env.cacheDir = 'models';
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'heic', 'heif']);
 const THUMB_WORLD = 48;   // thumbnail size in world units
 const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
-const BATCH_SIZE = 8;
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const BATCH_SIZE = IS_MOBILE ? 4 : 8; // Smaller batch on mobile to avoid memory crashes
 const WRITE_BATCH = 20;
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
 
@@ -63,6 +64,7 @@ const dom: DOMElements = {
   modalName: document.getElementById('modal-name') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
+  fileInput: document.getElementById('file-input') as HTMLInputElement,
 };
 
 // ── Application State ────────────────────────────────────────────────────────
@@ -642,21 +644,15 @@ async function embedAll(files: PhotoFile[]) {
 }
 
 // ── Main run ─────────────────────────────────────────────────────────────────
-async function run(dirHandle: DirectoryHandle) {
-  dom.openBtn.disabled = true;
-  setProgress(0);
+async function processFiles(files: PhotoFile[]) {
+  if (files.length === 0) {
+    setStatus('No images found.');
+    return;
+  }
+  state.files = files;
+  setStatus(`Found ${files.length} images. Loading thumbnails…`);
 
   try {
-    setStatus('Scanning folder…');
-    const files = await collectImages(dirHandle);
-
-    if (files.length === 0) {
-      setStatus('No images found in that folder.');
-      return;
-    }
-    state.files = files;
-    setStatus(`Found ${files.length} images. Loading thumbnails…`);
-
     state.thumbnails = await preloadThumbnails(files);
     setStatus(`Found ${files.length} images.`);
 
@@ -694,6 +690,21 @@ async function run(dirHandle: DirectoryHandle) {
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
   } finally {
+    dom.openBtn.disabled = false;
+  }
+}
+
+async function run(dirHandle: DirectoryHandle) {
+  dom.openBtn.disabled = true;
+  setProgress(0);
+
+  try {
+    setStatus('Scanning folder…');
+    const files = await collectImages(dirHandle);
+    await processFiles(files);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Error: ${(err as Error).message}`);
     dom.openBtn.disabled = false;
   }
 }
@@ -875,37 +886,90 @@ dom.loadModelBtn.addEventListener('click', async () => {
 });
 
 dom.openBtn.addEventListener('click', async () => {
-  if (!window.showDirectoryPicker) {
-    alert('File System Access API requires a modern browser (Chrome 86+ or Edge 86+).');
-    return;
-  }
-  try {
-    const dir = await window.showDirectoryPicker({ mode: 'read' });
-    await run(dir);
-  } catch (err) {
-    if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);
+  if (window.showDirectoryPicker) {
+    try {
+      const dir = await window.showDirectoryPicker({ mode: 'read' });
+      await run(dir);
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);
+    }
+  } else {
+    // Fallback for Safari/iOS
+    dom.fileInput.click();
   }
 });
 
-dom.resumeBtn.addEventListener('click', async () => {
-  if (!window.showDirectoryPicker) {
-    alert('File System Access API requires a modern browser.');
-    return;
+dom.fileInput.addEventListener('change', async () => {
+  const fileList = dom.fileInput.files;
+  if (!fileList || fileList.length === 0) return;
+
+  dom.openBtn.disabled = true;
+  setProgress(0);
+  setStatus('Processing files…');
+
+  const files: PhotoFile[] = [];
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i];
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    if (IMAGE_EXTS.has(ext)) {
+      files.push({
+        name: file.webkitRelativePath || file.name,
+        size: file.size,
+        lastModified: file.lastModified,
+        file,
+        objectURL: null
+      });
+    }
   }
+
+  await processFiles(files);
+});
+
+dom.resumeBtn.addEventListener('click', async () => {
   const savedPoints = JSON.parse(localStorage.getItem('po_umapPoints') || 'null');
   const savedClusters = JSON.parse(localStorage.getItem('po_clusters') || 'null');
   const savedKeys = JSON.parse(localStorage.getItem('po_fileKeys') || 'null');
   if (!savedPoints || !savedKeys) { await dom.openBtn.click(); return; }
 
   try {
-    const dir = await window.showDirectoryPicker({ mode: 'read' });
-    setStatus('Matching files…');
-    const files = await collectImages(dir);
+    let files: PhotoFile[] = [];
+    if (window.showDirectoryPicker) {
+      const dir = await window.showDirectoryPicker({ mode: 'read' });
+      setStatus('Matching files…');
+      files = await collectImages(dir);
+    } else {
+      // Safari/iOS fallback
+      setStatus('Please re-select the folder to resume.');
+      const fileList = await new Promise<FileList | null>((resolve) => {
+        const handler = () => {
+          dom.fileInput.removeEventListener('change', handler);
+          resolve(dom.fileInput.files);
+        };
+        dom.fileInput.addEventListener('change', handler);
+        dom.fileInput.click();
+      });
+
+      if (!fileList || fileList.length === 0) return;
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+        const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+        if (IMAGE_EXTS.has(ext)) {
+          files.push({
+            name: file.webkitRelativePath || file.name,
+            size: file.size,
+            lastModified: file.lastModified,
+            file,
+            objectURL: null
+          });
+        }
+      }
+    }
+
     const keyToFile = new Map(files.map(f => [`${f.name}:${f.size}:${f.lastModified}`, f]));
     const matched = (savedKeys as string[]).map(k => keyToFile.get(k)).filter((f): f is PhotoFile => !!f);
 
     if (matched.length < (savedKeys as string[]).length * 0.8) {
-      await run(dir); return;
+      await processFiles(files); return;
     }
 
     state.files = matched;
