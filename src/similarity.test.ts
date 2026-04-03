@@ -41,10 +41,10 @@ describe('similarity', () => {
 
       expect(scores).toBeInstanceOf(Float32Array);
       expect(scores.length).toBe(4);
-      expect(scores[0]).toBe(1.0); // Exact match
-      expect(scores[1]).toBe(0.0); // Orthogonal
-      expect(scores[2]).toBe(0.0); // Orthogonal
-      expect(scores[3]).toBeCloseTo(0.707, 2); // ~45 degrees
+      expect(scores[0]).toBe(1.0); // Exact match: [1,0,0]·[1,0,0] = 1
+      expect(scores[1]).toBe(0.0); // Orthogonal: [1,0,0]·[0,1,0] = 0
+      expect(scores[2]).toBe(0.0); // Orthogonal: [1,0,0]·[0,0,1] = 0
+      expect(scores[3]).toBe(1.0); // [1,0,0]·[1,1,0] = 1 (not normalized)
     });
 
     it('handles empty array', () => {
@@ -91,9 +91,9 @@ describe('similarity', () => {
 
       expect(results.length).toBe(3);
       expect(results[0][0]).toBe(0); // Index 0 has highest score
-      expect(results[0][1]).toBe(1.0); // Score = 1.0
+      expect(results[0][1]).toBe(1.0); // Score = 1.0 (exact match)
       expect(results[1][0]).toBe(3); // Index 3 has second highest
-      expect(results[1][1]).toBeCloseTo(0.707, 2);
+      expect(results[1][1]).toBe(1.0); // [1,0,0]·[1,1,0] = 1
     });
 
     it('handles k larger than array length', () => {
