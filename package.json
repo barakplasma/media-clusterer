@@ -1,0 +1,23 @@
+{
+  "name": "photo-organizer",
+  "version": "2.0.0",
+  "description": "Local AI photo organizer with semantic search",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12",
+    "vitest": "^1.2.2",
+    "@vitest/ui": "^1.2.2",
+    "@vitest/coverage-v8": "^1.2.2",
+    "jsdom": "^24.0.0"
+  }
+}
