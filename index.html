@@ -196,7 +196,7 @@
 <header>
   <h1>Photo Organizer</h1>
   <div class="controls">
-    <button id="load-model-btn" class="primary">Load Model (~514 MB, cached after first load)</button>
+    <button id="load-model-btn" class="primary">Load Model (~380 MB, cached after first load)</button>
     <button id="resume-btn" hidden disabled>Resume last session</button>
     <button id="open-btn" disabled>Open Folder</button>
   </div>
@@ -391,9 +391,9 @@ function extractVector(output) {
   return l2normalize(vec);
 }
 
-// ── Text embedding (uses text model for search queries) ────────────────────────────
+// ── Text embedding (uses same model as images) ────────────────────────────────────
 async function embedText(text) {
-  const output = await textExtractor(text);
+  const output = await extractor(text);
   return extractVector(output);
 }
 
@@ -745,8 +745,7 @@ async function runUMAP(vectors, nNeighbors) {
 }
 
 // ── Model singleton ───────────────────────────────────────────────────────────
-let extractor = null;      // Vision model (for images)
-let textExtractor = null;  // Text model (for search queries)
+let extractor = null;  // Handles both images and text
 
 async function loadModel() {
   if (extractor) return;
@@ -754,7 +753,7 @@ async function loadModel() {
   setStatus('Loading model…');
   setProgress(0);
 
-  const MODEL_SIZE_BYTES = 380 * 1024 * 1024 + 134 * 1024 * 1024;  // Vision + Text (~514MB total)
+  const MODEL_SIZE_BYTES = 380 * 1024 * 1024;
   const loaded = new Map();
 
   const progressCb = (e) => {
@@ -768,7 +767,7 @@ async function loadModel() {
   };
 
   const tryLoad = (device) => pipeline(
-    'image-feature-extraction',
+    'feature-extraction',
     'nomic-ai/nomic-embed-vision-v1.5',
     { device, dtype: 'fp32', progress_callback: progressCb }
   );
