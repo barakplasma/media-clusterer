@@ -13,16 +13,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv install.sh | sh
-
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
-      - name: Install pnpm
-        run: uvx pnpm install
+      - name: Install dependencies
+        run: npm ci
 
       - name: Run vitest
-        run: uvx pnpm test
+        run: npm test
