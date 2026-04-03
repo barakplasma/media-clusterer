@@ -9,7 +9,6 @@ import {
 } from './similarity';
 import {
   l2normalize,
-  layerNormAndNormalize,
   extractVector,
 } from './embeddings';
 import {
@@ -155,14 +154,9 @@ async function embedText(text: string): Promise<Float32Array> {
 
   // Add required task prefix for nomic-embed-text
   const prefixed = `search_query: ${text}`;
-  const output = await textExtractor(prefixed, { pooling: 'mean' });
+  const output = await textExtractor(prefixed, { pooling: 'mean', normalize: true });
 
-  // Apply layer_norm and normalize using helper
-  const dims = output.dims;
-  const data = output.data;
-  const hiddenSize = dims[dims.length - 1];
-
-  return layerNormAndNormalize(data, hiddenSize);
+  return output.data;
 }
 
 // ── Text search using similarity module ──────────────────────────────────────
@@ -537,7 +531,7 @@ async function loadModel() {
   const tryLoad = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
     'image-feature-extraction',
     'nomic-ai/nomic-embed-vision-v1.5',
-    { device, dtype: 'fp32', progress_callback: progressCb }
+    { device, dtype: 'fp32', progress_callback: progressCb, pooling: 'mean', normalize: true }
   ) as Promise<PipelineInstance>;
 
   try {

@@ -120,6 +120,8 @@ export interface PipelineOptions {
   device?: 'webgpu' | 'wasm' | 'cpu';
   dtype?: 'fp32' | 'fp16' | 'q8';
   progress_callback?: (progress: ProgressEvent) => void;
+  pooling?: 'mean' | 'cls' | 'max';
+  normalize?: boolean;
 }
 
 export interface PipelineInstance {
