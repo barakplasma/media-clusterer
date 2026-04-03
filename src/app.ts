@@ -62,12 +62,14 @@ const dom: DOMElements = {
   modalClose: document.getElementById('modal-close') as HTMLButtonElement,
   modalImg: document.getElementById('modal-img') as HTMLImageElement,
   modalName: document.getElementById('modal-name') as HTMLDivElement,
+  searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
   fileInput: document.getElementById('file-input') as HTMLInputElement,
   aboutBtn: document.getElementById('about-btn') as HTMLButtonElement,
   aboutModal: document.getElementById('about-modal') as HTMLDivElement,
   aboutClose: document.getElementById('about-close') as HTMLButtonElement,
+  statsEl: document.getElementById('stats') as HTMLDivElement,
 };
 
 // ── Application State ────────────────────────────────────────────────────────
@@ -169,23 +171,34 @@ async function searchImages(query: string) {
     state.searchResults = null;
     state.searchQuery = '';
     state.searchScores = null;
+    dom.searchWrap.classList.remove('loading');
     return;
   }
 
+  dom.searchWrap.classList.add('loading');
   setStatus(`Searching for "${query}"…`);
 
-  const queryVector = await embedText(query);
-  state.searchQuery = query;
+  try {
+    const queryVector = await embedText(query);
+    state.searchQuery = query;
 
-  // Compute all similarities
-  const scores = allSimilarities(queryVector, state.vectors);
-  state.searchScores = scores;
+    // Compute all similarities
+    const scores = allSimilarities(queryVector, state.vectors);
+    state.searchScores = scores;
 
-  // Sort indices by similarity
-  state.searchResults = sortBySimilarity(scores);
+    // Sort indices by similarity
+    state.searchResults = sortBySimilarity(scores);
 
-  const topScore = scores[state.searchResults[0]];
-  setStatus(`${state.vectors.length} images · top match: ${(topScore * 100).toFixed(0)}% similar`);
+    const topScore = scores[state.searchResults[0]];
+    const statusMsg = `${state.vectors.length} images · top match: ${(topScore * 100).toFixed(0)}% similar`;
+    setStatus(statusMsg);
+    if (dom.statsEl) dom.statsEl.textContent = statusMsg;
+  } catch (err) {
+    console.error('Search failed:', err);
+    setStatus('Search failed. Check console.');
+  } finally {
+    dom.searchWrap.classList.remove('loading');
+  }
 }
 
 // ── k-means (runs on 2D UMAP output) ─────────────────────────────────────────
@@ -369,12 +382,13 @@ function render() {
     let highlightBorder = null;
     if (state.searchResults) {
       const r = rank[i];
-      if (r > 50) {
-        alphaMultiplier = 0.15;
-      } else if (r <= 10) {
-        highlightBorder = '#facc15';
-      } else if (r <= 30) {
-        highlightBorder = '#4ade80';
+      if (r < 20) {
+        highlightBorder = '#facc15'; // Bright yellow for top results
+        alphaMultiplier = 1.0;
+      } else if (r < 100) {
+        alphaMultiplier = 0.4;
+      } else {
+        alphaMultiplier = 0.1;
       }
     }
 
@@ -677,7 +691,9 @@ async function processFiles(files: PhotoFile[]) {
     fitCamera();
     scheduleRender();
     setProgress(100);
+    const finalMsg = `${files.length} images · ${k} clusters`;
     setStatus(`${files.length} images — tap to view · ${k} clusters`);
+    if (dom.statsEl) dom.statsEl.textContent = finalMsg;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.searchInput.disabled = false;
@@ -996,7 +1012,9 @@ dom.resumeBtn.addEventListener('click', async () => {
     fitCamera();
     scheduleRender();
     setProgress(100);
+    const finalMsg = `${matched.length} images · restored`;
     setStatus(`${matched.length} images — resumed from session`);
+    if (dom.statsEl) dom.statsEl.textContent = finalMsg;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.searchInput.disabled = false;

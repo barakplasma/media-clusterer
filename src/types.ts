@@ -52,12 +52,14 @@ export interface DOMElements {
   modalClose: HTMLButtonElement;
   modalImg: HTMLImageElement;
   modalName: HTMLDivElement;
+  searchWrap: HTMLDivElement;
   searchInput: HTMLInputElement;
   searchClearBtn: HTMLButtonElement;
   fileInput: HTMLInputElement;
   aboutBtn: HTMLButtonElement;
   aboutModal: HTMLDivElement;
   aboutClose: HTMLButtonElement;
+  statsEl: HTMLDivElement;
 }
 
 /** IndexedDB cache entry */

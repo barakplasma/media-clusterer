@@ -173,6 +173,22 @@
       align-items: center;
     }
 
+    #search-wrap.loading::after {
+      content: "";
+      position: absolute;
+      right: 36px;
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
     #search-input {
       width: 100%;
       padding: 10px 36px 10px 12px;
