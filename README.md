@@ -1,72 +1,72 @@
-# Photo Organizer
+# Photo Organizer 📸 ✨
 
-A zero-server, zero-upload photo organizer that runs entirely in your browser.
+A high-performance, **zero-server**, local AI photo organizer that runs entirely in your browser using **WebGPU** and **Transformers.js**.
 
-Pick a local folder of images → the app embeds them with a local AI vision model on your GPU → projects them into a 2D map where visually similar photos cluster together → explore on an infinite canvas.
+---
 
-**Live**: https://photo-organizer.526462738.xyz  
-**Mirror**: https://barakplasma.github.io/photo-organizer/
+## 🚀 Key Features
 
-## How it works
+- **Semantic Search**: Find photos by description (e.g., "sunset at the beach", "golden retriever puppy") using multimodal AI.
+- **Privacy First**: No photos are uploaded. No server involved. Everything happens locally on your device.
+- **WebGPU Powered**: Blazing fast embeddings and projections using your GPU.
+- **Infinite Canvas**: Explore thousands of photos in a fluid, 2D map powered by UMAP dimensionality reduction.
+- **Cluster Visualization**: Visually similar photos are automatically grouped and colored using k-means clustering.
+- **Smart Caching**: Embeddings are cached in IndexedDB for instant re-opening of previously processed folders.
+- **Safari/iOS Compatible**: Robust fallbacks for mobile browsers without File System Access API or WebGPU.
 
-1. **Load Model** — downloads `nomic-ai/nomic-embed-vision-v1.5` (≈380 MB, cached after first load) and runs it on WebGPU (falls back to CPU if unavailable)
-2. **Open Folder** — pick any local folder; images are embedded in batches of 8, embeddings cached in IndexedDB so re-opening the same folder is instant
-3. **Explore** — a 2D UMAP projection clusters visually similar images; tap any image to view full-size; pan with one finger, pinch to zoom
-4. **Resume** — after a successful run, reload the page and tap "Resume last session" to restore the canvas without re-embedding or re-running UMAP
+## 🛠️ Technology Stack
 
-## Privacy
+- **Language**: TypeScript (Strict, zero `any`)
+- **AI Engine**: [Transformers.js](https://huggingface.co/docs/transformers.js) (Nomic-Embed-Vision-v1.5 & Nomic-Embed-Text-v1.5)
+- **Build Tool**: [Vite](https://vitejs.dev/)
+- **Projections**: [UMAP-JS](https://github.com/PAIR-code/umap-js)
+- **Storage**: IndexedDB & LocalStorage
+- **Deployment**: Kubernetes + Caddy (Static Hosting)
 
-Nothing leaves your device. No server, no upload, no analytics. The AI model runs locally via [transformers.js](https://huggingface.co/docs/transformers.js) on WebGPU.
+## 📦 Project Structure
 
-## Requirements
-
-- Chrome 113+ or Edge 113+ (WebGPU + File System Access API)
-- Works best with a GPU; falls back to CPU (slower embedding)
-
-## Stack
-
-| Part | What |
-|---|---|
-| Language | TypeScript (Strict, no `any`) |
-| Build Tool | [Vite](https://vitejs.dev/) |
-| Test Runner | [Vitest](https://vitest.dev/) |
-| Embeddings | `nomic-ai/nomic-embed-vision-v1.5` and `nomic-ai/nomic-embed-text-v1.5` via `@huggingface/transformers@3` |
-| Dimensionality reduction | [umap-js](https://github.com/PAIR-code/umap-js) v1.4.0 |
-| Clustering | k-means on 2D UMAP output |
-| Rendering | HTML5 Canvas with camera pan/zoom, pointer events |
-| Cache | IndexedDB for embeddings, localStorage for session UMAP layout |
-
-## Project Structure
-
-```
-index.html       — main entry point
+```text
+index.html       — Main application entry & UI
 src/
-  app.ts         — main application logic
-  db.ts          — IndexedDB utilities
-  embeddings.ts  — embedding and normalization logic
-  similarity.ts  — vector similarity search
-  types.ts       — core type definitions
+  app.ts         — Core application lifecycle & event handling
+  db.ts          — IndexedDB storage management
+  embeddings.ts  — AI model normalization & vector extraction
+  similarity.ts  — Vector similarity search algorithms
+  types.ts       — Shared TypeScript interfaces & types
 public/
-  umap-js.min.js — static asset for dimensionality reduction
+  umap-js.min.js — UMAP dimensionality reduction library
 ```
 
-## Development
+## 👨‍💻 Development
 
-This project uses Vite for development and Vitest for testing.
+### Setup
 
 ```bash
 # Install dependencies
 npm install
 
-# Start development server
+# Start dev server
 npm run dev
-
-# Run tests
-npm test
-
-# Type check
-npm run type-check
-
-# Build for production
-npm run build
 ```
+
+### Production Build
+
+```bash
+# Build and type-check
+npm run build
+
+# Run tests (one-off)
+npm test
+```
+
+## 📜 How it Works
+
+1.  **Loading**: The app loads two specialized models: one for vision (images) and one for text (search queries).
+2.  **Embedding**: Images are processed in small batches to generate 768-dimensional semantic vectors.
+3.  **UMAP**: These high-dimensional vectors are projected into a 2D space while preserving local relationships.
+4.  **Clustering**: k-means identifies clusters of similar images for color-coding.
+5.  **Search**: Text queries are embedded into the same vector space, allowing for direct comparison with images via cosine similarity.
+
+---
+
+*Built with ❤️ for privacy and high-performance web computing.*

@@ -5,127 +5,221 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Photo Organizer — Local AI</title>
   <style>
+    :root {
+      --bg: #0b0e14;
+      --surface: #161b22;
+      --surface-hover: #1c2128;
+      --border: #30363d;
+      --primary: #58a6ff;
+      --primary-hover: #1f6feb;
+      --accent: #8957e5;
+      --text-main: #c9d1d9;
+      --text-dim: #8b949e;
+      --success: #3fb950;
+      --radius: 8px;
+      --transition: 0.15s cubic-bezier(0.33, 1, 0.68, 1);
+    }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      background: #0d1117;
-      color: #e5e7eb;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
       height: 100dvh;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      -webkit-font-smoothing: antialiased;
     }
 
     /* ── Header ── */
     header {
       display: flex;
       flex-direction: column;
-      align-items: stretch;
-      padding: 8px 10px;
-      border-bottom: 1px solid #1f2937;
-      flex-shrink: 0;
-      gap: 6px;
+      padding: 12px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
 
     h1 {
-      font-size: 12px;
+      font-size: 14px;
       font-weight: 600;
-      color: #6b7280;
-      letter-spacing: 0.08em;
+      color: var(--primary);
       text-transform: uppercase;
-      text-align: center;
+      letter-spacing: 0.05em;
     }
 
-    .controls { display: flex; flex-wrap: wrap; gap: 8px; }
+    .controls { 
+      display: flex; 
+      gap: 8px;
+      flex-wrap: wrap;
+    }
 
     button {
-      padding: 7px 10px;
-      border-radius: 6px;
-      border: 1px solid #374151;
-      background: #1f2937;
-      color: #d1d5db;
+      padding: 8px 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-main);
       font-size: 13px;
+      font-weight: 600;
       cursor: pointer;
-      transition: background 0.12s, border-color 0.12s;
-      font-weight: 500;
-      min-height: 36px;
+      transition: all var(--transition);
       display: flex;
       align-items: center;
       justify-content: center;
+      gap: 6px;
+      user-select: none;
     }
-    button:hover:not(:disabled) { background: #374151; }
-    button:disabled { opacity: 0.45; cursor: default; }
-    button.primary { background: #4f46e5; border-color: #4338ca; color: #fff; }
-    button.primary:hover:not(:disabled) { background: #4338ca; }
+
+    button:hover:not(:disabled) {
+      background: var(--surface-hover);
+      border-color: var(--text-dim);
+    }
+
+    button:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      background: var(--primary);
+      border-color: var(--primary-hover);
+      color: #ffffff;
+    }
+
+    button.primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+      box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
+    }
+
     #load-model-btn { flex: 1 1 100%; }
     #resume-btn { flex: 1; }
     #open-btn { flex: 1; }
 
     /* ── Progress bar ── */
-    #progress-wrap { height: 2px; background: #1f2937; flex-shrink: 0; }
+    #progress-wrap {
+      height: 4px;
+      background: rgba(48, 54, 61, 0.5);
+      position: relative;
+      overflow: hidden;
+    }
+
     #progress-bar {
       height: 100%;
-      background: linear-gradient(90deg, #4f46e5, #818cf8);
+      background: linear-gradient(90deg, var(--primary), var(--accent));
       width: 0%;
-      transition: width 0.25s ease;
+      transition: width 0.3s ease;
+      box-shadow: 0 0 8px var(--primary);
     }
 
     /* ── Status ── */
     #status {
-      padding: 10px 14px;
-      font-size: 13px;
-      color: #9ca3af;
-      flex-shrink: 0;
-      min-height: 32px;
+      padding: 8px 16px;
+      font-size: 12px;
+      color: var(--text-dim);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
-      line-height: 1.4;
+      min-height: 32px;
     }
 
     /* ── Canvas area ── */
     #canvas-wrap {
       flex: 1;
       position: relative;
-      overflow: hidden;
+      background: radial-gradient(circle at center, #161b22 0%, #0b0e14 100%);
     }
 
     canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
     canvas:active { cursor: grabbing; }
 
-    /* ── Search panel ── */
-    #search-panel {
-      padding: 8px 10px;
+    /* ── Bottom Panel ── */
+    #bottom-panel {
+      padding: 12px 16px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      z-index: 10;
+    }
+
+    .panel-row {
       display: flex;
       align-items: center;
       gap: 10px;
-      background: #0d1117;
-      border-top: 1px solid #1f2937;
-      flex-shrink: 0;
-      flex-wrap: wrap;
+      width: 100%;
     }
-    #search-panel button { flex: 0 0 auto; padding: 6px 10px; min-height: 32px; font-size: 12px; }
-    #search-panel input {
+
+    #search-wrap {
       flex: 1;
-      min-width: 140px;
-      padding: 10px 12px;
-      background: #1f2937;
-      border: 1px solid #374151;
-      border-radius: 6px;
-      color: #e5e7eb;
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    #search-input {
+      width: 100%;
+      padding: 10px 36px 10px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text-main);
       font-size: 14px;
       outline: none;
-      min-height: 40px;
+      transition: border-color var(--transition), box-shadow var(--transition);
     }
-    #search-panel input:disabled { cursor: not-allowed; color: #6b7280; }
-    .badge {
-      font-size: 12px;
-      color: #6b7280;
-      border: 1px solid #374151;
-      border-radius: 14px;
-      padding: 4px 10px;
-      white-space: nowrap;
-      font-weight: 500;
+
+    #search-input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
+    }
+
+    #search-input:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    #search-clear-btn {
+      position: absolute;
+      right: 8px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 16px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    #search-clear-btn:hover {
+      color: var(--text-main);
+      background: var(--border);
+    }
+
+    .utility-btns {
+      display: flex;
+      gap: 8px;
     }
 
     /* ── Modal ── */
@@ -133,89 +227,243 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.85);
-      z-index: 999;
+      background: rgba(0, 0, 0, 0.9);
+      z-index: 1000;
       align-items: center;
       justify-content: center;
       padding: 20px;
+      backdrop-filter: blur(4px);
     }
-    #modal.open { display: flex; }
+
+    #modal.open { display: flex; animation: fadeIn 0.2s ease-out; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
     #modal-content {
-      background: #1f2937;
+      background: var(--surface);
+      border: 1px solid var(--border);
       border-radius: 12px;
-      max-width: 92vw;
-      max-height: 92dvh;
+      max-width: 95vw;
+      max-height: 95dvh;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+      position: relative;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.5);
     }
+
     #modal-img {
-      flex: 1;
-      min-height: 0;
-      max-height: calc(92dvh - 60px);
-      width: 100%;
+      max-width: 100%;
+      max-height: calc(95dvh - 60px);
       object-fit: contain;
-      background: #0d1117;
+      background: #000;
     }
+
     #modal-name {
-      padding: 12px 16px;
-      font-size: 14px;
-      color: #d1d5db;
-      border-top: 1px solid #374151;
-      white-space: pre-wrap;
-      word-break: break-all;
-      overflow-y: auto;
-      max-height: 80px;
+      padding: 16px;
+      font-size: 13px;
+      color: var(--text-main);
+      text-align: center;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
+
     #modal-close {
       position: absolute;
-      top: 16px;
-      right: 16px;
-      background: #1f2937;
-      border: 1px solid #374151;
-      color: #d1d5db;
-      width: 40px;
-      height: 40px;
-      border-radius: 6px;
-      font-size: 20px;
-      cursor: pointer;
+      top: -16px;
+      right: -16px;
+      width: 32px;
+      height: 32px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
+      cursor: pointer;
+      font-size: 18px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 1001;
+    }
+
+    /* ── About Modal ── */
+    #about-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      backdrop-filter: blur(8px);
+    }
+
+    #about-modal.open { display: flex; animation: fadeIn 0.2s ease-out; }
+
+    #about-content {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      max-width: 600px;
+      width: 100%;
+      max-height: 85dvh;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.5);
+      padding: 32px;
+      overflow-y: auto;
+    }
+
+    .about-section {
+      margin-bottom: 24px;
+    }
+
+    .about-section h2 {
+      font-size: 16px;
+      color: var(--primary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .about-section p {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text-main);
+      margin-bottom: 8px;
+    }
+
+    .about-section ul {
+      padding-left: 20px;
+      margin-bottom: 8px;
+    }
+
+    .about-section li {
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 4px;
+    }
+
+    #about-close {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    #about-close:hover { color: var(--text-main); }
+
+    @media (max-width: 600px) {
+      .brand h1 { font-size: 12px; }
+      button { padding: 6px 10px; font-size: 12px; }
+      #bottom-panel { padding: 10px; gap: 10px; }
+      #search-input { padding: 8px 32px 8px 10px; font-size: 13px; }
     }
   </style>
 </head>
 <body>
 
 <header>
-  <h1>Photo Organizer</h1>
+  <div class="brand">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <h1>Photo Organizer</h1>
+      <button id="about-btn" style="padding: 2px 6px; font-size: 14px; background: transparent; border: none; color: var(--text-dim); cursor: pointer;" title="About & Instructions">ⓘ</button>
+    </div>
+    <div id="model-badge" style="font-size: 10px; color: var(--text-dim); background: var(--border); padding: 2px 6px; border-radius: 4px;">Local AI</div>
+  </div>
   <div class="controls">
-    <button id="load-model-btn" class="primary">Load Model (~514 MB, cached after first load)</button>
-    <button id="resume-btn" hidden disabled>Resume last session</button>
-    <button id="open-btn" disabled>Open Folder</button>
+    <button id="load-model-btn" class="primary">
+      <span>📥</span> Load AI Models (~514 MB)
+    </button>
+    <button id="resume-btn" hidden disabled>
+      <span>🔄</span> Resume Session
+    </button>
+    <button id="open-btn" disabled>
+      <span>📂</span> Open Photo Folder
+    </button>
     <input type="file" id="file-input" multiple webkitdirectory hidden>
   </div>
 </header>
 
 <div id="progress-wrap"><div id="progress-bar"></div></div>
-<div id="status">Pick a folder of images to begin.</div>
+<div id="status">Loading library...</div>
 
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
 </div>
 
-<div id="search-panel">
-  <button id="recenter-btn" disabled>⌖ Recenter</button>
-  <button id="reset-btn" disabled>Reset</button>
-  <input id="search-input" disabled placeholder="e.g. sunset at the beach">
-  <button id="search-clear-btn" hidden>✕</button>
+<div id="bottom-panel">
+  <div class="panel-row">
+    <div id="search-wrap">
+      <input id="search-input" disabled placeholder="Describe photos (e.g. 'golden retriever puppy in the grass')">
+      <button id="search-clear-btn" hidden title="Clear search">✕</button>
+    </div>
+  </div>
+  <div class="panel-row" style="justify-content: space-between;">
+    <div class="utility-btns">
+      <button id="recenter-btn" disabled title="Recenter View">⌖ Recenter</button>
+      <button id="reset-btn" disabled title="Reset All Data">Reset</button>
+    </div>
+    <div id="stats" style="font-size: 11px; color: var(--text-dim);"></div>
+  </div>
 </div>
 
 <div id="modal">
-  <button id="modal-close">✕</button>
   <div id="modal-content">
-    <img id="modal-img" alt="">
+    <button id="modal-close" title="Close">✕</button>
+    <img id="modal-img" alt="Full view">
     <div id="modal-name"></div>
+  </div>
+</div>
+
+<div id="about-modal">
+  <div id="about-content">
+    <button id="about-close" title="Close">✕</button>
+    
+    <div class="about-section">
+      <h2>📸 About Photo Organizer</h2>
+      <p>A high-performance, private-by-design photo management tool. Everything happens locally on your device—no images are ever uploaded to a server.</p>
+    </div>
+
+    <div class="about-section">
+      <h2>🧠 How it Works</h2>
+      <p>The app uses <strong>WebGPU</strong> and <strong>Transformers.js</strong> to run AI models directly in your browser:</p>
+      <ul>
+        <li><strong>Nomic-Embed-Vision:</strong> Generates 768-dimensional vectors for every image.</li>
+        <li><strong>UMAP:</strong> Projects these high-dimensional vectors into the 2D map you see on the canvas.</li>
+        <li><strong>Semantic Search:</strong> Uses <strong>Nomic-Embed-Text</strong> to let you find photos by natural language descriptions.</li>
+      </ul>
+    </div>
+
+    <div class="about-section">
+      <h2>🛡️ Privacy Policy</h2>
+      <p>Zero tracking. Zero uploads. Your local folder stays local. Even the AI models are cached in your browser's IndexedDB for offline use.</p>
+    </div>
+
+    <div class="about-section">
+      <h2>🖱️ Navigation</h2>
+      <ul>
+        <li><strong>Pan:</strong> Click and drag the canvas.</li>
+        <li><strong>Zoom:</strong> Mouse wheel or pinch gesture.</li>
+        <li><strong>View:</strong> Tap any photo to see it full-size.</li>
+        <li><strong>Search:</strong> Type a description to highlight matching images.</li>
+      </ul>
+    </div>
+
+    <div style="text-align: center; margin-top: 16px;">
+      <p style="font-size: 12px; color: var(--text-dim);">Photo Organizer 2.0 • Built with ❤️ for Privacy</p>
+    </div>
   </div>
 </div>
 

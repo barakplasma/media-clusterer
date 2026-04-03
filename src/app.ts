@@ -65,6 +65,9 @@ const dom: DOMElements = {
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
   fileInput: document.getElementById('file-input') as HTMLInputElement,
+  aboutBtn: document.getElementById('about-btn') as HTMLButtonElement,
+  aboutModal: document.getElementById('about-modal') as HTMLDivElement,
+  aboutClose: document.getElementById('about-close') as HTMLButtonElement,
 };
 
 // ── Application State ────────────────────────────────────────────────────────
@@ -859,6 +862,18 @@ dom.modalClose.addEventListener('click', () => {
 
 dom.modal.addEventListener('click', (e) => {
   if (e.target === dom.modal) dom.modal.classList.remove('open');
+});
+
+dom.aboutBtn.addEventListener('click', () => {
+  dom.aboutModal.classList.add('open');
+});
+
+dom.aboutClose.addEventListener('click', () => {
+  dom.aboutModal.classList.remove('open');
+});
+
+dom.aboutModal.addEventListener('click', (e) => {
+  if (e.target === dom.aboutModal) dom.aboutModal.classList.remove('open');
 });
 
 window.addEventListener('resize', () => {

@@ -55,6 +55,9 @@ export interface DOMElements {
   searchInput: HTMLInputElement;
   searchClearBtn: HTMLButtonElement;
   fileInput: HTMLInputElement;
+  aboutBtn: HTMLButtonElement;
+  aboutModal: HTMLDivElement;
+  aboutClose: HTMLButtonElement;
 }
 
 /** IndexedDB cache entry */
