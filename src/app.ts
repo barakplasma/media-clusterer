@@ -80,6 +80,10 @@ const dom: DOMElements = {
   loopToggle: document.getElementById('loop-toggle') as HTMLInputElement,
   themeSelect: document.getElementById('theme-select') as HTMLSelectElement,
   drawBudgetSlider: document.getElementById('draw-budget-slider') as HTMLInputElement,
+  enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
+  bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
+  headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
+  headerResetBtn: document.getElementById('header-reset-btn') as HTMLButtonElement,
 };
 
 // ── Application State ────────────────────────────────────────────────────────
@@ -88,6 +92,7 @@ const DEFAULT_SETTINGS: Settings = {
   loopVideos: true,
   theme: 'system',
   drawBudget: IS_MOBILE ? 150 : 400,
+  enableTextSearch: false,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -417,6 +422,8 @@ function resetAll() {
   if (ctx) ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
   dom.recenterBtn.disabled = true;
   dom.resetBtn.disabled = true;
+  dom.headerRecenterBtn.disabled = true;
+  dom.headerResetBtn.disabled = true;
   dom.searchInput.disabled = true;
   dom.searchInput.value = '';
   dom.searchClearBtn.hidden = true;
@@ -672,34 +679,36 @@ async function loadModel() {
   }
   setProgress(100);
 
-  setStatus('Loading text model for search…');
-  const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
-  const textLoaded = new Map<string, number>();
+  if (state.settings.enableTextSearch) {
+    setStatus('Loading text model for search…');
+    const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
+    const textLoaded = new Map<string, number>();
 
-  const textProgressCb = (e: ProgressEvent) => {
-    if (e.status === 'progress') {
-      textLoaded.set(e.file, e.loaded ?? 0);
-      const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
-      const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
-      setProgress(pct);
-      setStatus(`Loading text model… ${pct.toFixed(0)}%`);
+    const textProgressCb = (e: ProgressEvent) => {
+      if (e.status === 'progress') {
+        textLoaded.set(e.file, e.loaded ?? 0);
+        const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
+        const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
+        setProgress(pct);
+        setStatus(`Loading text model… ${pct.toFixed(0)}%`);
+      }
+    };
+
+    const tryLoadText = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
+      'feature-extraction',
+      'nomic-ai/nomic-embed-text-v1.5',
+      { device, dtype: 'fp32', progress_callback: textProgressCb }
+    ) as Promise<PipelineInstance>;
+
+    try {
+      textExtractor = await tryLoadText('webgpu');
+    } catch (gpuErr) {
+      console.warn('Text model WebGPU failed, using wasm:', gpuErr);
+      textLoaded.clear();
+      textExtractor = await tryLoadText('wasm');
     }
-  };
-
-  const tryLoadText = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
-    'feature-extraction',
-    'nomic-ai/nomic-embed-text-v1.5',
-    { device, dtype: 'fp32', progress_callback: textProgressCb }
-  ) as Promise<PipelineInstance>;
-
-  try {
-    textExtractor = await tryLoadText('webgpu');
-  } catch (gpuErr) {
-    console.warn('Text model WebGPU failed, using wasm:', gpuErr);
-    textLoaded.clear();
-    textExtractor = await tryLoadText('wasm');
+    setProgress(100);
   }
-  setProgress(100);
 
   state.phase = 'model_ready';
   setProgress(0);
@@ -829,6 +838,8 @@ async function processFiles(files: PhotoFile[]) {
     if (dom.statsEl) dom.statsEl.textContent = finalMsg;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
+    dom.headerRecenterBtn.disabled = false;
+    dom.headerResetBtn.disabled = false;
     dom.searchInput.disabled = false;
 
     state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
@@ -975,6 +986,8 @@ dom.canvas.addEventListener('wheel', (e) => {
 
 dom.recenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
 dom.resetBtn.addEventListener('click', resetAll);
+dom.headerRecenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
+dom.headerResetBtn.addEventListener('click', resetAll);
 
 // ── Search input ─────────────────────────────────────────────────────────────
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -1047,7 +1060,19 @@ dom.densitySlider.value = state.settings.density.toString();
 dom.drawBudgetSlider.value = state.settings.drawBudget.toString();
 dom.loopToggle.checked = state.settings.loopVideos;
 dom.themeSelect.value = state.settings.theme;
+dom.enableSearchToggle.checked = state.settings.enableTextSearch;
 applyTheme(state.settings.theme);
+
+const updateSearchUI = () => {
+  if (state.settings.enableTextSearch) {
+    dom.bottomPanel.style.display = 'flex';
+    dom.headerRecenterBtn.parentElement!.style.display = 'none';
+  } else {
+    dom.bottomPanel.style.display = 'none';
+    dom.headerRecenterBtn.parentElement!.style.display = 'flex';
+  }
+};
+updateSearchUI();
 
 dom.settingsBtn.addEventListener('click', () => {
   dom.settingsModal.classList.add('open');
@@ -1059,6 +1084,48 @@ dom.settingsClose.addEventListener('click', () => {
 
 dom.settingsModal.addEventListener('click', (e) => {
   if (e.target === dom.settingsModal) dom.settingsModal.classList.remove('open');
+});
+
+dom.enableSearchToggle.addEventListener('change', async () => {
+  state.settings.enableTextSearch = dom.enableSearchToggle.checked;
+  saveSettings();
+  updateSearchUI();
+
+  // If enabled and models are already loaded, load the text model now
+  if (state.settings.enableTextSearch && state.phase !== 'idle' && state.phase !== 'loading_model' && !textExtractor) {
+    // We duplicate the text loading logic here for dynamic loading
+    dom.settingsModal.classList.remove('open');
+    setStatus('Loading text model for search…');
+    const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
+    const textLoaded = new Map<string, number>();
+
+    const textProgressCb = (e: ProgressEvent) => {
+      if (e.status === 'progress') {
+        textLoaded.set(e.file, e.loaded ?? 0);
+        const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
+        const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
+        setProgress(pct);
+        setStatus(`Loading text model… ${pct.toFixed(0)}%`);
+      }
+    };
+
+    const tryLoadText = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
+      'feature-extraction',
+      'nomic-ai/nomic-embed-text-v1.5',
+      { device, dtype: 'fp32', progress_callback: textProgressCb }
+    ) as Promise<PipelineInstance>;
+
+    try {
+      textExtractor = await tryLoadText('webgpu');
+    } catch (gpuErr) {
+      console.warn('Text model WebGPU failed, using wasm:', gpuErr);
+      textLoaded.clear();
+      textExtractor = await tryLoadText('wasm');
+    }
+    setProgress(100);
+    setTimeout(() => setProgress(0), 500);
+    setStatus('Text model loaded.');
+  }
 });
 
 dom.densitySlider.addEventListener('input', async () => {
@@ -1226,6 +1293,8 @@ dom.resumeBtn.addEventListener('click', async () => {
     if (dom.statsEl) dom.statsEl.textContent = finalMsg;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
+    dom.headerRecenterBtn.disabled = false;
+    dom.headerResetBtn.disabled = false;
     dom.searchInput.disabled = false;
   } catch (err) {
     if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);

@@ -30,6 +30,7 @@ export interface Settings {
   loopVideos: boolean;
   theme: 'dark' | 'light' | 'system';
   drawBudget: number;   // MAX_DRAW_PER_FRAME
+  enableTextSearch: boolean;
 }
 
 /** Application state */
@@ -78,6 +79,10 @@ export interface DOMElements {
   loopToggle: HTMLInputElement;
   themeSelect: HTMLSelectElement;
   drawBudgetSlider: HTMLInputElement;
+  enableSearchToggle: HTMLInputElement;
+  bottomPanel: HTMLDivElement;
+  headerRecenterBtn: HTMLButtonElement;
+  headerResetBtn: HTMLButtonElement;
 }
 
 /** IndexedDB cache entry */
