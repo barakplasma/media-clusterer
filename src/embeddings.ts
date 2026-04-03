@@ -41,7 +41,26 @@ export function extractVector(output: PipelineOutput): Float32Array {
     throw new Error('Failed to extract tensor from pipeline output');
   }
 
+  const dims = tensor.dims;
   const data = tensor.data;
+  const hiddenSize = dims[dims.length - 1];
+
+  // If we have a sequence [batch, seq, hidden], average across the sequence
+  if (dims.length === 3) {
+    const seqLen = dims[1];
+    const pooled = new Float32Array(hiddenSize);
+    for (let i = 0; i < seqLen; i++) {
+      for (let j = 0; j < hiddenSize; j++) {
+        pooled[j] += data[i * hiddenSize + j];
+      }
+    }
+    for (let j = 0; j < hiddenSize; j++) {
+      pooled[j] /= seqLen;
+    }
+    return l2normalize(pooled);
+  }
+
+  // Already pooled [batch, hidden] or [hidden]
   return l2normalize(data);
 }
 

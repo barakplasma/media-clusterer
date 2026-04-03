@@ -666,8 +666,7 @@ async function embedAll(files: PhotoFile[]) {
 
       try {
         if (!extractor) throw new Error('Extractor not loaded');
-        if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
-        const output = await extractor(f.objectURL);
+        const output = await extractor(f.file, { pooling: 'mean', normalize: true });
         vectors[idx] = extractVector(output);
         writeQueue.push([key, vectors[idx]]);
       } catch (err) {
