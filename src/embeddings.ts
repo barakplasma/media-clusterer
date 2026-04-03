@@ -88,7 +88,8 @@ export function extractVector(output: PipelineOutput): Float32Array {
     vec[i] = data[i];
   }
 
-  return l2normalize(vec);
+  // Use layerNormAndNormalize as required by Nomic-v1.5 to match the text/vision space
+  return layerNormAndNormalize(vec, hiddenSize);
 }
 
 /**
