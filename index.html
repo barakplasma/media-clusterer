@@ -148,14 +148,13 @@
 
     /* ── Status ── */
     #status {
-      padding: 8px 16px;
+      padding: 0 4px;
       font-size: 12px;
       color: var(--text-dim);
-      background: var(--bg);
-      border-bottom: 1px solid var(--border);
+      background: transparent;
       display: flex;
       align-items: center;
-      min-height: 32px;
+      min-height: 20px;
     }
 
     /* ── Canvas area ── */
@@ -438,14 +437,14 @@
     </button>
     <input type="file" id="file-input" multiple webkitdirectory accept="image/*,video/mp4,video/webm" hidden>
   </div>
-  <div class="controls" id="header-controls" style="display: none;">
+  <div class="controls" id="header-controls" style="display: none; margin-top: 4px;">
     <button id="header-recenter-btn" disabled title="Recenter View" style="flex: 1;">⌖</button>
     <button id="header-reset-btn" disabled title="Reset All Data" style="flex: 1;">✕ Reset</button>
   </div>
+  
+  <div id="progress-wrap"><div id="progress-bar"></div></div>
+  <div id="status">Loading library...</div>
 </header>
-
-<div id="progress-wrap"><div id="progress-bar"></div></div>
-<div id="status">Loading library...</div>
 
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
