@@ -27,27 +27,46 @@ Nothing leaves your device. No server, no upload, no analytics. The AI model run
 
 | Part | What |
 |---|---|
-| Embeddings | `nomic-ai/nomic-embed-vision-v1.5` via `@huggingface/transformers@4` |
-| Dimensionality reduction | [umap-js](https://github.com/PAIR-code/umap-js) v1.4.0, main thread |
-| Clustering | k-means on 2D UMAP output, k = min(8, ⌈√(n/2)⌉) |
+| Language | TypeScript (Strict, no `any`) |
+| Build Tool | [Vite](https://vitejs.dev/) |
+| Test Runner | [Vitest](https://vitest.dev/) |
+| Embeddings | `nomic-ai/nomic-embed-vision-v1.5` and `nomic-ai/nomic-embed-text-v1.5` via `@huggingface/transformers@3` |
+| Dimensionality reduction | [umap-js](https://github.com/PAIR-code/umap-js) v1.4.0 |
+| Clustering | k-means on 2D UMAP output |
 | Rendering | HTML5 Canvas with camera pan/zoom, pointer events |
 | Cache | IndexedDB for embeddings, localStorage for session UMAP layout |
-| Hosting | Caddy on k3s + Cloudflare tunnel; GitHub Pages mirror |
 
-## Files
+## Project Structure
 
 ```
-index.html       — entire app, single self-contained file
-umap-js.min.js   — umap-js v1.4.0 UMD bundle (served as static asset)
+index.html       — main entry point
+src/
+  app.ts         — main application logic
+  db.ts          — IndexedDB utilities
+  embeddings.ts  — embedding and normalization logic
+  similarity.ts  — vector similarity search
+  types.ts       — core type definitions
+public/
+  umap-js.min.js — static asset for dimensionality reduction
 ```
 
 ## Development
 
-Edit `index.html` directly — no build step.
+This project uses Vite for development and Vitest for testing.
 
 ```bash
-# Serve locally (requires HTTPS for File System Access API — use ngrok or caddy)
-caddy file-server --browse --listen :8080
-```
+# Install dependencies
+npm install
 
-The k8s deployment at `photo-organizer.526462738.xyz` serves directly from this repo folder via a hostPath volume — saving `index.html` here is instantly live.
+# Start development server
+npm run dev
+
+# Run tests
+npm test
+
+# Type check
+npm run type-check
+
+# Build for production
+npm run build
+```

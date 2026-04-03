@@ -13,8 +13,8 @@ import { describe, it, expect } from 'vitest';
 // Import the layerNormAndNormalize function from the built index.html
 // For testing, we'll recreate it here
 function layerNormAndNormalize(data: Float32Array | number[], hiddenSize: number): Float32Array {
-  const mean = data.reduce((a, b) => a + b, 0) / hiddenSize;
-  const variance = data.reduce((a, b) => a + (b - mean) ** 2, 0) / hiddenSize;
+  const mean = Array.from(data).reduce((a, b) => a + b, 0) / hiddenSize;
+  const variance = Array.from(data).reduce((a, b) => a + (b - mean) ** 2, 0) / hiddenSize;
   const epsilon = 1e-5;
   const normalized = new Float32Array(hiddenSize);
   for (let i = 0; i < hiddenSize; i++) {
