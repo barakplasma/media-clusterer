@@ -26,6 +26,7 @@ import type {
   Pipeline,
   PipelineInstance,
   ProgressEvent,
+  Settings,
   DirectoryHandle,
   FileSystemHandle,
   PointerState,
@@ -72,19 +73,38 @@ const dom: DOMElements = {
   aboutModal: document.getElementById('about-modal') as HTMLDivElement,
   aboutClose: document.getElementById('about-close') as HTMLButtonElement,
   statsEl: document.getElementById('stats') as HTMLDivElement,
+  settingsBtn: document.getElementById('settings-btn') as HTMLButtonElement,
+  settingsModal: document.getElementById('settings-modal') as HTMLDivElement,
+  settingsClose: document.getElementById('settings-close') as HTMLButtonElement,
+  densitySlider: document.getElementById('density-slider') as HTMLInputElement,
+  loopToggle: document.getElementById('loop-toggle') as HTMLInputElement,
+  themeSelect: document.getElementById('theme-select') as HTMLSelectElement,
+  drawBudgetSlider: document.getElementById('draw-budget-slider') as HTMLInputElement,
 };
 
 // ── Application State ────────────────────────────────────────────────────────
+const DEFAULT_SETTINGS: Settings = {
+  density: 1.0,
+  loopVideos: true,
+  theme: 'system',
+  drawBudget: IS_MOBILE ? 150 : 400,
+};
+
+const savedSettings = localStorage.getItem('mc_settings');
+const settings: Settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) } : DEFAULT_SETTINGS;
+
 const state: AppState = {
   phase: 'idle',
   files: [],
   vectors: [],
   points: [],
+  rawPoints: null,
   clusters: null,
   thumbnails: [],
   searchResults: null,
   searchQuery: '',
   searchScores: null,
+  settings,
 };
 
 // ── Camera (infinite canvas) ─────────────────────────────────────────────────
@@ -324,10 +344,10 @@ async function spreadPointsAsync(umapPoints: number[][]): Promise<Point[]> {
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   const r = Math.max(maxX - cx, maxY - cy) || 1;
 
-  const vsize = Math.sqrt(n) * THUMB_WORLD * 1.4;
+  const vsize = Math.sqrt(n) * THUMB_WORLD * 1.4 * state.settings.density;
   const pts: [number, number][] = umapPoints.map(([x, y]) => [(x - cx) / r * vsize, (y - cy) / r * vsize]);
 
-  const CELL = THUMB_WORLD * 2;
+  const CELL = THUMB_WORLD * 2 * state.settings.density;
   for (let iter = 0; iter < 60; iter++) {
     const grid = new Map<string, number[]>();
     for (let i = 0; i < n; i++) {
@@ -444,7 +464,8 @@ function render() {
   }
 
   // Prioritize drawing: search results first, then by distance to center
-  if (visibleIndices.length > MAX_DRAW_PER_FRAME) {
+  const budget = state.settings.drawBudget;
+  if (visibleIndices.length > budget) {
     visibleIndices.sort((a, b) => {
       // Search results always first
       if (state.searchResults) {
@@ -456,7 +477,7 @@ function render() {
       const db = (pts[b][0] - camera.x)**2 + (pts[b][1] - camera.y)**2;
       return da - db;
     });
-    visibleIndices.length = MAX_DRAW_PER_FRAME;
+    visibleIndices.length = budget;
   }
 
   for (const i of visibleIndices) {
@@ -792,6 +813,7 @@ async function processFiles(files: PhotoFile[]) {
     setProgress(90);
     const nNeighbors = Math.max(2, Math.min(15, files.length - 1));
     const rawPoints = await runUMAP(vectors, nNeighbors);
+    state.rawPoints = rawPoints;
 
     const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(files.length / 2))));
     state.clusters = await kmeansAsync(rawPoints, k);
@@ -917,6 +939,7 @@ dom.canvas.addEventListener('pointerup', (e) => {
       if (VIDEO_EXTS.has(ext)) {
         dom.modalImg.style.display = 'none';
         dom.modalVideo.style.display = 'block';
+        dom.modalVideo.loop = state.settings.loopVideos;
         dom.modalVideo.src = f.objectURL || '';
         dom.modalVideo.play().catch(() => {}); // Autoplay when opened
       } else {
@@ -1007,6 +1030,61 @@ dom.modalClose.addEventListener('click', closeModal);
 
 dom.modal.addEventListener('click', (e) => {
   if (e.target === dom.modal) closeModal();
+});
+
+// ── Settings ────────────────────────────────────────────────────────────────
+const applyTheme = (theme: 'dark' | 'light' | 'system') => {
+  const isLight = theme === 'light' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches);
+  document.documentElement.classList.toggle('light-mode', isLight);
+};
+
+const saveSettings = () => {
+  localStorage.setItem('mc_settings', JSON.stringify(state.settings));
+};
+
+// Sync UI with initial settings
+dom.densitySlider.value = state.settings.density.toString();
+dom.drawBudgetSlider.value = state.settings.drawBudget.toString();
+dom.loopToggle.checked = state.settings.loopVideos;
+dom.themeSelect.value = state.settings.theme;
+applyTheme(state.settings.theme);
+
+dom.settingsBtn.addEventListener('click', () => {
+  dom.settingsModal.classList.add('open');
+});
+
+dom.settingsClose.addEventListener('click', () => {
+  dom.settingsModal.classList.remove('open');
+});
+
+dom.settingsModal.addEventListener('click', (e) => {
+  if (e.target === dom.settingsModal) dom.settingsModal.classList.remove('open');
+});
+
+dom.densitySlider.addEventListener('input', async () => {
+  state.settings.density = parseFloat(dom.densitySlider.value);
+  saveSettings();
+  if (state.phase === 'done' && state.rawPoints && state.files.length) {
+    state.points = await spreadPointsAsync(state.rawPoints);
+    scheduleRender();
+  }
+});
+
+dom.drawBudgetSlider.addEventListener('input', () => {
+  state.settings.drawBudget = parseInt(dom.drawBudgetSlider.value);
+  saveSettings();
+  scheduleRender();
+});
+
+dom.loopToggle.addEventListener('change', () => {
+  state.settings.loopVideos = dom.loopToggle.checked;
+  saveSettings();
+});
+
+dom.themeSelect.addEventListener('change', () => {
+  state.settings.theme = dom.themeSelect.value as 'dark' | 'light' | 'system';
+  saveSettings();
+  applyTheme(state.settings.theme);
 });
 
 dom.aboutBtn.addEventListener('click', () => {

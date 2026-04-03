@@ -24,18 +24,28 @@ export interface Camera {
   scale: number;
 }
 
+/** Application settings */
+export interface Settings {
+  density: number;      // 1.0 = default, smaller = tighter, larger = sparse
+  loopVideos: boolean;
+  theme: 'dark' | 'light' | 'system';
+  drawBudget: number;   // MAX_DRAW_PER_FRAME
+}
+
 /** Application state */
 export interface AppState {
   phase: Phase;
   files: PhotoFile[];
   vectors: Float32Array[];
   points: Point[];
+  rawPoints: number[][] | null;
   clusters: Int32Array | null;
   thumbnails: (ImageBitmap | null)[];
   searchResults: Int32Array | null;
   searchQuery: string;
   searchScores: Float32Array | null;
   fileKeys?: string[];
+  settings: Settings;
 }
 
 /** DOM element references */
@@ -61,6 +71,13 @@ export interface DOMElements {
   aboutModal: HTMLDivElement;
   aboutClose: HTMLButtonElement;
   statsEl: HTMLDivElement;
+  settingsBtn: HTMLButtonElement;
+  settingsModal: HTMLDivElement;
+  settingsClose: HTMLButtonElement;
+  densitySlider: HTMLInputElement;
+  loopToggle: HTMLInputElement;
+  themeSelect: HTMLSelectElement;
+  drawBudgetSlider: HTMLInputElement;
 }
 
 /** IndexedDB cache entry */
