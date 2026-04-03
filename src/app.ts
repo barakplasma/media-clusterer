@@ -45,6 +45,7 @@ const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-r
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const BATCH_SIZE = IS_MOBILE ? 4 : 8; // Smaller batch on mobile to avoid memory crashes
 const WRITE_BATCH = 20;
+const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
@@ -94,6 +95,7 @@ let textExtractor: PipelineInstance | null = null;  // Text model (for search qu
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
 const setProgress = (pct: number) => { dom.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`; };
+const yieldMain = () => new Promise(resolve => setTimeout(resolve, 0));
 
 // ── Render scheduling (debounce to one frame) ────────────────────────────────
 let renderPending = false;
@@ -136,14 +138,28 @@ async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
 
 // ── Thumbnail preloader ──────────────────────────────────────────────────────
 async function preloadThumbnails(files: PhotoFile[]): Promise<(ImageBitmap | null)[]> {
-  const thumbs = new Array<(ImageBitmap | null)>(files.length);
-  for (let i = 0; i < files.length; i++) {
-    if (!files[i].objectURL) files[i].objectURL = URL.createObjectURL(files[i].file);
-    try {
-      thumbs[i] = await createImageBitmap(files[i].file, { resizeWidth: 96, resizeQuality: 'low' });
-    } catch {
-      thumbs[i] = null;
+  const thumbs = new Array<(ImageBitmap | null)>(files.length).fill(null);
+  state.thumbnails = thumbs;
+
+  const SUB_BATCH = 20;
+  for (let i = 0; i < files.length; i += SUB_BATCH) {
+    const end = Math.min(i + SUB_BATCH, files.length);
+    const tasks = [];
+    for (let j = i; j < end; j++) {
+      if (!files[j].objectURL) files[j].objectURL = URL.createObjectURL(files[j].file);
+      tasks.push((async (idx) => {
+        try {
+          thumbs[idx] = await createImageBitmap(files[idx].file, { resizeWidth: 96, resizeQuality: 'low' });
+        } catch {
+          thumbs[idx] = null;
+        }
+      })(j));
     }
+    await Promise.all(tasks);
+    scheduleRender();
+    if (i % 40 === 0) await yieldMain();
+    setStatus(`Loading thumbnails… ${end} / ${files.length}`);
+    setProgress((end / files.length) * 10); // First 10% for thumbnails
   }
   return thumbs;
 }
@@ -196,7 +212,7 @@ async function searchImages(query: string) {
 }
 
 // ── k-means (runs on 2D UMAP output) ─────────────────────────────────────────
-function kmeans(points: number[][], k: number, maxIter = 60): Int32Array {
+async function kmeansAsync(points: number[][], k: number, maxIter = 60): Promise<Int32Array> {
   const n = points.length;
   if (n === 0) return new Int32Array(0);
   k = Math.min(k, n);
@@ -221,6 +237,8 @@ function kmeans(points: number[][], k: number, maxIter = 60): Int32Array {
       }
       if (labels[i] !== best) { labels[i] = best; changed = true; }
     }
+
+    if (iter % 10 === 0) await yieldMain();
     if (!changed) break;
 
     const sx = new Float64Array(k), sy = new Float64Array(k), cnt = new Int32Array(k);
@@ -246,7 +264,7 @@ function resizeCanvas() {
   dom.canvas.height = wrap.clientHeight || 600;
 }
 
-function spreadPoints(umapPoints: number[][]): Point[] {
+async function spreadPointsAsync(umapPoints: number[][]): Promise<Point[]> {
   const n = umapPoints.length;
   if (n === 0) return [];
 
@@ -290,6 +308,7 @@ function spreadPoints(umapPoints: number[][]): Point[] {
         }
       }
     }
+    if (iter % 5 === 0) await yieldMain();
     if (!moved) break;
   }
   return pts as Point[];
@@ -365,12 +384,37 @@ function render() {
   const useFull = drawSize > FULL_LOD_SIZE;
   const drawnFull = useFull ? new Set<number>() : null;
 
+  // Frustum culling and visible list
+  const visibleIndices: number[] = [];
   for (let i = 0; i < pts.length; i++) {
     const sx = (pts[i][0] - camera.x) * s + cxW;
     const sy = (pts[i][1] - camera.y) * s + cyW;
 
-    if (sx + half < 0 || sx - half > dom.canvas.width ||
-      sy + half < 0 || sy - half > dom.canvas.height) continue;
+    if (sx + half >= 0 && sx - half <= dom.canvas.width &&
+      sy + half >= 0 && sy - half <= dom.canvas.height) {
+      visibleIndices.push(i);
+    }
+  }
+
+  // Prioritize drawing: search results first, then by distance to center
+  if (visibleIndices.length > MAX_DRAW_PER_FRAME) {
+    visibleIndices.sort((a, b) => {
+      // Search results always first
+      if (state.searchResults) {
+        const ra = rank[a], rb = rank[b];
+        if (ra < 20 || rb < 20) return ra - rb;
+      }
+      // Then by distance to camera center
+      const da = (pts[a][0] - camera.x)**2 + (pts[a][1] - camera.y)**2;
+      const db = (pts[b][0] - camera.x)**2 + (pts[b][1] - camera.y)**2;
+      return da - db;
+    });
+    visibleIndices.length = MAX_DRAW_PER_FRAME;
+  }
+
+  for (const i of visibleIndices) {
+    const sx = (pts[i][0] - camera.x) * s + cxW;
+    const sy = (pts[i][1] - camera.y) * s + cyW;
 
     let alphaMultiplier = 1.0;
     let highlightBorder = null;
@@ -394,7 +438,11 @@ function render() {
       let fullImg = fullImages.get(i);
       if (!fullImg) {
         fullImg = new Image();
-        fullImg.onload = () => scheduleRender();
+        fullImg.onload = () => {
+          if (fullImg) {
+            fullImg.decode().then(() => scheduleRender()).catch(() => scheduleRender());
+          }
+        };
         fullImg.src = state.files[i].objectURL || '';
         fullImages.set(i, fullImg);
       }
@@ -498,10 +546,16 @@ async function runUMAP(vectors: Float32Array[], nNeighbors: number): Promise<num
 
     setStatus('Projecting…');
     const umap = new UMAPLib({ nComponents: 2, nNeighbors, minDist: 0.1 });
-    const embedding = await umap.fitAsync(vectors, (epoch) => {
-      setStatus(`Projecting… epoch ${epoch}`);
-    });
-    return embedding;
+    
+    const nEpochs = umap.initializeFit(vectors);
+    for (let epoch = 0; epoch < nEpochs; epoch++) {
+      umap.step();
+      if (epoch % 10 === 0) {
+        setStatus(`Projecting… epoch ${epoch} / ${nEpochs}`);
+        await yieldMain();
+      }
+    }
+    return umap.getEmbedding();
   } catch (err) {
     setStatus(`UMAP projection failed: ${(err as Error).message}`);
     throw err;
@@ -644,7 +698,8 @@ async function embedAll(files: PhotoFile[]) {
     }
     const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
     setStatus(`Embedding ${done} / ${files.length} images…${fromCache}`);
-    setProgress((done / files.length) * 100);
+    setProgress(10 + (done / files.length) * 80); // 10% to 90%
+    await yieldMain();
   }
 
   if (writeQueue.length > 0) {
@@ -665,23 +720,22 @@ async function processFiles(files: PhotoFile[]) {
 
   try {
     state.thumbnails = await preloadThumbnails(files);
-    setStatus(`Found ${files.length} images.`);
 
     const vectors = await embedAll(files);
     state.vectors = vectors;
 
     state.phase = 'umap';
     setStatus('Running UMAP…');
-    setProgress(0);
+    setProgress(90);
     const nNeighbors = Math.max(2, Math.min(15, files.length - 1));
     const rawPoints = await runUMAP(vectors, nNeighbors);
 
     const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(files.length / 2))));
-    state.clusters = kmeans(rawPoints, k);
+    state.clusters = await kmeansAsync(rawPoints, k);
 
     state.phase = 'done';
     resizeCanvas();
-    state.points = spreadPoints(rawPoints);
+    state.points = await spreadPointsAsync(rawPoints);
     fitCamera();
     scheduleRender();
     setProgress(100);
