@@ -184,14 +184,19 @@
       justify-content: center;
     }
   </style>
-  <script src="dist/similarity.js"></script>
+  <script type="module">
+    import { allSimilarities, sortBySimilarity, dotProduct } from './dist/similarity.js';
+    window.allSimilarities = allSimilarities;
+    window.sortBySimilarity = sortBySimilarity;
+    window.dotProduct = dotProduct;
+  </script>
 </head>
 <body>
 
 <header>
   <h1>Photo Organizer</h1>
   <div class="controls">
-    <button id="load-model-btn" class="primary">Load Model (~380 MB, cached after first load)</button>
+    <button id="load-model-btn" class="primary">Load Model (~514 MB, cached after first load)</button>
     <button id="resume-btn" hidden disabled>Resume last session</button>
     <button id="open-btn" disabled>Open Folder</button>
   </div>
@@ -386,9 +391,9 @@ function extractVector(output) {
   return l2normalize(vec);
 }
 
-// ── Text embedding (multimodal model accepts text) ────────────────────────────
+// ── Text embedding (uses text model for search queries) ────────────────────────────
 async function embedText(text) {
-  const output = await extractor(text);
+  const output = await textExtractor(text);
   return extractVector(output);
 }
 
@@ -740,7 +745,8 @@ async function runUMAP(vectors, nNeighbors) {
 }
 
 // ── Model singleton ───────────────────────────────────────────────────────────
-let extractor = null;
+let extractor = null;      // Vision model (for images)
+let textExtractor = null;  // Text model (for search queries)
 
 async function loadModel() {
   if (extractor) return;
@@ -748,7 +754,7 @@ async function loadModel() {
   setStatus('Loading model…');
   setProgress(0);
 
-  const MODEL_SIZE_BYTES = 380 * 1024 * 1024;
+  const MODEL_SIZE_BYTES = 380 * 1024 * 1024 + 134 * 1024 * 1024;  // Vision + Text (~514MB total)
   const loaded = new Map();
 
   const progressCb = (e) => {
@@ -780,6 +786,40 @@ async function loadModel() {
       loadModelBtn.hidden = false;
       throw wasmErr;
     }
+  }
+  setProgress(100);
+
+  // Load text embedding model for search queries (Nomic text variant)
+  setStatus('Loading text model for search…');
+  const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;  // ~134MB for nomic-embed-text
+  const textLoaded = new Map();
+
+  const textProgressCb = (e) => {
+    if (e.status === 'progress') {
+      textLoaded.set(e.file, e.loaded ?? 0);
+      const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
+      const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
+      setProgress(pct);
+      setStatus(`Loading text model… ${pct.toFixed(0)}%`);
+    }
+  };
+
+  const tryLoadText = (device) => pipeline(
+    'feature-extraction',
+    'nomic-ai/nomic-embed-text-v1.5',
+    {
+      device,
+      dtype: 'fp32',
+      progress_callback: textProgressCb
+    }
+  );
+
+  try {
+    textExtractor = await tryLoadText('webgpu');
+  } catch (gpuErr) {
+    console.warn('Text model WebGPU failed, using wasm:', gpuErr);
+    textLoaded.clear();
+    textExtractor = await tryLoadText('wasm');
   }
   setProgress(100);
 
