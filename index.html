@@ -376,6 +376,30 @@ function l2normalize(arr) {
   return out;
 }
 
+// ── Layer norm + L2 normalize (for text embeddings, matches nomic model card) ─────
+function layerNormAndNormalize(data: Float32Array | number[], hiddenSize: number): Float32Array {
+  // Layer norm
+  const mean = data.reduce((a, b) => a + b, 0) / hiddenSize;
+  const variance = data.reduce((a, b) => a + (b - mean) ** 2, 0) / hiddenSize;
+  const epsilon = 1e-5;
+  const normalized = new Float32Array(hiddenSize);
+  for (let i = 0; i < hiddenSize; i++) {
+    normalized[i] = (data[i] - mean) / Math.sqrt(variance + epsilon);
+  }
+
+  // L2 normalize
+  let norm = 0;
+  for (let i = 0; i < hiddenSize; i++) norm += normalized[i] * normalized[i];
+  norm = Math.sqrt(norm) || 1;
+  const vec = new Float32Array(hiddenSize);
+  for (let i = 0; i < hiddenSize; i++) vec[i] = normalized[i] / norm;
+
+  return vec;
+}
+
+// Expose for testing
+(window as any).layerNormAndNormalize = layerNormAndNormalize;
+
 function extractVector(output) {
   // Unwrap pipeline output: Tensor, array of Tensors, or named object
   let tensor = Array.isArray(output) ? output[0] : output;
@@ -397,28 +421,12 @@ async function embedText(text) {
   const prefixed = `search_query: ${text}`;
   const output = await textExtractor(prefixed, { pooling: 'mean' });
 
-  // Apply layer_norm and normalize (from nomic model card)
+  // Apply layer_norm and normalize using helper
   const dims = output.dims;
   const data = output.data;
   const hiddenSize = dims[dims.length - 1];
 
-  // Layer norm
-  const mean = data.reduce((a, b) => a + b, 0) / hiddenSize;
-  const variance = data.reduce((a, b) => a + (b - mean) ** 2, 0) / hiddenSize;
-  const epsilon = 1e-5;
-  const normalized = new Float32Array(hiddenSize);
-  for (let i = 0; i < hiddenSize; i++) {
-    normalized[i] = (data[i] - mean) / Math.sqrt(variance + epsilon);
-  }
-
-  // L2 normalize
-  let norm = 0;
-  for (let i = 0; i < hiddenSize; i++) norm += normalized[i] * normalized[i];
-  norm = Math.sqrt(norm) || 1;
-  const vec = new Float32Array(hiddenSize);
-  for (let i = 0; i < hiddenSize; i++) vec[i] = normalized[i] / norm;
-
-  return vec;
+  return layerNormAndNormalize(data, hiddenSize);
 }
 
 // ── Text search using similarity module ────────────────────────────────────────
