@@ -2,7 +2,7 @@
  * Main application logic for Photo Organizer
  */
 
-import { pipeline, env } from '@huggingface/transformers';
+import { pipeline, env, RawImage } from '@huggingface/transformers';
 import {
   allSimilarities,
   sortBySimilarity,
@@ -40,6 +40,7 @@ env.cacheDir = 'models';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'heic', 'heif']);
+const VIDEO_EXTS = new Set(['mp4', 'webm']);
 const THUMB_WORLD = 48;   // thumbnail size in world units
 const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -61,6 +62,7 @@ const dom: DOMElements = {
   modal: document.getElementById('modal') as HTMLDivElement,
   modalClose: document.getElementById('modal-close') as HTMLButtonElement,
   modalImg: document.getElementById('modal-img') as HTMLImageElement,
+  modalVideo: document.getElementById('modal-video') as HTMLVideoElement,
   modalName: document.getElementById('modal-name') as HTMLDivElement,
   searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
@@ -119,7 +121,7 @@ async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
         await walk(entry, `${prefix}${name}/`);
       } else {
         const ext = name.split('.').pop()?.toLowerCase() ?? '';
-        if (IMAGE_EXTS.has(ext)) {
+        if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
           const file = await entry.getFile();
           files.push({
             name: `${prefix}${name}`,
@@ -136,29 +138,74 @@ async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
   return files;
 }
 
+// ── Media helpers ────────────────────────────────────────────────────────────
+async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    const url = URL.createObjectURL(file);
+    
+    video.onloadedmetadata = () => {
+      video.currentTime = Math.min(1.0, video.duration / 2); // Get a frame from near the start
+    };
+    
+    video.onseeked = async () => {
+      try {
+        const bitmap = await createImageBitmap(video, { resizeWidth: 96, resizeQuality: 'low' });
+        resolve(bitmap);
+      } catch (e) {
+        console.warn('Failed to extract video frame:', e);
+        resolve(null);
+      } finally {
+        URL.revokeObjectURL(url);
+        video.remove();
+      }
+    };
+    
+    video.onerror = () => {
+      console.warn('Video load error');
+      URL.revokeObjectURL(url);
+      video.remove();
+      resolve(null);
+    };
+    
+    video.src = url;
+  });
+}
+
 // ── Thumbnail preloader ──────────────────────────────────────────────────────
 async function preloadThumbnails(files: PhotoFile[]): Promise<(ImageBitmap | null)[]> {
   const thumbs = new Array<(ImageBitmap | null)>(files.length).fill(null);
   state.thumbnails = thumbs;
 
-  const SUB_BATCH = 20;
+  const SUB_BATCH = IS_MOBILE ? 5 : 15; // Smaller sub-batches for videos which are heavier
   for (let i = 0; i < files.length; i += SUB_BATCH) {
     const end = Math.min(i + SUB_BATCH, files.length);
     const tasks = [];
     for (let j = i; j < end; j++) {
       if (!files[j].objectURL) files[j].objectURL = URL.createObjectURL(files[j].file);
-      tasks.push((async (idx) => {
-        try {
-          thumbs[idx] = await createImageBitmap(files[idx].file, { resizeWidth: 96, resizeQuality: 'low' });
-        } catch {
-          thumbs[idx] = null;
-        }
-      })(j));
+      const ext = files[j].name.split('.').pop()?.toLowerCase() ?? '';
+
+      if (VIDEO_EXTS.has(ext)) {
+        tasks.push((async (idx) => {
+          thumbs[idx] = await extractVideoFrame(files[idx].file);
+        })(j));
+      } else {
+        tasks.push((async (idx) => {
+          try {
+            thumbs[idx] = await createImageBitmap(files[idx].file, { resizeWidth: 96, resizeQuality: 'low' });
+          } catch {
+            thumbs[idx] = null;
+          }
+        })(j));
+      }
     }
     await Promise.all(tasks);
     scheduleRender();
-    if (i % 40 === 0) await yieldMain();
-    setStatus(`Loading thumbnails… ${end} / ${files.length}`);
+    await yieldMain();
+    setStatus(`Loading media… ${end} / ${files.length}`);
     setProgress((end / files.length) * 10); // First 10% for thumbnails
   }
   return thumbs;
@@ -666,7 +713,24 @@ async function embedAll(files: PhotoFile[]) {
 
       try {
         if (!extractor) throw new Error('Extractor not loaded');
-        const output = await extractor(f.file, { pooling: 'mean', normalize: true });
+        const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+        let input: string | Blob | URL | RawImage = f.file;
+
+        // If it's a video, use the preloaded thumbnail for embedding
+        const thumb = state.thumbnails[idx];
+        if (VIDEO_EXTS.has(ext) && thumb) {
+          // Convert ImageBitmap to RawImage for Transformers.js
+          const canvas = document.createElement('canvas');
+          canvas.width = thumb.width;
+          canvas.height = thumb.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(thumb, 0, 0);
+            input = await RawImage.fromCanvas(canvas);
+          }
+        }
+
+        const output = await extractor(input, { pooling: 'mean', normalize: true });
         vectors[idx] = extractVector(output);
         writeQueue.push([key, vectors[idx]]);
       } catch (err) {
@@ -848,7 +912,21 @@ dom.canvas.addEventListener('pointerup', (e) => {
     }
     if (closest >= 0) {
       const f = state.files[closest];
-      dom.modalImg.src = f.objectURL || '';
+      const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+      
+      if (VIDEO_EXTS.has(ext)) {
+        dom.modalImg.style.display = 'none';
+        dom.modalVideo.style.display = 'block';
+        dom.modalVideo.src = f.objectURL || '';
+        dom.modalVideo.play().catch(() => {}); // Autoplay when opened
+      } else {
+        dom.modalVideo.style.display = 'none';
+        dom.modalVideo.pause();
+        dom.modalVideo.src = '';
+        dom.modalImg.style.display = 'block';
+        dom.modalImg.src = f.objectURL || '';
+      }
+      
       dom.modalName.textContent = f.name.split('/').pop() || '';
       dom.modal.classList.add('open');
     }
@@ -919,12 +997,16 @@ dom.searchClearBtn.addEventListener('click', () => {
   scheduleRender();
 });
 
-dom.modalClose.addEventListener('click', () => {
+const closeModal = () => {
   dom.modal.classList.remove('open');
-});
+  dom.modalVideo.pause();
+  dom.modalVideo.src = '';
+};
+
+dom.modalClose.addEventListener('click', closeModal);
 
 dom.modal.addEventListener('click', (e) => {
-  if (e.target === dom.modal) dom.modal.classList.remove('open');
+  if (e.target === dom.modal) closeModal();
 });
 
 dom.aboutBtn.addEventListener('click', () => {

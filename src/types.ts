@@ -51,6 +51,7 @@ export interface DOMElements {
   modal: HTMLDivElement;
   modalClose: HTMLButtonElement;
   modalImg: HTMLImageElement;
+  modalVideo: HTMLVideoElement;
   modalName: HTMLDivElement;
   searchWrap: HTMLDivElement;
   searchInput: HTMLInputElement;
@@ -125,7 +126,7 @@ export interface PipelineOptions {
 }
 
 export interface PipelineInstance {
-  (input: string | URL | Blob, options?: InferenceOptions): Promise<PipelineOutput>;
+  (input: string | URL | Blob | any, options?: InferenceOptions): Promise<PipelineOutput>;
 }
 
 export interface InferenceOptions extends Record<string, unknown> {

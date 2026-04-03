@@ -405,10 +405,10 @@
     <button id="resume-btn" hidden disabled>
       <span>🔄</span> Resume Session
     </button>
-    <button id="open-btn" disabled title="Only compatible image files will be processed">
+    <button id="open-btn" disabled title="Only compatible media files will be processed">
       <span>📂</span> Open Photo Folder
     </button>
-    <input type="file" id="file-input" multiple webkitdirectory accept="image/*" hidden>
+    <input type="file" id="file-input" multiple webkitdirectory accept="image/*,video/mp4,video/webm" hidden>
   </div>
 </header>
 
@@ -422,7 +422,7 @@
 <div id="bottom-panel">
   <div class="panel-row">
     <div id="search-wrap">
-      <input id="search-input" disabled placeholder="Describe photos (e.g. 'golden retriever puppy in the grass')">
+      <input id="search-input" disabled placeholder="Describe photos or videos (e.g. 'surfing at sunset')">
       <button id="search-clear-btn" hidden title="Clear search">✕</button>
     </div>
   </div>
@@ -439,6 +439,7 @@
   <div id="modal-content">
     <button id="modal-close" title="Close">✕</button>
     <img id="modal-img" alt="Full view">
+    <video id="modal-video" controls style="max-width: 100%; max-height: calc(95dvh - 60px); display: none; background: #000;"></video>
     <div id="modal-name"></div>
   </div>
 </div>
@@ -449,16 +450,16 @@
     
     <div class="about-section">
       <h2>📸 About Photo Organizer</h2>
-      <p>A high-performance, private-by-design photo management tool. Everything happens locally on your device—no images are ever uploaded to a server.</p>
+      <p>A high-performance, private-by-design media management tool. Everything happens locally on your device—no images or videos are ever uploaded to a server.</p>
     </div>
 
     <div class="about-section">
       <h2>🧠 How it Works</h2>
       <p>The app uses <strong>WebGPU</strong> and <strong>Transformers.js</strong> to run AI models directly in your browser:</p>
       <ul>
-        <li><strong>Nomic-Embed-Vision:</strong> Generates 768-dimensional vectors for every image.</li>
+        <li><strong>Nomic-Embed-Vision:</strong> Generates 768-dimensional vectors for every image and video frame.</li>
         <li><strong>UMAP:</strong> Projects these high-dimensional vectors into the 2D map you see on the canvas.</li>
-        <li><strong>Semantic Search:</strong> Uses <strong>Nomic-Embed-Text</strong> to let you find photos by natural language descriptions.</li>
+        <li><strong>Semantic Search:</strong> Uses <strong>Nomic-Embed-Text</strong> to let you find media by natural language descriptions.</li>
       </ul>
     </div>
 
