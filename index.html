@@ -258,6 +258,18 @@ const camera = { x: 0, y: 0, scale: 1 };
 const setStatus   = (msg) => { statusEl.textContent = msg; };
 const setProgress = (pct) => { progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`; };
 
+// ── Render scheduling (debounce to one frame) ───────────────────────────────────
+let renderPending = false;
+function scheduleRender() {
+  if (!renderPending) {
+    renderPending = true;
+    requestAnimationFrame(() => {
+      render();
+      renderPending = false;
+    });
+  }
+}
+
 // ── IndexedDB cache ───────────────────────────────────────────────────────────
 let _db;
 
@@ -327,6 +339,20 @@ async function preloadThumbnails(files) {
     }
   }
   return thumbs;
+}
+
+// ── IndexedDB batch write (20 embeddings per transaction) ─────────────────────
+async function cachePutBatch(entries) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('embeddings', 'readwrite');
+    const store = tx.objectStore('embeddings');
+    for (const [key, value] of entries) {
+      store.put(value, key);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror    = () => reject(tx.error);
+  });
 }
 
 // ── Embedding helpers ─────────────────────────────────────────────────────────
@@ -633,14 +659,19 @@ async function loadUMAPLib() {
 }
 
 async function runUMAP(vectors, nNeighbors) {
-  await loadUMAPLib();
+  try {
+    await loadUMAPLib();
 
-  setStatus('Projecting…');
-  const umap = new UMAPLib({ nComponents: 2, nNeighbors, minDist: 0.1 });
-  const embedding = await umap.fitAsync(vectors, (epoch) => {
-    setStatus(`Projecting… epoch ${epoch}`);
-  });
-  return embedding;
+    setStatus('Projecting…');
+    const umap = new UMAPLib({ nComponents: 2, nNeighbors, minDist: 0.1 });
+    const embedding = await umap.fitAsync(vectors, (epoch) => {
+      setStatus(`Projecting… epoch ${epoch}`);
+    });
+    return embedding;
+  } catch (err) {
+    setStatus(`UMAP projection failed: ${err.message}`);
+    throw err;
+  }
 }
 
 // ── Model singleton ───────────────────────────────────────────────────────────
@@ -677,7 +708,13 @@ async function loadModel() {
     console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
     setStatus('WebGPU unavailable — using CPU (slower)…');
     loaded.clear();
-    extractor = await tryLoad('wasm');
+    try {
+      extractor = await tryLoad('wasm');
+    } catch (wasmErr) {
+      setStatus('Failed to load model. Your browser may not support WebGPU or WASM.');
+      loadModelBtn.hidden = false;
+      throw wasmErr;
+    }
   }
   setProgress(100);
 
@@ -698,11 +735,13 @@ async function loadModel() {
 
 // ── Embedding loop ────────────────────────────────────────────────────────────
 const BATCH_SIZE = 8;
+const WRITE_BATCH = 20;
 
 async function embedAll(files) {
   state.phase = 'embedding';
   const vectors = new Array(files.length);
   let cacheHits = 0;
+  const writeQueue = [];
 
   for (let i = 0; i < files.length; i += BATCH_SIZE) {
     const batch = files.slice(i, Math.min(i + BATCH_SIZE, files.length));
@@ -718,18 +757,46 @@ async function embedAll(files) {
         if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
         const output = await extractor(f.objectURL);
         vectors[idx] = extractVector(output);
-        await cachePut(key, vectors[idx]);
+        writeQueue.push([key, vectors[idx]]);
       } catch (err) {
         console.warn(`Skipping ${f.name}:`, err.message);
         vectors[idx] = new Float32Array(768);
       }
     }));
 
+    // Flush write queue every WRITE_BATCH embeddings
+    let didFlush = false;
+    if (writeQueue.length >= WRITE_BATCH) {
+      await cachePutBatch(writeQueue);
+      writeQueue.length = 0;
+      didFlush = true;
+    }
+
     const done = Math.min(i + BATCH_SIZE, files.length);
+
+    // Progressive render: show grid after first batch and each write batch flush
+    if (done === BATCH_SIZE || didFlush) {
+      state.phase = 'embedding';
+      resizeCanvas();
+      const cols = Math.ceil(Math.sqrt(files.length));
+      const spacing = 60;
+      state.points = Array.from({ length: done }, (_, j) => [
+        (j % cols) * spacing,
+        Math.floor(j / cols) * spacing
+      ]);
+      fitCamera();
+      render();
+    }
     const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
     setStatus(`Embedding ${done} / ${files.length} images…${fromCache}`);
     setProgress((done / files.length) * 100);
   }
+
+  // Final flush
+  if (writeQueue.length > 0) {
+    await cachePutBatch(writeQueue);
+  }
+
   return vectors;
 }
 
@@ -887,7 +954,7 @@ canvas.addEventListener('pointermove', (e) => {
     dragMoved += Math.abs(dx) + Math.abs(dy);
     camera.x -= dx / camera.scale;
     camera.y -= dy / camera.scale;
-    render();
+    scheduleRender();
   } else if (pointers.size === 2) {
     const pts = [...pointers.values()];
     const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
@@ -903,7 +970,7 @@ canvas.addEventListener('pointermove', (e) => {
       camera.x += px / camera.scale - px / (camera.scale * ratio);
       camera.y += py / camera.scale - py / (camera.scale * ratio);
       camera.scale = Math.max(0.05, Math.min(20, camera.scale * ratio));
-      render();
+      scheduleRender();
     }
     lastPinchDist = dist;
   }
@@ -949,7 +1016,7 @@ canvas.addEventListener('wheel', (e) => {
   camera.x += px / camera.scale - px / (camera.scale * factor);
   camera.y += py / camera.scale - py / (camera.scale * factor);
   camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor));
-  render();
+  scheduleRender();
 }, { passive: false });
 
 recenterBtn.addEventListener('click', () => { fitCamera(); render(); });
