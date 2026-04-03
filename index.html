@@ -284,8 +284,9 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
-      max-width: 95vw;
-      max-height: 95dvh;
+      max-width: 98vw;
+      width: fit-content;
+      max-height: 98dvh;
       display: flex;
       flex-direction: column;
       position: relative;
@@ -294,9 +295,13 @@
 
     #modal-img {
       max-width: 100%;
-      max-height: calc(95dvh - 60px);
+      max-height: calc(98dvh - 60px);
       object-fit: contain;
       background: #000;
+      border-radius: 12px 12px 0 0;
+    }
+
+      border-radius: 12px 12px 0 0;
     }
 
     #modal-name {
@@ -466,7 +471,7 @@
   <div id="modal-content">
     <button id="modal-close" title="Close">✕</button>
     <img id="modal-img" alt="Full view">
-    <video id="modal-video" controls loop style="max-width: 100%; max-height: calc(95dvh - 60px); display: none; background: #000;"></video>
+    <video id="modal-video" controls loop style="max-width: 100%; max-height: calc(98dvh - 60px); display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
     <div id="modal-name"></div>
   </div>
 </div>
@@ -520,7 +525,7 @@
       <label>Thumbnail Density</label>
       <div style="display: flex; align-items: center; gap: 10px;">
         <span style="font-size: 12px; color: var(--text-dim);">Tight</span>
-        <input type="range" id="density-slider" min="0.5" max="2.5" step="0.1" value="1.0" style="flex: 1;">
+        <input type="range" id="density-slider" min="0.1" max="2.5" step="0.1" value="1.0" style="flex: 1;">
         <span style="font-size: 12px; color: var(--text-dim);">Sparse</span>
       </div>
     </div>
