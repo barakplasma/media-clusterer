@@ -377,7 +377,7 @@ function l2normalize(arr) {
 }
 
 // ── Layer norm + L2 normalize (for text embeddings, matches nomic model card) ─────
-function layerNormAndNormalize(data: Float32Array | number[], hiddenSize: number): Float32Array {
+function layerNormAndNormalize(data, hiddenSize) {
   // Layer norm
   const mean = data.reduce((a, b) => a + b, 0) / hiddenSize;
   const variance = data.reduce((a, b) => a + (b - mean) ** 2, 0) / hiddenSize;
