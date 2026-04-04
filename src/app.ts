@@ -244,39 +244,32 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
 }
 
 // ── Thumbnail preloader ──────────────────────────────────────────────────────
-async function preloadThumbnails(files: PhotoFile[]): Promise<(ImageBitmap | null)[]> {
-  const thumbs = new Array<(ImageBitmap | null)>(files.length).fill(null);
-  state.thumbnails = thumbs;
-
-  const SUB_BATCH = IS_MOBILE ? 5 : 15; // Smaller sub-batches for videos which are heavier
-  for (let i = 0; i < files.length; i += SUB_BATCH) {
-    const end = Math.min(i + SUB_BATCH, files.length);
-    const tasks = [];
-    for (let j = i; j < end; j++) {
-      if (!files[j].objectURL) files[j].objectURL = URL.createObjectURL(files[j].file);
-      const ext = files[j].name.split('.').pop()?.toLowerCase() ?? '';
-
-      if (VIDEO_EXTS.has(ext)) {
-        tasks.push((async (idx) => {
-          thumbs[idx] = await extractVideoFrame(files[idx].file);
-        })(j));
-      } else {
-        tasks.push((async (idx) => {
-          try {
-            thumbs[idx] = await createImageBitmap(files[idx].file, { resizeWidth: 96, resizeQuality: 'low' });
-          } catch {
-            thumbs[idx] = null;
-          }
-        })(j));
-      }
-    }
-    await Promise.all(tasks);
-    scheduleRender();
-    await yieldMain();
-    setStatus(`Loading media… ${end} / ${files.length}`);
-    setProgress((end / files.length) * 10); // First 10% for thumbnails
+function initThumbnails(files: PhotoFile[]): (ImageBitmap | null)[] {
+  // Thumbnails are decoded lazily on first render — no upfront work here
+  for (const f of files) {
+    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
   }
-  return thumbs;
+  return new Array<ImageBitmap | null>(files.length).fill(null);
+}
+
+function lazyDecodeThumbnail(idx: number) {
+  if (thumbDecoding.has(idx) || state.thumbnails[idx]) return;
+  thumbDecoding.add(idx);
+  const f = state.files[idx];
+  const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+
+  const done = (bm: ImageBitmap | null) => {
+    state.thumbnails[idx] = bm;
+    thumbDecoding.delete(idx);
+    scheduleRender();
+  };
+
+  if (VIDEO_EXTS.has(ext)) {
+    extractVideoFrame(f.file).then(done).catch(() => done(null));
+  } else {
+    createImageBitmap(f.file, { resizeWidth: 96, resizeQuality: 'low' })
+      .then(done).catch(() => done(null));
+  }
 }
 
 // ── Text embedding (uses text model with search_query prefix) ────────────────
@@ -385,6 +378,7 @@ async function kmeansAsync(points: number[][], k: number, maxIter = 60): Promise
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 const fullImages = new Map<number, HTMLImageElement>(); // index → HTMLImageElement
+const thumbDecoding = new Set<number>();               // indices currently being decoded
 
 function resizeCanvas() {
   const wrap = dom.canvas.parentElement;
@@ -463,6 +457,7 @@ function resetAll() {
   for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
   for (const img of fullImages.values()) img.src = '';
   fullImages.clear();
+  thumbDecoding.clear();
   for (const f of state.files) {
     if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
   }
@@ -596,6 +591,7 @@ function render() {
 
     if (!drawn) {
       const thumb = thumbs[i];
+      if (!thumb) lazyDecodeThumbnail(i);
       if (thumb && thumb.width > 0) {
         const ratio = thumb.width / thumb.height;
         const dw = ratio >= 1 ? drawSize : drawSize * ratio;
@@ -785,16 +781,25 @@ async function embedAll(files: PhotoFile[]) {
       if (cached[bi]) return; // cache hit — handled below
       const idx = i + bi;
       const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-      const thumb = state.thumbnails[idx];
-
-      if (VIDEO_EXTS.has(ext) && thumb) {
-        const canvas = document.createElement('canvas');
-        canvas.width = thumb.width;
-        canvas.height = thumb.height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(thumb, 0, 0);
-          missInputs.push(await RawImage.fromCanvas(canvas));
+      if (VIDEO_EXTS.has(ext)) {
+        // Use cached thumbnail if available, otherwise extract frame now
+        const thumb = state.thumbnails[idx] ?? await extractVideoFrame(f.file);
+        if (thumb) {
+          // Also store it so the render loop doesn't re-extract
+          if (!state.thumbnails[idx]) {
+            state.thumbnails[idx] = thumb;
+            thumbDecoding.delete(idx);
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = thumb.width;
+          canvas.height = thumb.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(thumb, 0, 0);
+            missInputs.push(await RawImage.fromCanvas(canvas));
+          } else {
+            missInputs.push(f.file);
+          }
         } else {
           missInputs.push(f.file);
         }
@@ -876,7 +881,7 @@ async function processFiles(files: PhotoFile[]) {
   setStatus(`Found ${files.length} media files. Loading thumbnails…`);
 
   try {
-    state.thumbnails = await preloadThumbnails(files);
+    state.thumbnails = initThumbnails(files);
 
     const vectors = await embedAll(files);
     state.vectors = vectors;
@@ -1424,7 +1429,7 @@ dom.resumeBtn.addEventListener('click', async () => {
       state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
     }
 
-    state.thumbnails = await preloadThumbnails(matched);
+    state.thumbnails = initThumbnails(matched);
     state.phase = 'done';
     resizeCanvas();
     fitCamera();
