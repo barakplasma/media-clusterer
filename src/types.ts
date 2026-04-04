@@ -51,6 +51,7 @@ export interface AppState {
   searchScores: Float32Array | null;
   fileKeys?: string[];
   settings: Settings;
+  hnsw?: any;
 }
 
 /** DOM element references */

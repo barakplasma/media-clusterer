@@ -5,16 +5,13 @@
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import {
-  allSimilarities,
-  sortBySimilarity,
-} from './similarity';
-import {
   l2normalize,
   extractVector,
 } from './embeddings';
 import {
   openDB,
   cacheGet,
+  cacheGetBatch,
   cachePutBatch,
 } from './db';
 import type {
@@ -256,7 +253,7 @@ async function embedText(text: string): Promise<Float32Array> {
   return output.data;
 }
 
-// ── Text search using similarity module ──────────────────────────────────────
+// ── Text search using DruidJS HNSW ───────────────────────────────────────────
 async function searchImages(query: string) {
   if (!query.trim() || !state.vectors.length) {
     state.searchResults = null;
@@ -273,17 +270,31 @@ async function searchImages(query: string) {
     const queryVector = await embedText(query);
     state.searchQuery = query;
 
-    // Compute all similarities
-    const scores = allSimilarities(queryVector, state.vectors);
-    state.searchScores = scores;
+    if (!state.hnsw && state.vectors.length > 0) {
+      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine });
+    }
 
-    // Sort indices by similarity
-    state.searchResults = sortBySimilarity(scores);
+    if (state.hnsw) {
+      const k = state.vectors.length;
+      const results = state.hnsw.search(queryVector, k);
 
-    const topScore = scores[state.searchResults[0]];
-    const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
-    setStatus(statusMsg);
-    if (dom.statsEl) dom.statsEl.textContent = statusMsg;
+      const scores = new Float32Array(state.vectors.length);
+      const indices = new Int32Array(results.length);
+
+      for (let i = 0; i < results.length; i++) {
+        const { index, distance } = results[i];
+        indices[i] = index;
+        scores[index] = 1 - distance;
+      }
+
+      state.searchScores = scores;
+      state.searchResults = indices;
+
+      const topScore = scores[indices[0]] ?? 0;
+      const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
+      setStatus(statusMsg);
+      if (dom.statsEl) dom.statsEl.textContent = statusMsg;
+    }
   } catch (err) {
     console.error('Search failed:', err);
     setStatus('Search failed. Check console.');
@@ -423,6 +434,7 @@ function resetAll() {
   state.searchResults = null;
   state.searchQuery = '';
   state.searchScores = null;
+  state.hnsw = undefined;
   localStorage.removeItem('po_fileKeys');
   localStorage.removeItem('po_umapPoints');
   localStorage.removeItem('po_clusters');
@@ -452,7 +464,7 @@ function render() {
   const thumbs = state.thumbnails;
   if (!pts.length) return;
 
-  const rank = new Int32Array(pts.length);
+  const rank = new Int32Array(pts.length).fill(pts.length);
   if (state.searchResults) {
     for (let i = 0; i < state.searchResults.length; i++) {
       rank[state.searchResults[i]] = i;
@@ -804,6 +816,9 @@ async function processFiles(files: PhotoFile[]) {
 
     const vectors = await embedAll(files);
     state.vectors = vectors;
+    
+    setStatus('Building search index…');
+    state.hnsw = new druid.HNSW(vectors, { metric: druid.cosine });
 
     state.phase = 'projecting';
     setStatus(`Projecting with ${state.settings.projectionMethod}…`);
@@ -1060,6 +1075,7 @@ const updateSearchUI = () => {
     dom.bottomPanel.style.display = 'none';
     dom.headerRecenterBtn.parentElement!.style.display = 'flex';
   }
+  dom.searchInput.disabled = !state.settings.enableTextSearch || state.phase !== 'done';
 };
 updateSearchUI();
 
@@ -1314,6 +1330,15 @@ dom.resumeBtn.addEventListener('click', async () => {
     state.rawPoints = savedPoints;
     state.points = savedPoints.slice(0, matched.length);
     state.clusters = new Int32Array(savedClusters.slice(0, matched.length));
+
+    setStatus('Restoring search index…');
+    const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    const cachedVectors = await cacheGetBatch(keys);
+    state.vectors = cachedVectors.map(v => v || new Float32Array(768));
+    if (state.vectors.length > 0) {
+      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine });
+    }
+
     state.thumbnails = await preloadThumbnails(matched);
     state.phase = 'done';
     resizeCanvas();

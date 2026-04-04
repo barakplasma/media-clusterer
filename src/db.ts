@@ -38,23 +38,30 @@ export async function openDB(): Promise<IDBDatabase> {
 }
 
 /**
- * Get cached embedding by key
+ * Batch get embeddings from cache
  */
-export async function cacheGet(key: CacheKey): Promise<Float32Array | null> {
+export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float32Array | null)[]> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, 'readonly');
     const store = transaction.objectStore(STORE_NAME);
-    const request = store.get(key);
+    const results: (Float32Array | null)[] = new Array(keys.length).fill(null);
+    let count = 0;
 
-    request.onsuccess = () => {
-      resolve(request.result ?? null);
-    };
+    keys.forEach((key, i) => {
+      const request = store.get(key);
+      request.onsuccess = () => {
+        results[i] = request.result ?? null;
+        count++;
+        if (count === keys.length) resolve(results);
+      };
+      request.onerror = () => {
+        reject(request.error);
+      };
+    });
 
-    request.onerror = () => {
-      reject(request.error);
-    };
+    if (keys.length === 0) resolve([]);
   });
 }
 

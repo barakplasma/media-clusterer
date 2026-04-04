@@ -19,7 +19,7 @@
 - Coverage: `npm run test:coverage`
 
 ## Coding Standards
-- **Types**: Always use strict TypeScript. Define interfaces in `src/types.ts`. Avoid `any`.
+- **Types**: Always use strict TypeScript. Define interfaces in `src/types.ts`. Avoid `any` and `unknown` in 99% of circumstances; prefer precise types or generics.
 - **Logic**: Use the `IProjection` interface for dimensionality reduction algorithms.
 - **State**: Centralized in the `state` object in `src/app.ts`.
 - **Storage**: Use `src/db.ts` for IndexedDB operations.
