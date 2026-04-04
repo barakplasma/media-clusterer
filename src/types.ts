@@ -25,7 +25,7 @@ export interface Camera {
 }
 
 /** Supported projection methods */
-export type ProjectionMethod = 'UMAP' | 'TSNE' | 'PCA';
+export type ProjectionMethod = 'UMAP' | 'TSNE' | 'PCA' | 'ISOMAP' | 'LLE' | 'MDS' | 'SAMMON' | 'TriMap';
 
 /** Application settings */
 export interface Settings {

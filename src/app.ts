@@ -591,6 +591,21 @@ async function runProjection(vectors: Float32Array[], method: ProjectionMethod, 
       case 'PCA':
         result = new druid.PCA(matrix, { d: 2 }).transform();
         break;
+      case 'ISOMAP':
+        result = new druid.ISOMAP(matrix, { d: 2, neighbors: nNeighbors }).transform();
+        break;
+      case 'LLE':
+        result = new druid.LLE(matrix, { d: 2, neighbors: nNeighbors }).transform();
+        break;
+      case 'MDS':
+        result = new druid.MDS(matrix, { d: 2 }).transform();
+        break;
+      case 'SAMMON':
+        result = new druid.SAMMON(matrix, { d: 2 }).transform();
+        break;
+      case 'TriMap':
+        result = new druid.TriMap(matrix, { d: 2 }).transform();
+        break;
       case 'UMAP':
       default:
         result = new druid.UMAP(matrix, { d: 2, n_neighbors: nNeighbors, local_connectivity: 1 }).transform();
