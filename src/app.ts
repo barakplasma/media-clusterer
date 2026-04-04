@@ -86,9 +86,15 @@ const dom: DOMElements = {
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   headerResetBtn: document.getElementById('header-reset-btn') as HTMLButtonElement,
-};
+  };
 
-// ── Application State ────────────────────────────────────────────────────────
+  // ── Version Info ─────────────────────────────────────────────────────────────
+  const versionEl = document.getElementById('version-info');
+  if (versionEl) {
+  versionEl.textContent = `${__GIT_BRANCH__}@${__GIT_COMMIT__}`;
+  }
+
+  // ── Constants ────────────────────────────────────────────────────────────────
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,

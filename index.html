@@ -423,7 +423,10 @@
       <button id="about-btn" style="padding: 2px 6px; font-size: 14px; background: transparent; border: none; color: var(--text-dim); cursor: pointer;" title="About & Instructions">ⓘ</button>
       <button id="settings-btn" style="padding: 2px 6px; font-size: 14px; background: transparent; border: none; color: var(--text-dim); cursor: pointer;" title="Settings">⚙️</button>
     </div>
-    <div id="model-badge" style="font-size: 10px; color: var(--text-dim); background: var(--border); padding: 2px 6px; border-radius: 4px;">Local AI</div>
+    <div id="model-badge" style="font-size: 10px; color: var(--text-dim); background: var(--border); padding: 2px 6px; border-radius: 4px; display: flex; gap: 6px;">
+      <span>Local AI</span>
+      <span style="opacity: 0.6; border-left: 1px solid var(--text-dim); padding-left: 6px;" id="version-info"></span>
+    </div>
   </div>
   <div class="controls">
     <button id="load-model-btn" class="primary">
