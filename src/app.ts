@@ -121,7 +121,7 @@ const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   drawBudget: IS_MOBILE ? 150 : 400,
   enableTextSearch: false,
-  projectionMethod: 'UMAP',
+  projectionMethod: 'TSNE',
   batchSize: IS_MOBILE ? 4 : 16,
 };
 
@@ -148,6 +148,7 @@ const camera: Camera = { x: 0, y: 0, scale: 1 };
 // ── Model singleton ──────────────────────────────────────────────────────────
 let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
+let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
@@ -155,16 +156,34 @@ const setProgress = (pct: number) => { dom.progressBar.style.width = `${Math.min
 const yieldMain = () => new Promise(resolve => setTimeout(resolve, 0));
 
 const cacheSizeEl = document.getElementById('cache-size');
+const deviceBadgeEl = document.getElementById('device-badge');
+const storageBadgeEl = document.getElementById('storage-badge');
+
+function updateDeviceBadge() {
+  if (!deviceBadgeEl) return;
+  if (modelDevice === 'webgpu') {
+    deviceBadgeEl.textContent = 'WebGPU';
+    deviceBadgeEl.style.color = '#4ade80';
+  } else if (modelDevice === 'cpu') {
+    deviceBadgeEl.textContent = 'CPU';
+    deviceBadgeEl.style.color = '#fb923c';
+  } else {
+    deviceBadgeEl.textContent = 'Local AI';
+    deviceBadgeEl.style.color = '';
+  }
+}
+
 async function refreshCacheSize() {
-  if (!cacheSizeEl) return;
   try {
     const { count, bytes } = await cacheStats();
-    if (count === 0) { cacheSizeEl.textContent = ''; return; }
     const mb = bytes / (1024 * 1024);
     const display = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
-    cacheSizeEl.textContent = `${count} cached · ${display}`;
+    const text = count === 0 ? '' : `${count} embeddings · ${display}`;
+    if (cacheSizeEl) cacheSizeEl.textContent = text;
+    if (storageBadgeEl) storageBadgeEl.textContent = text;
   } catch {
-    cacheSizeEl.textContent = '';
+    if (cacheSizeEl) cacheSizeEl.textContent = '';
+    if (storageBadgeEl) storageBadgeEl.textContent = '';
   }
 }
 
@@ -700,18 +719,21 @@ async function loadModel() {
 
   try {
     extractor = await tryLoad('webgpu');
+    modelDevice = 'webgpu';
   } catch (gpuErr) {
     console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
     setStatus('WebGPU unavailable — using CPU (slower)…');
     loaded.clear();
     try {
       extractor = await tryLoad('wasm');
+      modelDevice = 'cpu';
     } catch (wasmErr) {
       setStatus('Failed to load model. Your browser may not support WebGPU or WASM.');
       dom.loadModelBtn.hidden = false;
       throw wasmErr;
     }
   }
+  updateDeviceBadge();
   setProgress(100);
 
   if (state.settings.enableTextSearch) {
@@ -1501,7 +1523,7 @@ function buildDebugInfo(): string {
     `density:     ${state.settings.density}`,
     ``,
     `── models ──────────────────`,
-    `vision:      ${extractor ? 'loaded' : 'none'}`,
+    `vision:      ${extractor ? `loaded (${modelDevice ?? '?'})` : 'none'}`,
     `text:        ${textExtractor ? 'loaded' : 'none'}`,
     ``,
     `── memory ──────────────────`,
