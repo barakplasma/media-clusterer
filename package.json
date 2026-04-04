@@ -11,7 +11,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "type-check": "tsc --noEmit",
-    "deploy": "npm run build && wrangler pages deploy dist --project-name photo-organizer"
+    "deploy": "npm run build && wrangler pages deploy dist --project-name photo-organizer --assets=./dist"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
