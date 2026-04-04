@@ -4,6 +4,10 @@ A high-performance, **zero-server**, local AI media management tool that runs en
 
 ---
 
+<img width="1891" height="1035" alt="demo of the media clusterer based on https://www.kaggle.com/datasets/heavensky/image-dataset-for-unsupervised-clustering?resource=download" src="https://github.com/user-attachments/assets/db8520e5-b937-4f1b-b28e-df0c52821c0a" />
+
+---
+
 ## 🚀 Key Features
 
 - **Semantic Search**: Find photos and videos by description (e.g., "surfing at sunset", "golden retriever puppy") using multimodal AI.
