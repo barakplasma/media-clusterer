@@ -484,37 +484,47 @@
     <button id="about-close" class="close-x">✕</button>
     
     <div class="about-section">
-      <h2>📸 🎥 About Media Clusterer</h2>
-      <p>A high-performance, private-by-design media management tool. Everything happens locally on your device—no images or videos are ever uploaded to a server.</p>
+      <h2>📸 🎥 Media Clusterer</h2>
+      <p>A private-by-design media explorer. Everything runs locally — no images, videos, or data ever leave your device.</p>
     </div>
 
     <div class="about-section">
       <h2>🧠 How it Works</h2>
-      <p>The app uses <strong>WebGPU</strong> and <strong>Transformers.js</strong> to run AI models directly in your browser:</p>
+      <p>AI models run directly in your browser via <strong>WebGPU</strong> and <strong>Transformers.js</strong>:</p>
       <ul>
-        <li><strong>Nomic-Embed-Vision:</strong> Generates 768-dimensional vectors for every image and video frame.</li>
-        <li><strong>UMAP:</strong> Projects these high-dimensional vectors into the 2D map you see on the canvas.</li>
-        <li><strong>Semantic Search:</strong> Uses <strong>Nomic-Embed-Text</strong> to let you find media by natural language descriptions.</li>
+        <li><strong>Nomic-Embed-Vision</strong> — generates 768-dim vectors for every image/video frame, in batches for speed.</li>
+        <li><strong>UMAP / t-SNE / PCA</strong> (and more) — projects high-dimensional vectors onto the 2D canvas.</li>
+        <li><strong>HNSW index</strong> — fast approximate nearest-neighbour search powers semantic text queries.</li>
+        <li><strong>Nomic-Embed-Text</strong> — optional 134MB model for natural language search (enable in Settings).</li>
       </ul>
     </div>
 
     <div class="about-section">
-      <h2>🛡️ Privacy Policy</h2>
-      <p>Zero tracking. Zero uploads. Your local folder stays local. Even the AI models are cached in your browser's IndexedDB for offline use.</p>
+      <h2>⚡ Performance</h2>
+      <ul>
+        <li>Embeddings cached in <strong>IndexedDB</strong> — reload a folder instantly without re-running the model.</li>
+        <li>Batch size is configurable in Settings — higher values are faster but use more memory.</li>
+        <li>Resume button restores your last session without re-embedding.</li>
+      </ul>
+    </div>
+
+    <div class="about-section">
+      <h2>🛡️ Privacy</h2>
+      <p>Zero tracking. Zero uploads. Your folder stays local. AI models are cached in your browser for offline use.</p>
     </div>
 
     <div class="about-section">
       <h2>🖱️ Navigation</h2>
       <ul>
-        <li><strong>Pan:</strong> Click and drag the canvas.</li>
-        <li><strong>Zoom:</strong> Mouse wheel or pinch gesture.</li>
-        <li><strong>View:</strong> Tap any media to see it full-size.</li>
-        <li><strong>Search:</strong> Type a description to highlight matching media.</li>
+        <li><strong>Pan:</strong> Click and drag.</li>
+        <li><strong>Zoom:</strong> Scroll wheel or pinch.</li>
+        <li><strong>Open:</strong> Tap any thumbnail.</li>
+        <li><strong>Search:</strong> Type a description (requires text model).</li>
       </ul>
     </div>
 
     <div style="text-align: center; margin-top: 16px;">
-      <p style="font-size: 12px; color: var(--text-dim);">Media Clusterer 2.2 • Built with ❤️ for Privacy</p>
+      <p style="font-size: 12px; color: var(--text-dim);">Media Clusterer • Built with ❤️ for Privacy</p>
     </div>
   </div>
 </div>
