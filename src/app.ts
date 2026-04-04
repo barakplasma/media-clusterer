@@ -3,6 +3,7 @@
  */
 
 import { pipeline, env, RawImage } from '@huggingface/transformers';
+import * as druid from '@saehrimnir/druidjs';
 import {
   allSimilarities,
   sortBySimilarity,
@@ -22,11 +23,11 @@ import type {
   DOMElements,
   PhotoFile,
   Point,
-  UMAPConstructor,
   Pipeline,
   PipelineInstance,
   ProgressEvent,
   Settings,
+  ProjectionMethod,
   DirectoryHandle,
   FileSystemHandle,
   PointerState,
@@ -81,18 +82,26 @@ const dom: DOMElements = {
   themeSelect: document.getElementById('theme-select') as HTMLSelectElement,
   drawBudgetSlider: document.getElementById('draw-budget-slider') as HTMLInputElement,
   enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
+  projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   headerResetBtn: document.getElementById('header-reset-btn') as HTMLButtonElement,
-};
+  };
 
-// ── Application State ────────────────────────────────────────────────────────
+  // ── Version Info ─────────────────────────────────────────────────────────────
+  const versionEl = document.getElementById('version-info');
+  if (versionEl) {
+  versionEl.textContent = `${__GIT_BRANCH__}@${__GIT_COMMIT__}`;
+  }
+
+  // ── Constants ────────────────────────────────────────────────────────────────
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
   theme: 'system',
   drawBudget: IS_MOBILE ? 150 : 400,
   enableTextSearch: false,
+  projectionMethod: 'UMAP',
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -336,13 +345,13 @@ function resizeCanvas() {
   dom.canvas.height = wrap.clientHeight || 600;
 }
 
-async function spreadPointsAsync(umapPoints: number[][]): Promise<Point[]> {
-  const n = umapPoints.length;
+async function spreadPointsAsync(projectedPoints: number[][]): Promise<Point[]> {
+  const n = projectedPoints.length;
   if (n === 0) return [];
 
   // Normalize to zero-centered unit space
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const [x, y] of umapPoints) {
+  for (const [x, y] of projectedPoints) {
     if (x < minX) minX = x; if (x > maxX) maxX = x;
     if (y < minY) minY = y; if (y > maxY) maxY = y;
   }
@@ -350,7 +359,7 @@ async function spreadPointsAsync(umapPoints: number[][]): Promise<Point[]> {
   const r = Math.max(maxX - cx, maxY - cy) || 1;
 
   const vsize = Math.sqrt(n) * THUMB_WORLD * 1.4 * state.settings.density;
-  const pts: [number, number][] = umapPoints.map(([x, y]) => [(x - cx) / r * vsize, (y - cy) / r * vsize]);
+  const pts: [number, number][] = projectedPoints.map(([x, y]) => [(x - cx) / r * vsize, (y - cy) / r * vsize]);
 
   const CELL = THUMB_WORLD * 2 * state.settings.density;
   for (let iter = 0; iter < 60; iter++) {
@@ -569,70 +578,49 @@ function render() {
   }
 }
 
-// ── UMAP ─────────────────────────────────────────────────────────────────────
-let UMAPLib: UMAPConstructor | null = null;
-
-async function loadUMAPLib(): Promise<void> {
-  if (UMAPLib) return;
-  const existing = window.UMAP;
-  if (existing) {
-    if (typeof existing === 'function') {
-      UMAPLib = existing;
-      return;
-    } else if ('UMAP' in existing && typeof existing.UMAP === 'function') {
-      UMAPLib = existing.UMAP;
-      return;
-    }
-  }
-
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = 'umap-js.min.js';
-    document.head.appendChild(script);
-    script.onload = () => {
-      const exported = window.UMAP;
-      if (!exported) {
-        reject(new Error('UMAP library not found in window.UMAP after script load'));
-        return;
-      }
-
-      if (typeof exported === 'function') {
-        UMAPLib = exported;
-      } else if ('default' in exported && typeof exported.default === 'function') {
-        UMAPLib = exported.default;
-      } else if ('UMAP' in exported && typeof exported.UMAP === 'function') {
-        UMAPLib = exported.UMAP;
-      } else if (typeof Object.values(exported)[0] === 'function') {
-        UMAPLib = Object.values(exported)[0] as UMAPConstructor;
-      } else {
-        reject(new Error('UMAP library not found in window.UMAP'));
-        return;
-      }
-      resolve();
-    };
-    script.onerror = () => reject(new Error('Failed to load UMAP library'));
-  });
-}
-
-async function runUMAP(vectors: Float32Array[], nNeighbors: number): Promise<number[][]> {
+// ── Projection ───────────────────────────────────────────────────────────────
+async function runProjection(vectors: Float32Array[], method: ProjectionMethod, nNeighbors: number): Promise<number[][]> {
   try {
-    await loadUMAPLib();
-    if (!UMAPLib) throw new Error('UMAP library not loaded');
+    setStatus(`Projecting with ${method}…`);
+    // Druid expects data as Array of Arrays or a Matrix
+    const data = vectors.map(v => Array.from(v));
+    const matrix = druid.Matrix.from(data);
+    let result: druid.Matrix;
 
-    setStatus('Projecting…');
-    const umap = new UMAPLib({ nComponents: 2, nNeighbors, minDist: 0.1 });
-    
-    const nEpochs = umap.initializeFit(vectors);
-    for (let epoch = 0; epoch < nEpochs; epoch++) {
-      umap.step();
-      if (epoch % 10 === 0) {
-        setStatus(`Projecting… epoch ${epoch} / ${nEpochs}`);
-        await yieldMain();
-      }
+    // Small yield to allow UI update
+    await yieldMain();
+
+    switch (method) {
+      case 'TSNE':
+        result = new druid.TSNE(matrix, { d: 2, perplexity: Math.min(30, Math.floor(vectors.length / 3)) }).transform();
+        break;
+      case 'PCA':
+        result = new druid.PCA(matrix, { d: 2 }).transform();
+        break;
+      case 'ISOMAP':
+        result = new druid.ISOMAP(matrix, { d: 2, neighbors: nNeighbors }).transform();
+        break;
+      case 'LLE':
+        result = new druid.LLE(matrix, { d: 2, neighbors: nNeighbors }).transform();
+        break;
+      case 'MDS':
+        result = new druid.MDS(matrix, { d: 2 }).transform();
+        break;
+      case 'SAMMON':
+        result = new druid.SAMMON(matrix, { d: 2 }).transform();
+        break;
+      case 'TriMap':
+        result = new druid.TriMap(matrix, { d: 2 }).transform();
+        break;
+      case 'UMAP':
+      default:
+        result = new druid.UMAP(matrix, { d: 2, n_neighbors: nNeighbors, local_connectivity: 1 }).transform();
+        break;
     }
-    return umap.getEmbedding();
+
+    return result.to2dArray().map(row => Array.from(row));
   } catch (err) {
-    setStatus(`UMAP projection failed: ${(err as Error).message}`);
+    setStatus(`${method} projection failed: ${(err as Error).message}`);
     throw err;
   }
 }
@@ -817,11 +805,11 @@ async function processFiles(files: PhotoFile[]) {
     const vectors = await embedAll(files);
     state.vectors = vectors;
 
-    state.phase = 'umap';
-    setStatus('Running UMAP…');
+    state.phase = 'projecting';
+    setStatus(`Projecting with ${state.settings.projectionMethod}…`);
     setProgress(90);
     const nNeighbors = Math.max(2, Math.min(15, files.length - 1));
-    const rawPoints = await runUMAP(vectors, nNeighbors);
+    const rawPoints = await runProjection(vectors, state.settings.projectionMethod, nNeighbors);
     state.rawPoints = rawPoints;
 
     const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(files.length / 2))));
@@ -1061,6 +1049,7 @@ dom.drawBudgetSlider.value = state.settings.drawBudget.toString();
 dom.loopToggle.checked = state.settings.loopVideos;
 dom.themeSelect.value = state.settings.theme;
 dom.enableSearchToggle.checked = state.settings.enableTextSearch;
+if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
@@ -1154,6 +1143,50 @@ dom.themeSelect.addEventListener('change', () => {
   applyTheme(state.settings.theme);
 });
 
+if (dom.projectionSelect) {
+  dom.projectionSelect.addEventListener('change', async (e) => {
+    const select = e.target as HTMLSelectElement;
+    state.settings.projectionMethod = select.value as ProjectionMethod;
+    saveSettings();
+    
+    if (state.vectors.length > 0 && state.phase === 'done') {
+      try {
+        state.phase = 'projecting';
+        dom.recenterBtn.disabled = true;
+        if (dom.headerRecenterBtn) dom.headerRecenterBtn.disabled = true;
+        
+        const nNeighbors = Math.max(2, Math.min(15, state.files.length - 1));
+        const rawPoints = await runProjection(state.vectors, state.settings.projectionMethod, nNeighbors);
+        state.rawPoints = rawPoints;
+        
+        const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(state.files.length / 2))));
+        state.clusters = await kmeansAsync(rawPoints, k);
+        
+        state.points = await spreadPointsAsync(rawPoints);
+        
+        try {
+          localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
+          localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
+        } catch (_) {}
+
+        fitCamera();
+        scheduleRender();
+        
+        const finalMsg = `${state.files.length} media files · ${k} clusters`;
+        setStatus(`${state.files.length} media files — tap to view · ${k} clusters`);
+        if (dom.statsEl) dom.statsEl.textContent = finalMsg;
+      } catch (err) {
+        console.error('Reprojection error:', err);
+        setStatus(`Reprojection failed: ${(err as Error).message}`);
+      } finally {
+        state.phase = 'done';
+        dom.recenterBtn.disabled = false;
+        if (dom.headerRecenterBtn) dom.headerRecenterBtn.disabled = false;
+      }
+    }
+  });
+}
+
 dom.aboutBtn.addEventListener('click', () => {
   dom.aboutModal.classList.add('open');
 });
@@ -1186,7 +1219,6 @@ if (_savedKeys) {
 dom.loadModelBtn.addEventListener('click', async () => {
   if (extractor) return;
   dom.loadModelBtn.disabled = true;
-  await loadUMAPLib();
   await loadModel();
 });
 
@@ -1231,7 +1263,7 @@ dom.fileInput.addEventListener('change', async () => {
 });
 
 dom.resumeBtn.addEventListener('click', async () => {
-  const savedPoints = JSON.parse(localStorage.getItem('po_umapPoints') || 'null');
+  const savedPoints = JSON.parse(localStorage.getItem('po_projectedPoints') || 'null');
   const savedClusters = JSON.parse(localStorage.getItem('po_clusters') || 'null');
   const savedKeys = JSON.parse(localStorage.getItem('po_fileKeys') || 'null');
   if (!savedPoints || !savedKeys) { await dom.openBtn.click(); return; }
@@ -1305,7 +1337,6 @@ dom.resumeBtn.addEventListener('click', async () => {
 dom.loadModelBtn.disabled = true;
 (async () => {
   try {
-    await loadUMAPLib();
     await loadModel();
   } catch (err) {
     dom.loadModelBtn.hidden = false;
