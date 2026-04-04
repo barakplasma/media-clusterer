@@ -564,6 +564,17 @@
     </div>
 
     <div class="setting-item">
+      <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+        <span>Embedding Batch Size</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <input type="number" id="batch-size-slider" min="1" max="32" step="1" value="8" style="width: 56px; padding: 4px 6px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 4px; text-align: center;">
+          <button id="batch-size-auto-btn" style="font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); cursor: pointer;">Auto</button>
+        </div>
+      </label>
+      <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">Higher = faster embedding. ⚠️ Too high may crash on low-memory devices.</div>
+    </div>
+
+    <div class="setting-item">
       <label>Projection Method</label>
       <select id="projection-select" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; outline: none;">
         <option value="UMAP">UMAP</option>

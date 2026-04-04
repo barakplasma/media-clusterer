@@ -35,6 +35,7 @@ export interface Settings {
   drawBudget: number;   // MAX_DRAW_PER_FRAME
   enableTextSearch: boolean;
   projectionMethod: ProjectionMethod;
+  batchSize: number;    // GPU inference batch size (higher = faster, more memory)
 }
 
 /** Application state */
@@ -86,6 +87,8 @@ export interface DOMElements {
   drawBudgetSlider: HTMLInputElement;
   enableSearchToggle: HTMLInputElement;
   projectionSelect: HTMLSelectElement;
+  batchSizeInput: HTMLInputElement;
+  batchSizeAutoBtn: HTMLButtonElement;
   bottomPanel: HTMLDivElement;
   headerRecenterBtn: HTMLButtonElement;
   headerResetBtn: HTMLButtonElement;

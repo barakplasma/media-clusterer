@@ -7,6 +7,7 @@ import * as druid from '@saehrimnir/druidjs';
 import {
   l2normalize,
   extractVector,
+  extractBatchedVectors,
 } from './embeddings';
 import {
   openDB,
@@ -44,7 +45,7 @@ const VIDEO_EXTS = new Set(['mp4', 'webm']);
 const THUMB_WORLD = 48;   // thumbnail size in world units
 const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-const BATCH_SIZE = IS_MOBILE ? 4 : 8; // Smaller batch on mobile to avoid memory crashes
+const BATCH_SIZE = IS_MOBILE ? 4 : 16; // fallback before settings load
 const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
@@ -81,6 +82,8 @@ const dom: DOMElements = {
   drawBudgetSlider: document.getElementById('draw-budget-slider') as HTMLInputElement,
   enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
+  batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
+  batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   headerResetBtn: document.getElementById('header-reset-btn') as HTMLButtonElement,
@@ -93,6 +96,24 @@ const dom: DOMElements = {
   }
 
   // ── Constants ────────────────────────────────────────────────────────────────
+// ── Auto batch size ───────────────────────────────────────────────────────────
+function computeOptimalBatchSize(avgFileSizeBytes = 2 * 1024 * 1024): number {
+  // Estimate available memory headroom
+  const deviceMemoryGB: number = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 2;
+
+  // Chrome-only: use live heap headroom if available
+  const perfMem = (performance as Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number } }).memory;
+  const headroomBytes = perfMem
+    ? Math.max(0, perfMem.jsHeapSizeLimit - perfMem.usedJSHeapSize)
+    : deviceMemoryGB * 0.3 * 1024 * 1024 * 1024; // assume 30% of device RAM usable
+
+  // Vision model resizes to ~224×224 RGBA + ~10× overhead for intermediate tensors
+  const bytesPerImageInference = Math.max(avgFileSizeBytes * 0.5, 224 * 224 * 4 * 10);
+
+  const optimal = Math.floor(headroomBytes / bytesPerImageInference);
+  return Math.max(1, Math.min(32, optimal));
+}
+
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
@@ -100,6 +121,7 @@ const DEFAULT_SETTINGS: Settings = {
   drawBudget: IS_MOBILE ? 150 : 400,
   enableTextSearch: false,
   projectionMethod: 'UMAP',
+  batchSize: IS_MOBILE ? 4 : 16,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -747,43 +769,68 @@ async function embedAll(files: PhotoFile[]) {
   let cacheHits = 0;
   const writeQueue: [CacheKey, Float64Array][] = [];
 
-  for (let i = 0; i < files.length; i += BATCH_SIZE) {
-    const batch = files.slice(i, Math.min(i + BATCH_SIZE, files.length));
+  const batchSize = state.settings.batchSize;
+  for (let i = 0; i < files.length; i += batchSize) {
+    const batch = files.slice(i, Math.min(i + batchSize, files.length));
+    const keys = batch.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+
+    // One IDB transaction for the whole batch
+    const cached = await cacheGetBatch(keys);
+
+    // Resolve inputs for cache misses (convert video thumbnails to RawImage in parallel)
+    const missIndices: number[] = [];
+    const missInputs: (File | RawImage)[] = [];
 
     await Promise.all(batch.map(async (f, bi) => {
+      if (cached[bi]) return; // cache hit — handled below
       const idx = i + bi;
-      const key = `${f.name}:${f.size}:${f.lastModified}` as CacheKey;
+      const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+      const thumb = state.thumbnails[idx];
 
-      const cached = await cacheGet(key);
-      if (cached) { vectors[idx] = cached; cacheHits++; return; }
-
-      try {
-        if (!extractor) throw new Error('Extractor not loaded');
-        const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-        let input: string | Blob | URL | RawImage = f.file;
-
-        // If it's a video, use the preloaded thumbnail for embedding
-        const thumb = state.thumbnails[idx];
-        if (VIDEO_EXTS.has(ext) && thumb) {
-          // Convert ImageBitmap to RawImage for Transformers.js
-          const canvas = document.createElement('canvas');
-          canvas.width = thumb.width;
-          canvas.height = thumb.height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(thumb, 0, 0);
-            input = await RawImage.fromCanvas(canvas);
-          }
+      if (VIDEO_EXTS.has(ext) && thumb) {
+        const canvas = document.createElement('canvas');
+        canvas.width = thumb.width;
+        canvas.height = thumb.height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(thumb, 0, 0);
+          missInputs.push(await RawImage.fromCanvas(canvas));
+        } else {
+          missInputs.push(f.file);
         }
-
-        const output = await extractor(input, { pooling: 'mean', normalize: true });
-        vectors[idx] = Float64Array.from(extractVector(output));
-        writeQueue.push([key, vectors[idx]]);
-      } catch (err) {
-        console.warn(`Skipping ${f.name}:`, (err as Error).message);
-        vectors[idx] = new Float64Array(768);
+      } else {
+        missInputs.push(f.file);
       }
+      missIndices.push(bi);
     }));
+
+    // Apply cache hits
+    for (let bi = 0; bi < batch.length; bi++) {
+      if (cached[bi]) { vectors[i + bi] = cached[bi]!; cacheHits++; }
+    }
+
+    // Run true batch inference for all cache misses at once
+    if (missInputs.length > 0) {
+      if (!extractor) throw new Error('Extractor not loaded');
+      try {
+        const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
+        const extracted = missInputs.length === 1
+          ? [extractVector(output)]
+          : extractBatchedVectors(output, missInputs.length);
+
+        for (let m = 0; m < missIndices.length; m++) {
+          const bi = missIndices[m];
+          const idx = i + bi;
+          vectors[idx] = Float64Array.from(extracted[m]);
+          writeQueue.push([keys[bi], vectors[idx]]);
+        }
+      } catch (err) {
+        console.warn('Batch inference failed, filling zeros:', (err as Error).message);
+        for (const bi of missIndices) {
+          vectors[i + bi] = new Float64Array(768);
+        }
+      }
+    }
 
     let didFlush = false;
     if (writeQueue.length >= WRITE_BATCH) {
@@ -792,9 +839,9 @@ async function embedAll(files: PhotoFile[]) {
       didFlush = true;
     }
 
-    const done = Math.min(i + BATCH_SIZE, files.length);
+    const done = Math.min(i + batchSize, files.length);
 
-    if (done === BATCH_SIZE || didFlush) {
+    if (done === batchSize || didFlush) {
       resizeCanvas();
       const cols = Math.ceil(Math.sqrt(files.length));
       const spacing = 60;
@@ -1082,6 +1129,7 @@ dom.loopToggle.checked = state.settings.loopVideos;
 dom.themeSelect.value = state.settings.theme;
 dom.enableSearchToggle.checked = state.settings.enableTextSearch;
 if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
+dom.batchSizeInput.value = state.settings.batchSize.toString();
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
@@ -1164,6 +1212,25 @@ dom.drawBudgetSlider.addEventListener('input', () => {
   state.settings.drawBudget = parseInt(dom.drawBudgetSlider.value);
   saveSettings();
   scheduleRender();
+});
+
+dom.batchSizeInput.addEventListener('input', () => {
+  const v = Math.max(1, Math.min(32, parseInt(dom.batchSizeInput.value) || 1));
+  state.settings.batchSize = v;
+  saveSettings();
+});
+
+const hasMemoryAPI = 'deviceMemory' in navigator || 'memory' in performance;
+dom.batchSizeAutoBtn.hidden = !hasMemoryAPI;
+
+dom.batchSizeAutoBtn.addEventListener('click', () => {
+  const avgFileSize = state.files.length > 0
+    ? state.files.reduce((s, f) => s + f.size, 0) / state.files.length
+    : 2 * 1024 * 1024;
+  const optimal = computeOptimalBatchSize(avgFileSize);
+  state.settings.batchSize = optimal;
+  dom.batchSizeInput.value = optimal.toString();
+  saveSettings();
 });
 
 dom.loopToggle.addEventListener('change', () => {
