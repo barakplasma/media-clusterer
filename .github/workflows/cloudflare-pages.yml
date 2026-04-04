@@ -33,7 +33,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: 'photo-organizer' # Note: Make sure this matches your project name in Cloudflare
+          projectName: 'media-clusterer' # Note: Make sure this matches your project name in Cloudflare
           directory: 'dist'
           wranglerVersion: '3'
           # Optional: Cloudflare Pages automatically handles branch names.
