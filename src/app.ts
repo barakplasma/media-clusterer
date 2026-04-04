@@ -221,7 +221,7 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
     
     video.onseeked = async () => {
       try {
-        const bitmap = await createImageBitmap(video, { resizeWidth: 96, resizeQuality: 'low' });
+        const bitmap = await createImageBitmap(video, { resizeWidth: 224, resizeQuality: 'medium' });
         resolve(bitmap);
       } catch (e) {
         console.warn('Failed to extract video frame:', e);
