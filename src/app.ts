@@ -1468,3 +1468,91 @@ dom.loadModelBtn.disabled = true;
     setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
   }
 })();
+
+// ── Debug overlay (press ` to toggle) ────────────────────────────────────────
+const debugOverlay = document.getElementById('debug-overlay') as HTMLDivElement;
+
+function formatBytes(b: number) {
+  if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)} GB`;
+  if (b >= 1048576)    return `${(b / 1048576).toFixed(0)} MB`;
+  return `${(b / 1024).toFixed(0)} KB`;
+}
+
+function buildDebugInfo(): string {
+  const perfMem = (performance as Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
+  const devMem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const gpu = (navigator as Navigator & { gpu?: unknown }).gpu;
+
+  const lines: string[] = [
+    `── state ───────────────────`,
+    `phase:       ${state.phase}`,
+    `files:       ${state.files.length}`,
+    `vectors:     ${state.vectors.length}`,
+    `points:      ${state.points.length}`,
+    `hnsw:        ${state.hnsw ? 'built' : 'none'}`,
+    `searchRes:   ${state.searchResults?.length ?? 'none'}`,
+    `thumbs:      ${state.thumbnails.filter(Boolean).length} / ${state.thumbnails.length} decoded`,
+    `thumbDecode: ${thumbDecoding.size} in-flight`,
+    ``,
+    `── settings ────────────────`,
+    `batchSize:   ${state.settings.batchSize}`,
+    `projection:  ${state.settings.projectionMethod}`,
+    `textSearch:  ${state.settings.enableTextSearch}`,
+    `density:     ${state.settings.density}`,
+    ``,
+    `── models ──────────────────`,
+    `vision:      ${extractor ? 'loaded' : 'none'}`,
+    `text:        ${textExtractor ? 'loaded' : 'none'}`,
+    ``,
+    `── memory ──────────────────`,
+    `deviceMemory: ${devMem != null ? devMem + ' GB' : 'unavailable'}`,
+    `webgpu:      ${gpu ? 'available' : 'unavailable'}`,
+  ];
+
+  if (perfMem) {
+    lines.push(
+      `heapUsed:    ${formatBytes(perfMem.usedJSHeapSize)}`,
+      `heapTotal:   ${formatBytes(perfMem.totalJSHeapSize)}`,
+      `heapLimit:   ${formatBytes(perfMem.jsHeapSizeLimit)}`,
+    );
+  }
+
+  lines.push(``, `── camera ──────────────────`,
+    `x: ${camera.x.toFixed(1)}  y: ${camera.y.toFixed(1)}  scale: ${camera.scale.toFixed(3)}`,
+    ``, `[press \` to close]`);
+
+  return lines.join('\n');
+}
+
+function refreshDebugOverlay() {
+  if (debugOverlay.style.display === 'none') return;
+  // Update text node after the copy button (first child)
+  const btn = debugOverlay.firstElementChild;
+  debugOverlay.textContent = buildDebugInfo();
+  if (btn) debugOverlay.insertBefore(btn, debugOverlay.firstChild);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === '`') {
+    const open = debugOverlay.style.display === 'none';
+    debugOverlay.style.display = open ? 'block' : 'none';
+    if (open) refreshDebugOverlay();
+  }
+});
+
+const debugCopyBtn = document.getElementById('debug-copy-btn') as HTMLButtonElement;
+debugCopyBtn.addEventListener('click', async () => {
+  await navigator.clipboard.writeText(buildDebugInfo());
+  debugCopyBtn.textContent = 'Copied!';
+  setTimeout(() => { debugCopyBtn.textContent = 'Copy'; }, 1500);
+});
+
+// Expose to console for deeper inspection
+(window as Window & { __debug?: unknown }).__debug = {
+  get state() { return state; },
+  get camera() { return camera; },
+  get extractor() { return extractor; },
+  get textExtractor() { return textExtractor; },
+  get thumbDecoding() { return thumbDecoding; },
+  buildDebugInfo,
+};
