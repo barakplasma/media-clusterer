@@ -1,8 +1,17 @@
 import { defineConfig } from 'vite';
 import { execSync } from 'child_process';
 
-const gitBranch = execSync('git rev-parse --abbrev-ref HEAD').toString().trim();
-const gitCommit = execSync('git rev-parse --short HEAD').toString().trim();
+const getGitInfo = (cmd: string, envVar?: string) => {
+  if (envVar && process.env[envVar]) return process.env[envVar];
+  try {
+    return execSync(cmd).toString().trim();
+  } catch (e) {
+    return 'unknown';
+  }
+};
+
+const gitBranch = getGitInfo('git rev-parse --abbrev-ref HEAD', 'GITHUB_HEAD_REF') || getGitInfo('git rev-parse --abbrev-ref HEAD', 'GITHUB_REF_NAME');
+const gitCommit = getGitInfo('git rev-parse --short HEAD', 'GITHUB_SHA')?.substring(0, 7);
 
 export default defineConfig({
   define: {
