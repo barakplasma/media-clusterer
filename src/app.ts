@@ -107,8 +107,9 @@ function computeOptimalBatchSize(avgFileSizeBytes = 2 * 1024 * 1024): number {
     ? Math.max(0, perfMem.jsHeapSizeLimit - perfMem.usedJSHeapSize)
     : deviceMemoryGB * 0.3 * 1024 * 1024 * 1024; // assume 30% of device RAM usable
 
-  // Vision model resizes to ~224×224 RGBA + ~10× overhead for intermediate tensors
-  const bytesPerImageInference = Math.max(avgFileSizeBytes * 0.5, 224 * 224 * 4 * 10);
+  // ViT-B/16: 197 patches × 768 dims × 12 layers × 4 attention tensors × 4 bytes × 3× safety margin
+  const vitActivationsPerImage = 197 * 768 * 12 * 4 * 4 * 3; // ~87MB
+  const bytesPerImageInference = Math.max(avgFileSizeBytes * 0.5, vitActivationsPerImage);
 
   const optimal = Math.floor(headroomBytes / bytesPerImageInference);
   return Math.max(1, optimal);
