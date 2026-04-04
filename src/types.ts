@@ -3,7 +3,7 @@
  */
 
 /** Application phase states */
-export type Phase = 'idle' | 'loading_model' | 'model_ready' | 'embedding' | 'umap' | 'done';
+export type Phase = 'idle' | 'loading_model' | 'model_ready' | 'embedding' | 'projecting' | 'done';
 
 /** File metadata and object URL */
 export interface PhotoFile {
@@ -24,6 +24,9 @@ export interface Camera {
   scale: number;
 }
 
+/** Supported projection methods */
+export type ProjectionMethod = 'UMAP' | 'TSNE' | 'PCA';
+
 /** Application settings */
 export interface Settings {
   density: number;      // 1.0 = default, smaller = tighter, larger = sparse
@@ -31,6 +34,7 @@ export interface Settings {
   theme: 'dark' | 'light' | 'system';
   drawBudget: number;   // MAX_DRAW_PER_FRAME
   enableTextSearch: boolean;
+  projectionMethod: ProjectionMethod;
 }
 
 /** Application state */
@@ -80,6 +84,7 @@ export interface DOMElements {
   themeSelect: HTMLSelectElement;
   drawBudgetSlider: HTMLInputElement;
   enableSearchToggle: HTMLInputElement;
+  projectionSelect: HTMLSelectElement;
   bottomPanel: HTMLDivElement;
   headerRecenterBtn: HTMLButtonElement;
   headerResetBtn: HTMLButtonElement;
@@ -88,34 +93,9 @@ export interface DOMElements {
 /** IndexedDB cache entry */
 export type CacheKey = `${string}:${number}:${number}`;
 
-/** UMAP library parameters */
-export interface UMAPParameters {
-  nComponents?: number;
-  nNeighbors?: number;
-  nEpochs?: number;
-  minDist?: number;
-  spread?: number;
-  learningRate?: number;
-  repulsionStrength?: number;
-  negativeSampleRate?: number;
-  random?: () => number;
-}
-
-/** UMAP library constructor */
-export interface UMAPConstructor {
-  new(options?: UMAPParameters): UMAPInstance;
-}
-
-/** UMAP library instance */
-export interface UMAPInstance {
-  fit(data: number[][] | Float32Array[]): number[][];
-  fitAsync(
-    data: number[][] | Float32Array[],
-    callback?: (epoch: number) => void | boolean
-  ): Promise<number[][]>;
-  initializeFit(data: number[][] | Float32Array[]): number;
-  step(): number;
-  getEmbedding(): number[][];
+/** Projection algorithm interface */
+export interface IProjection {
+  fit(data: Float32Array[] | number[][]): Promise<number[][]>;
 }
 
 /**
@@ -131,7 +111,6 @@ export interface Pipeline {
 
 declare global {
   interface Window {
-    UMAP?: UMAPConstructor | { UMAP: UMAPConstructor; default?: UMAPConstructor };
     showDirectoryPicker?: (options?: {
       mode: 'read' | 'readwrite';
     }) => Promise<DirectoryHandle>;
@@ -139,7 +118,6 @@ declare global {
 }
 
 export interface PipelineOptions {
-
   device?: 'webgpu' | 'wasm' | 'cpu';
   dtype?: 'fp32' | 'fp16' | 'q8';
   progress_callback?: (progress: ProgressEvent) => void;

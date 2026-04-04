@@ -559,6 +559,15 @@
       </select>
     </div>
 
+    <div class="setting-item">
+      <label>Projection Method</label>
+      <select id="projection-select" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; outline: none;">
+        <option value="UMAP">UMAP</option>
+        <option value="TSNE">t-SNE</option>
+        <option value="PCA">PCA</option>
+      </select>
+    </div>
+
     <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); text-align: center;">
       Settings persist automatically in your browser cache.
     </div>
@@ -616,7 +625,6 @@
   }
 </style>
 
-<script src="/umap-js.min.js"></script>
 <script type="module" src="/src/app.ts"></script>
 </body>
 </html>
