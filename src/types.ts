@@ -41,7 +41,7 @@ export interface Settings {
 export interface AppState {
   phase: Phase;
   files: PhotoFile[];
-  vectors: Float32Array[];
+  vectors: Float64Array[];
   points: Point[];
   rawPoints: number[][] | null;
   clusters: Int32Array | null;

@@ -38,15 +38,23 @@ export async function openDB(): Promise<IDBDatabase> {
 }
 
 /**
+ * Get single embedding from cache
+ */
+export async function cacheGet(key: CacheKey): Promise<Float64Array | null> {
+  const [result] = await cacheGetBatch([key]);
+  return result;
+}
+
+/**
  * Batch get embeddings from cache
  */
-export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float32Array | null)[]> {
+export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float64Array | null)[]> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, 'readonly');
     const store = transaction.objectStore(STORE_NAME);
-    const results: (Float32Array | null)[] = new Array(keys.length).fill(null);
+    const results: (Float64Array | null)[] = new Array(keys.length).fill(null);
     let count = 0;
 
     keys.forEach((key, i) => {
@@ -68,7 +76,7 @@ export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float32Array | n
 /**
  * Put embedding in cache
  */
-export async function cachePut(key: CacheKey, value: Float32Array): Promise<void> {
+export async function cachePut(key: CacheKey, value: Float64Array): Promise<void> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
@@ -89,7 +97,7 @@ export async function cachePut(key: CacheKey, value: Float32Array): Promise<void
 /**
  * Batch put embeddings (20 per transaction for performance)
  */
-export async function cachePutBatch(entries: [CacheKey, Float32Array][]): Promise<void> {
+export async function cachePutBatch(entries: [CacheKey, Float64Array][]): Promise<void> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
@@ -107,5 +115,32 @@ export async function cachePutBatch(entries: [CacheKey, Float32Array][]): Promis
     transaction.onerror = () => {
       reject(transaction.error);
     };
+  });
+}
+
+/**
+ * Return count and total bytes of cached embeddings
+ */
+export async function cacheStats(): Promise<{ count: number; bytes: number }> {
+  const database = await openDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    let count = 0;
+    let bytes = 0;
+
+    const req = store.openCursor();
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (cursor) {
+        count++;
+        if (cursor.value instanceof Float64Array) bytes += cursor.value.byteLength;
+        cursor.continue();
+      } else {
+        resolve({ count, bytes });
+      }
+    };
+    req.onerror = () => reject(req.error);
   });
 }

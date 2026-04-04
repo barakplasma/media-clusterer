@@ -13,6 +13,7 @@ import {
   cacheGet,
   cacheGetBatch,
   cachePutBatch,
+  cacheStats,
 } from './db';
 import type {
   AppState,
@@ -130,6 +131,20 @@ const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
 const setProgress = (pct: number) => { dom.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`; };
 const yieldMain = () => new Promise(resolve => setTimeout(resolve, 0));
 
+const cacheSizeEl = document.getElementById('cache-size');
+async function refreshCacheSize() {
+  if (!cacheSizeEl) return;
+  try {
+    const { count, bytes } = await cacheStats();
+    if (count === 0) { cacheSizeEl.textContent = ''; return; }
+    const mb = bytes / (1024 * 1024);
+    const display = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
+    cacheSizeEl.textContent = `${count} cached · ${display}`;
+  } catch {
+    cacheSizeEl.textContent = '';
+  }
+}
+
 // ── Render scheduling (debounce to one frame) ────────────────────────────────
 let renderPending = false;
 function scheduleRender() {
@@ -243,14 +258,14 @@ async function preloadThumbnails(files: PhotoFile[]): Promise<(ImageBitmap | nul
 }
 
 // ── Text embedding (uses text model with search_query prefix) ────────────────
-async function embedText(text: string): Promise<Float32Array> {
+async function embedText(text: string): Promise<Float64Array> {
   if (!textExtractor) throw new Error('Text model not loaded');
 
   // Add required task prefix for nomic-embed-text
   const prefixed = `search_query: ${text}`;
   const output = await textExtractor(prefixed, { pooling: 'mean', normalize: true });
 
-  return output.data;
+  return Float64Array.from(output.data);
 }
 
 // ── Text search using DruidJS HNSW ───────────────────────────────────────────
@@ -271,7 +286,7 @@ async function searchImages(query: string) {
     state.searchQuery = query;
 
     if (!state.hnsw && state.vectors.length > 0) {
-      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine });
+      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
     }
 
     if (state.hnsw) {
@@ -454,6 +469,7 @@ function resetAll() {
   dom.openBtn.disabled = false;
   setProgress(0);
   setStatus('Cleared. Open a folder to start.');
+  refreshCacheSize();
 }
 
 function render() {
@@ -591,7 +607,7 @@ function render() {
 }
 
 // ── Projection ───────────────────────────────────────────────────────────────
-async function runProjection(vectors: Float32Array[], method: ProjectionMethod, nNeighbors: number): Promise<number[][]> {
+async function runProjection(vectors: Float64Array[], method: ProjectionMethod, nNeighbors: number): Promise<number[][]> {
   try {
     setStatus(`Projecting with ${method}…`);
     // Druid expects data as Array of Arrays or a Matrix
@@ -727,9 +743,9 @@ async function loadModel() {
 // ── Embedding loop ───────────────────────────────────────────────────────────
 async function embedAll(files: PhotoFile[]) {
   state.phase = 'embedding';
-  const vectors = new Array<Float32Array>(files.length);
+  const vectors = new Array<Float64Array>(files.length);
   let cacheHits = 0;
-  const writeQueue: [CacheKey, Float32Array][] = [];
+  const writeQueue: [CacheKey, Float64Array][] = [];
 
   for (let i = 0; i < files.length; i += BATCH_SIZE) {
     const batch = files.slice(i, Math.min(i + BATCH_SIZE, files.length));
@@ -761,11 +777,11 @@ async function embedAll(files: PhotoFile[]) {
         }
 
         const output = await extractor(input, { pooling: 'mean', normalize: true });
-        vectors[idx] = extractVector(output);
+        vectors[idx] = Float64Array.from(extractVector(output));
         writeQueue.push([key, vectors[idx]]);
       } catch (err) {
         console.warn(`Skipping ${f.name}:`, (err as Error).message);
-        vectors[idx] = new Float32Array(768);
+        vectors[idx] = new Float64Array(768);
       }
     }));
 
@@ -799,6 +815,7 @@ async function embedAll(files: PhotoFile[]) {
     await cachePutBatch(writeQueue);
   }
 
+  refreshCacheSize();
   return vectors;
 }
 
@@ -818,7 +835,7 @@ async function processFiles(files: PhotoFile[]) {
     state.vectors = vectors;
     
     setStatus('Building search index…');
-    state.hnsw = new druid.HNSW(vectors, { metric: druid.cosine });
+    state.hnsw = new druid.HNSW(vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
 
     state.phase = 'projecting';
     setStatus(`Projecting with ${state.settings.projectionMethod}…`);
@@ -1078,6 +1095,7 @@ const updateSearchUI = () => {
   dom.searchInput.disabled = !state.settings.enableTextSearch || state.phase !== 'done';
 };
 updateSearchUI();
+refreshCacheSize();
 
 dom.settingsBtn.addEventListener('click', () => {
   dom.settingsModal.classList.add('open');
@@ -1334,9 +1352,9 @@ dom.resumeBtn.addEventListener('click', async () => {
     setStatus('Restoring search index…');
     const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
     const cachedVectors = await cacheGetBatch(keys);
-    state.vectors = cachedVectors.map(v => v || new Float32Array(768));
+    state.vectors = cachedVectors.map(v => v || new Float64Array(768));
     if (state.vectors.length > 0) {
-      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine });
+      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
     }
 
     state.thumbnails = await preloadThumbnails(matched);
