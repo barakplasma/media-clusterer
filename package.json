@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name media-clusterer"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
