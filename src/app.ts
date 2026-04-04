@@ -111,7 +111,7 @@ function computeOptimalBatchSize(avgFileSizeBytes = 2 * 1024 * 1024): number {
   const bytesPerImageInference = Math.max(avgFileSizeBytes * 0.5, 224 * 224 * 4 * 10);
 
   const optimal = Math.floor(headroomBytes / bytesPerImageInference);
-  return Math.max(1, Math.min(32, optimal));
+  return Math.max(1, optimal);
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -1220,13 +1220,21 @@ dom.drawBudgetSlider.addEventListener('input', () => {
 });
 
 dom.batchSizeInput.addEventListener('input', () => {
-  const v = Math.max(1, Math.min(32, parseInt(dom.batchSizeInput.value) || 1));
+  const v = Math.max(1, parseInt(dom.batchSizeInput.value) || 1);
   state.settings.batchSize = v;
   saveSettings();
 });
 
 const hasMemoryAPI = 'deviceMemory' in navigator || 'memory' in performance;
 dom.batchSizeAutoBtn.hidden = !hasMemoryAPI;
+
+if (hasMemoryAPI && !savedSettings) {
+  // No saved preference — auto-detect on first load
+  const optimal = computeOptimalBatchSize();
+  state.settings.batchSize = optimal;
+  dom.batchSizeInput.value = optimal.toString();
+  saveSettings();
+}
 
 dom.batchSizeAutoBtn.addEventListener('click', () => {
   const avgFileSize = state.files.length > 0
