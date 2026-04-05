@@ -5,17 +5,16 @@
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import {
-  allSimilarities,
-  sortBySimilarity,
-} from './similarity';
-import {
   l2normalize,
   extractVector,
+  extractBatchedVectors,
 } from './embeddings';
 import {
   openDB,
   cacheGet,
+  cacheGetBatch,
   cachePutBatch,
+  cacheStats,
 } from './db';
 import type {
   AppState,
@@ -46,7 +45,7 @@ const VIDEO_EXTS = new Set(['mp4', 'webm']);
 const THUMB_WORLD = 48;   // thumbnail size in world units
 const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-const BATCH_SIZE = IS_MOBILE ? 4 : 8; // Smaller batch on mobile to avoid memory crashes
+const BATCH_SIZE = IS_MOBILE ? 4 : 16; // fallback before settings load
 const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
@@ -83,6 +82,8 @@ const dom: DOMElements = {
   drawBudgetSlider: document.getElementById('draw-budget-slider') as HTMLInputElement,
   enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
+  batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
+  batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   headerResetBtn: document.getElementById('header-reset-btn') as HTMLButtonElement,
@@ -95,13 +96,33 @@ const dom: DOMElements = {
   }
 
   // ── Constants ────────────────────────────────────────────────────────────────
+// ── Auto batch size ───────────────────────────────────────────────────────────
+function computeOptimalBatchSize(avgFileSizeBytes = 2 * 1024 * 1024): number {
+  // Estimate available memory headroom
+  const deviceMemoryGB: number = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 2;
+
+  // Chrome-only: use live heap headroom if available
+  const perfMem = (performance as Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number } }).memory;
+  const headroomBytes = perfMem
+    ? Math.max(0, perfMem.jsHeapSizeLimit - perfMem.usedJSHeapSize)
+    : deviceMemoryGB * 0.3 * 1024 * 1024 * 1024; // assume 30% of device RAM usable
+
+  // ViT-B/16: 197 patches × 768 dims × 12 layers × 4 attention tensors × 4 bytes × 3× safety margin
+  const vitActivationsPerImage = 197 * 768 * 12 * 4 * 4 * 3; // ~87MB
+  const bytesPerImageInference = Math.max(avgFileSizeBytes * 0.5, vitActivationsPerImage);
+
+  const optimal = Math.floor(headroomBytes / bytesPerImageInference);
+  return Math.max(1, optimal);
+}
+
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
   theme: 'system',
   drawBudget: IS_MOBILE ? 150 : 400,
   enableTextSearch: false,
-  projectionMethod: 'UMAP',
+  projectionMethod: 'TSNE',
+  batchSize: IS_MOBILE ? 4 : 16,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -127,11 +148,44 @@ const camera: Camera = { x: 0, y: 0, scale: 1 };
 // ── Model singleton ──────────────────────────────────────────────────────────
 let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
+let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
 const setProgress = (pct: number) => { dom.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`; };
 const yieldMain = () => new Promise(resolve => setTimeout(resolve, 0));
+
+const cacheSizeEl = document.getElementById('cache-size');
+const deviceBadgeEl = document.getElementById('device-badge');
+const storageBadgeEl = document.getElementById('storage-badge');
+
+function updateDeviceBadge() {
+  if (!deviceBadgeEl) return;
+  if (modelDevice === 'webgpu') {
+    deviceBadgeEl.textContent = 'WebGPU';
+    deviceBadgeEl.style.color = '#4ade80';
+  } else if (modelDevice === 'cpu') {
+    deviceBadgeEl.textContent = 'CPU';
+    deviceBadgeEl.style.color = '#fb923c';
+  } else {
+    deviceBadgeEl.textContent = 'Local AI';
+    deviceBadgeEl.style.color = '';
+  }
+}
+
+async function refreshCacheSize() {
+  try {
+    const { count, bytes } = await cacheStats();
+    const mb = bytes / (1024 * 1024);
+    const display = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
+    const text = count === 0 ? '' : `${count} embeddings · ${display}`;
+    if (cacheSizeEl) cacheSizeEl.textContent = text;
+    if (storageBadgeEl) storageBadgeEl.textContent = text;
+  } catch {
+    if (cacheSizeEl) cacheSizeEl.textContent = '';
+    if (storageBadgeEl) storageBadgeEl.textContent = '';
+  }
+}
 
 // ── Render scheduling (debounce to one frame) ────────────────────────────────
 let renderPending = false;
@@ -187,7 +241,7 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
     
     video.onseeked = async () => {
       try {
-        const bitmap = await createImageBitmap(video, { resizeWidth: 96, resizeQuality: 'low' });
+        const bitmap = await createImageBitmap(video, { resizeWidth: 224, resizeQuality: 'medium' });
         resolve(bitmap);
       } catch (e) {
         console.warn('Failed to extract video frame:', e);
@@ -210,53 +264,46 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
 }
 
 // ── Thumbnail preloader ──────────────────────────────────────────────────────
-async function preloadThumbnails(files: PhotoFile[]): Promise<(ImageBitmap | null)[]> {
-  const thumbs = new Array<(ImageBitmap | null)>(files.length).fill(null);
-  state.thumbnails = thumbs;
-
-  const SUB_BATCH = IS_MOBILE ? 5 : 15; // Smaller sub-batches for videos which are heavier
-  for (let i = 0; i < files.length; i += SUB_BATCH) {
-    const end = Math.min(i + SUB_BATCH, files.length);
-    const tasks = [];
-    for (let j = i; j < end; j++) {
-      if (!files[j].objectURL) files[j].objectURL = URL.createObjectURL(files[j].file);
-      const ext = files[j].name.split('.').pop()?.toLowerCase() ?? '';
-
-      if (VIDEO_EXTS.has(ext)) {
-        tasks.push((async (idx) => {
-          thumbs[idx] = await extractVideoFrame(files[idx].file);
-        })(j));
-      } else {
-        tasks.push((async (idx) => {
-          try {
-            thumbs[idx] = await createImageBitmap(files[idx].file, { resizeWidth: 96, resizeQuality: 'low' });
-          } catch {
-            thumbs[idx] = null;
-          }
-        })(j));
-      }
-    }
-    await Promise.all(tasks);
-    scheduleRender();
-    await yieldMain();
-    setStatus(`Loading media… ${end} / ${files.length}`);
-    setProgress((end / files.length) * 10); // First 10% for thumbnails
+function initThumbnails(files: PhotoFile[]): (ImageBitmap | null)[] {
+  // Thumbnails are decoded lazily on first render — no upfront work here
+  for (const f of files) {
+    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
   }
-  return thumbs;
+  return new Array<ImageBitmap | null>(files.length).fill(null);
+}
+
+function lazyDecodeThumbnail(idx: number) {
+  if (thumbDecoding.has(idx) || state.thumbnails[idx]) return;
+  thumbDecoding.add(idx);
+  const f = state.files[idx];
+  const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+
+  const done = (bm: ImageBitmap | null) => {
+    state.thumbnails[idx] = bm;
+    thumbDecoding.delete(idx);
+    scheduleRender();
+  };
+
+  if (VIDEO_EXTS.has(ext)) {
+    extractVideoFrame(f.file).then(done).catch(() => done(null));
+  } else {
+    createImageBitmap(f.file, { resizeWidth: 96, resizeQuality: 'low' })
+      .then(done).catch(() => done(null));
+  }
 }
 
 // ── Text embedding (uses text model with search_query prefix) ────────────────
-async function embedText(text: string): Promise<Float32Array> {
+async function embedText(text: string): Promise<Float64Array> {
   if (!textExtractor) throw new Error('Text model not loaded');
 
   // Add required task prefix for nomic-embed-text
   const prefixed = `search_query: ${text}`;
   const output = await textExtractor(prefixed, { pooling: 'mean', normalize: true });
 
-  return output.data;
+  return Float64Array.from(output.data);
 }
 
-// ── Text search using similarity module ──────────────────────────────────────
+// ── Text search using DruidJS HNSW ───────────────────────────────────────────
 async function searchImages(query: string) {
   if (!query.trim() || !state.vectors.length) {
     state.searchResults = null;
@@ -273,17 +320,31 @@ async function searchImages(query: string) {
     const queryVector = await embedText(query);
     state.searchQuery = query;
 
-    // Compute all similarities
-    const scores = allSimilarities(queryVector, state.vectors);
-    state.searchScores = scores;
+    if (!state.hnsw && state.vectors.length > 0) {
+      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
+    }
 
-    // Sort indices by similarity
-    state.searchResults = sortBySimilarity(scores);
+    if (state.hnsw) {
+      const k = state.vectors.length;
+      const results = state.hnsw.search(queryVector, k);
 
-    const topScore = scores[state.searchResults[0]];
-    const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
-    setStatus(statusMsg);
-    if (dom.statsEl) dom.statsEl.textContent = statusMsg;
+      const scores = new Float32Array(state.vectors.length);
+      const indices = new Int32Array(results.length);
+
+      for (let i = 0; i < results.length; i++) {
+        const { index, distance } = results[i];
+        indices[i] = index;
+        scores[index] = 1 - distance;
+      }
+
+      state.searchScores = scores;
+      state.searchResults = indices;
+
+      const topScore = scores[indices[0]] ?? 0;
+      const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
+      setStatus(statusMsg);
+      if (dom.statsEl) dom.statsEl.textContent = statusMsg;
+    }
   } catch (err) {
     console.error('Search failed:', err);
     setStatus('Search failed. Check console.');
@@ -337,6 +398,7 @@ async function kmeansAsync(points: number[][], k: number, maxIter = 60): Promise
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 const fullImages = new Map<number, HTMLImageElement>(); // index → HTMLImageElement
+const thumbDecoding = new Set<number>();               // indices currently being decoded
 
 function resizeCanvas() {
   const wrap = dom.canvas.parentElement;
@@ -415,6 +477,7 @@ function resetAll() {
   for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
   for (const img of fullImages.values()) img.src = '';
   fullImages.clear();
+  thumbDecoding.clear();
   for (const f of state.files) {
     if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
   }
@@ -423,6 +486,7 @@ function resetAll() {
   state.searchResults = null;
   state.searchQuery = '';
   state.searchScores = null;
+  state.hnsw = undefined;
   localStorage.removeItem('po_fileKeys');
   localStorage.removeItem('po_umapPoints');
   localStorage.removeItem('po_clusters');
@@ -442,6 +506,7 @@ function resetAll() {
   dom.openBtn.disabled = false;
   setProgress(0);
   setStatus('Cleared. Open a folder to start.');
+  refreshCacheSize();
 }
 
 function render() {
@@ -452,7 +517,7 @@ function render() {
   const thumbs = state.thumbnails;
   if (!pts.length) return;
 
-  const rank = new Int32Array(pts.length);
+  const rank = new Int32Array(pts.length).fill(pts.length);
   if (state.searchResults) {
     for (let i = 0; i < state.searchResults.length; i++) {
       rank[state.searchResults[i]] = i;
@@ -546,6 +611,7 @@ function render() {
 
     if (!drawn) {
       const thumb = thumbs[i];
+      if (!thumb) lazyDecodeThumbnail(i);
       if (thumb && thumb.width > 0) {
         const ratio = thumb.width / thumb.height;
         const dw = ratio >= 1 ? drawSize : drawSize * ratio;
@@ -579,7 +645,7 @@ function render() {
 }
 
 // ── Projection ───────────────────────────────────────────────────────────────
-async function runProjection(vectors: Float32Array[], method: ProjectionMethod, nNeighbors: number): Promise<number[][]> {
+async function runProjection(vectors: Float64Array[], method: ProjectionMethod, nNeighbors: number): Promise<number[][]> {
   try {
     setStatus(`Projecting with ${method}…`);
     // Druid expects data as Array of Arrays or a Matrix
@@ -653,18 +719,21 @@ async function loadModel() {
 
   try {
     extractor = await tryLoad('webgpu');
+    modelDevice = 'webgpu';
   } catch (gpuErr) {
     console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
     setStatus('WebGPU unavailable — using CPU (slower)…');
     loaded.clear();
     try {
       extractor = await tryLoad('wasm');
+      modelDevice = 'cpu';
     } catch (wasmErr) {
       setStatus('Failed to load model. Your browser may not support WebGPU or WASM.');
       dom.loadModelBtn.hidden = false;
       throw wasmErr;
     }
   }
+  updateDeviceBadge();
   setProgress(100);
 
   if (state.settings.enableTextSearch) {
@@ -715,47 +784,81 @@ async function loadModel() {
 // ── Embedding loop ───────────────────────────────────────────────────────────
 async function embedAll(files: PhotoFile[]) {
   state.phase = 'embedding';
-  const vectors = new Array<Float32Array>(files.length);
+  const vectors = new Array<Float64Array>(files.length);
   let cacheHits = 0;
-  const writeQueue: [CacheKey, Float32Array][] = [];
+  const writeQueue: [CacheKey, Float64Array][] = [];
 
-  for (let i = 0; i < files.length; i += BATCH_SIZE) {
-    const batch = files.slice(i, Math.min(i + BATCH_SIZE, files.length));
+  const batchSize = state.settings.batchSize;
+  for (let i = 0; i < files.length; i += batchSize) {
+    const batch = files.slice(i, Math.min(i + batchSize, files.length));
+    const keys = batch.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+
+    // One IDB transaction for the whole batch
+    const cached = await cacheGetBatch(keys);
+
+    // Resolve inputs for cache misses (convert video thumbnails to RawImage in parallel)
+    const missIndices: number[] = [];
+    const missInputs: (File | RawImage)[] = [];
 
     await Promise.all(batch.map(async (f, bi) => {
+      if (cached[bi]) return; // cache hit — handled below
       const idx = i + bi;
-      const key = `${f.name}:${f.size}:${f.lastModified}` as CacheKey;
-
-      const cached = await cacheGet(key);
-      if (cached) { vectors[idx] = cached; cacheHits++; return; }
-
-      try {
-        if (!extractor) throw new Error('Extractor not loaded');
-        const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-        let input: string | Blob | URL | RawImage = f.file;
-
-        // If it's a video, use the preloaded thumbnail for embedding
-        const thumb = state.thumbnails[idx];
-        if (VIDEO_EXTS.has(ext) && thumb) {
-          // Convert ImageBitmap to RawImage for Transformers.js
+      const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+      if (VIDEO_EXTS.has(ext)) {
+        // Use cached thumbnail if available, otherwise extract frame now
+        const thumb = state.thumbnails[idx] ?? await extractVideoFrame(f.file);
+        if (thumb) {
+          // Also store it so the render loop doesn't re-extract
+          if (!state.thumbnails[idx]) {
+            state.thumbnails[idx] = thumb;
+            thumbDecoding.delete(idx);
+          }
           const canvas = document.createElement('canvas');
           canvas.width = thumb.width;
           canvas.height = thumb.height;
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(thumb, 0, 0);
-            input = await RawImage.fromCanvas(canvas);
+            missInputs.push(await RawImage.fromCanvas(canvas));
+          } else {
+            missInputs.push(f.file);
           }
+        } else {
+          missInputs.push(f.file);
         }
-
-        const output = await extractor(input, { pooling: 'mean', normalize: true });
-        vectors[idx] = extractVector(output);
-        writeQueue.push([key, vectors[idx]]);
-      } catch (err) {
-        console.warn(`Skipping ${f.name}:`, (err as Error).message);
-        vectors[idx] = new Float32Array(768);
+      } else {
+        missInputs.push(f.file);
       }
+      missIndices.push(bi);
     }));
+
+    // Apply cache hits
+    for (let bi = 0; bi < batch.length; bi++) {
+      if (cached[bi]) { vectors[i + bi] = cached[bi]!; cacheHits++; }
+    }
+
+    // Run true batch inference for all cache misses at once
+    if (missInputs.length > 0) {
+      if (!extractor) throw new Error('Extractor not loaded');
+      try {
+        const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
+        const extracted = missInputs.length === 1
+          ? [extractVector(output)]
+          : extractBatchedVectors(output, missInputs.length);
+
+        for (let m = 0; m < missIndices.length; m++) {
+          const bi = missIndices[m];
+          const idx = i + bi;
+          vectors[idx] = Float64Array.from(extracted[m]);
+          writeQueue.push([keys[bi], vectors[idx]]);
+        }
+      } catch (err) {
+        console.warn('Batch inference failed, filling zeros:', (err as Error).message);
+        for (const bi of missIndices) {
+          vectors[i + bi] = new Float64Array(768);
+        }
+      }
+    }
 
     let didFlush = false;
     if (writeQueue.length >= WRITE_BATCH) {
@@ -764,9 +867,9 @@ async function embedAll(files: PhotoFile[]) {
       didFlush = true;
     }
 
-    const done = Math.min(i + BATCH_SIZE, files.length);
+    const done = Math.min(i + batchSize, files.length);
 
-    if (done === BATCH_SIZE || didFlush) {
+    if (done === batchSize || didFlush) {
       resizeCanvas();
       const cols = Math.ceil(Math.sqrt(files.length));
       const spacing = 60;
@@ -787,6 +890,7 @@ async function embedAll(files: PhotoFile[]) {
     await cachePutBatch(writeQueue);
   }
 
+  refreshCacheSize();
   return vectors;
 }
 
@@ -800,10 +904,13 @@ async function processFiles(files: PhotoFile[]) {
   setStatus(`Found ${files.length} media files. Loading thumbnails…`);
 
   try {
-    state.thumbnails = await preloadThumbnails(files);
+    state.thumbnails = initThumbnails(files);
 
     const vectors = await embedAll(files);
     state.vectors = vectors;
+    
+    setStatus('Building search index…');
+    state.hnsw = new druid.HNSW(vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
 
     state.phase = 'projecting';
     setStatus(`Projecting with ${state.settings.projectionMethod}…`);
@@ -1050,6 +1157,7 @@ dom.loopToggle.checked = state.settings.loopVideos;
 dom.themeSelect.value = state.settings.theme;
 dom.enableSearchToggle.checked = state.settings.enableTextSearch;
 if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
+dom.batchSizeInput.value = state.settings.batchSize.toString();
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
@@ -1060,8 +1168,10 @@ const updateSearchUI = () => {
     dom.bottomPanel.style.display = 'none';
     dom.headerRecenterBtn.parentElement!.style.display = 'flex';
   }
+  dom.searchInput.disabled = !state.settings.enableTextSearch || state.phase !== 'done';
 };
 updateSearchUI();
+refreshCacheSize();
 
 dom.settingsBtn.addEventListener('click', () => {
   dom.settingsModal.classList.add('open');
@@ -1130,6 +1240,33 @@ dom.drawBudgetSlider.addEventListener('input', () => {
   state.settings.drawBudget = parseInt(dom.drawBudgetSlider.value);
   saveSettings();
   scheduleRender();
+});
+
+dom.batchSizeInput.addEventListener('input', () => {
+  const v = Math.max(1, parseInt(dom.batchSizeInput.value) || 1);
+  state.settings.batchSize = v;
+  saveSettings();
+});
+
+const hasMemoryAPI = 'deviceMemory' in navigator || 'memory' in performance;
+dom.batchSizeAutoBtn.hidden = !hasMemoryAPI;
+
+if (hasMemoryAPI && !savedSettings) {
+  // No saved preference — auto-detect on first load
+  const optimal = computeOptimalBatchSize();
+  state.settings.batchSize = optimal;
+  dom.batchSizeInput.value = optimal.toString();
+  saveSettings();
+}
+
+dom.batchSizeAutoBtn.addEventListener('click', () => {
+  const avgFileSize = state.files.length > 0
+    ? state.files.reduce((s, f) => s + f.size, 0) / state.files.length
+    : 2 * 1024 * 1024;
+  const optimal = computeOptimalBatchSize(avgFileSize);
+  state.settings.batchSize = optimal;
+  dom.batchSizeInput.value = optimal.toString();
+  saveSettings();
 });
 
 dom.loopToggle.addEventListener('change', () => {
@@ -1314,7 +1451,16 @@ dom.resumeBtn.addEventListener('click', async () => {
     state.rawPoints = savedPoints;
     state.points = savedPoints.slice(0, matched.length);
     state.clusters = new Int32Array(savedClusters.slice(0, matched.length));
-    state.thumbnails = await preloadThumbnails(matched);
+
+    setStatus('Restoring search index…');
+    const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    const cachedVectors = await cacheGetBatch(keys);
+    state.vectors = cachedVectors.map(v => v || new Float64Array(768));
+    if (state.vectors.length > 0) {
+      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
+    }
+
+    state.thumbnails = initThumbnails(matched);
     state.phase = 'done';
     resizeCanvas();
     fitCamera();
@@ -1344,3 +1490,91 @@ dom.loadModelBtn.disabled = true;
     setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
   }
 })();
+
+// ── Debug overlay (press ` to toggle) ────────────────────────────────────────
+const debugOverlay = document.getElementById('debug-overlay') as HTMLDivElement;
+
+function formatBytes(b: number) {
+  if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)} GB`;
+  if (b >= 1048576)    return `${(b / 1048576).toFixed(0)} MB`;
+  return `${(b / 1024).toFixed(0)} KB`;
+}
+
+function buildDebugInfo(): string {
+  const perfMem = (performance as Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
+  const devMem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const gpu = (navigator as Navigator & { gpu?: unknown }).gpu;
+
+  const lines: string[] = [
+    `── state ───────────────────`,
+    `phase:       ${state.phase}`,
+    `files:       ${state.files.length}`,
+    `vectors:     ${state.vectors.length}`,
+    `points:      ${state.points.length}`,
+    `hnsw:        ${state.hnsw ? 'built' : 'none'}`,
+    `searchRes:   ${state.searchResults?.length ?? 'none'}`,
+    `thumbs:      ${state.thumbnails.filter(Boolean).length} / ${state.thumbnails.length} decoded`,
+    `thumbDecode: ${thumbDecoding.size} in-flight`,
+    ``,
+    `── settings ────────────────`,
+    `batchSize:   ${state.settings.batchSize}`,
+    `projection:  ${state.settings.projectionMethod}`,
+    `textSearch:  ${state.settings.enableTextSearch}`,
+    `density:     ${state.settings.density}`,
+    ``,
+    `── models ──────────────────`,
+    `vision:      ${extractor ? `loaded (${modelDevice ?? '?'})` : 'none'}`,
+    `text:        ${textExtractor ? 'loaded' : 'none'}`,
+    ``,
+    `── memory ──────────────────`,
+    `deviceMemory: ${devMem != null ? devMem + ' GB' : 'unavailable'}`,
+    `webgpu:      ${gpu ? 'available' : 'unavailable'}`,
+  ];
+
+  if (perfMem) {
+    lines.push(
+      `heapUsed:    ${formatBytes(perfMem.usedJSHeapSize)}`,
+      `heapTotal:   ${formatBytes(perfMem.totalJSHeapSize)}`,
+      `heapLimit:   ${formatBytes(perfMem.jsHeapSizeLimit)}`,
+    );
+  }
+
+  lines.push(``, `── camera ──────────────────`,
+    `x: ${camera.x.toFixed(1)}  y: ${camera.y.toFixed(1)}  scale: ${camera.scale.toFixed(3)}`,
+    ``, `[press \` to close]`);
+
+  return lines.join('\n');
+}
+
+function refreshDebugOverlay() {
+  if (debugOverlay.style.display === 'none') return;
+  // Update text node after the copy button (first child)
+  const btn = debugOverlay.firstElementChild;
+  debugOverlay.textContent = buildDebugInfo();
+  if (btn) debugOverlay.insertBefore(btn, debugOverlay.firstChild);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === '`') {
+    const open = debugOverlay.style.display === 'none';
+    debugOverlay.style.display = open ? 'block' : 'none';
+    if (open) refreshDebugOverlay();
+  }
+});
+
+const debugCopyBtn = document.getElementById('debug-copy-btn') as HTMLButtonElement;
+debugCopyBtn.addEventListener('click', async () => {
+  await navigator.clipboard.writeText(buildDebugInfo());
+  debugCopyBtn.textContent = 'Copied!';
+  setTimeout(() => { debugCopyBtn.textContent = 'Copy'; }, 1500);
+});
+
+// Expose to console for deeper inspection
+(window as Window & { __debug?: unknown }).__debug = {
+  get state() { return state; },
+  get camera() { return camera; },
+  get extractor() { return extractor; },
+  get textExtractor() { return textExtractor; },
+  get thumbDecoding() { return thumbDecoding; },
+  buildDebugInfo,
+};

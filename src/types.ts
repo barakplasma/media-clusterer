@@ -35,13 +35,14 @@ export interface Settings {
   drawBudget: number;   // MAX_DRAW_PER_FRAME
   enableTextSearch: boolean;
   projectionMethod: ProjectionMethod;
+  batchSize: number;    // GPU inference batch size (higher = faster, more memory)
 }
 
 /** Application state */
 export interface AppState {
   phase: Phase;
   files: PhotoFile[];
-  vectors: Float32Array[];
+  vectors: Float64Array[];
   points: Point[];
   rawPoints: number[][] | null;
   clusters: Int32Array | null;
@@ -51,6 +52,7 @@ export interface AppState {
   searchScores: Float32Array | null;
   fileKeys?: string[];
   settings: Settings;
+  hnsw?: any;
 }
 
 /** DOM element references */
@@ -85,6 +87,8 @@ export interface DOMElements {
   drawBudgetSlider: HTMLInputElement;
   enableSearchToggle: HTMLInputElement;
   projectionSelect: HTMLSelectElement;
+  batchSizeInput: HTMLInputElement;
+  batchSizeAutoBtn: HTMLButtonElement;
   bottomPanel: HTMLDivElement;
   headerRecenterBtn: HTMLButtonElement;
   headerResetBtn: HTMLButtonElement;
