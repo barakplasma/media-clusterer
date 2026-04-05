@@ -53,6 +53,7 @@ export interface AppState {
   fileKeys?: string[];
   settings: Settings;
   hnsw?: any;
+  activeFileIndex: number | null;
 }
 
 /** DOM element references */

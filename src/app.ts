@@ -140,6 +140,7 @@ const state: AppState = {
   searchQuery: '',
   searchScores: null,
   settings,
+  activeFileIndex: null,
 };
 
 // ── Camera (infinite canvas) ─────────────────────────────────────────────────
@@ -487,6 +488,7 @@ function resetAll() {
   state.searchQuery = '';
   state.searchScores = null;
   state.hnsw = undefined;
+  state.activeFileIndex = null;
   localStorage.removeItem('po_fileKeys');
   localStorage.removeItem('po_umapPoints');
   localStorage.removeItem('po_clusters');
@@ -1039,25 +1041,7 @@ dom.canvas.addEventListener('pointerup', (e) => {
       if (d < minD) { minD = d; closest = i; }
     }
     if (closest >= 0) {
-      const f = state.files[closest];
-      const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-      
-      if (VIDEO_EXTS.has(ext)) {
-        dom.modalImg.style.display = 'none';
-        dom.modalVideo.style.display = 'block';
-        dom.modalVideo.loop = state.settings.loopVideos;
-        dom.modalVideo.src = f.objectURL || '';
-        dom.modalVideo.play().catch(() => {}); // Autoplay when opened
-      } else {
-        dom.modalVideo.style.display = 'none';
-        dom.modalVideo.pause();
-        dom.modalVideo.src = '';
-        dom.modalImg.style.display = 'block';
-        dom.modalImg.src = f.objectURL || '';
-      }
-      
-      dom.modalName.textContent = f.name.split('/').pop() || '';
-      dom.modal.classList.add('open');
+      openFileModal(closest);
     }
   }
 });
@@ -1128,10 +1112,34 @@ dom.searchClearBtn.addEventListener('click', () => {
   scheduleRender();
 });
 
+const openFileModal = (index: number) => {
+  const f = state.files[index];
+  const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+  
+  if (VIDEO_EXTS.has(ext)) {
+    dom.modalImg.style.display = 'none';
+    dom.modalVideo.style.display = 'block';
+    dom.modalVideo.loop = state.settings.loopVideos;
+    dom.modalVideo.src = f.objectURL || '';
+    dom.modalVideo.play().catch(() => {}); // Autoplay when opened
+  } else {
+    dom.modalVideo.style.display = 'none';
+    dom.modalVideo.pause();
+    dom.modalVideo.src = '';
+    dom.modalImg.style.display = 'block';
+    dom.modalImg.src = f.objectURL || '';
+  }
+  
+  dom.modalName.textContent = f.name.split('/').pop() || '';
+  dom.modal.classList.add('open');
+  state.activeFileIndex = index;
+};
+
 const closeModal = () => {
   dom.modal.classList.remove('open');
   dom.modalVideo.pause();
   dom.modalVideo.src = '';
+  state.activeFileIndex = null;
 };
 
 dom.modalClose.addEventListener('click', closeModal);
@@ -1554,11 +1562,52 @@ function refreshDebugOverlay() {
   if (btn) debugOverlay.insertBefore(btn, debugOverlay.firstChild);
 }
 
+function getNextImageInDirection(currentIndex: number, direction: 'left' | 'right' | 'up' | 'down'): number {
+  if (state.points.length === 0) return currentIndex;
+
+  const indices = Array.from({ length: state.points.length }, (_, i) => i);
+  if (direction === 'left' || direction === 'right') {
+    indices.sort((a, b) => state.points[a][0] - state.points[b][0]);
+  } else {
+    // Canvas Y: 0 is top, increases downwards.
+    // Up means smaller Y. Down means larger Y.
+    indices.sort((a, b) => state.points[a][1] - state.points[b][1]);
+  }
+  
+  const pos = indices.indexOf(currentIndex);
+  if (pos === -1) return currentIndex;
+  
+  if (direction === 'left' || direction === 'up') {
+    return indices[(pos - 1 + indices.length) % indices.length];
+  } else {
+    return indices[(pos + 1) % indices.length];
+  }
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === '`') {
     const open = debugOverlay.style.display === 'none';
     debugOverlay.style.display = open ? 'block' : 'none';
     if (open) refreshDebugOverlay();
+  } else if (state.activeFileIndex !== null) {
+    if (e.key === 'Escape') {
+      closeModal();
+      return;
+    }
+
+    let dir: 'left' | 'right' | 'up' | 'down' | null = null;
+    if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') dir = 'left';
+    else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') dir = 'right';
+    else if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') dir = 'up';
+    else if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') dir = 'down';
+
+    if (dir) {
+      e.preventDefault();
+      const nextIndex = getNextImageInDirection(state.activeFileIndex, dir);
+      if (nextIndex !== state.activeFileIndex) {
+        openFileModal(nextIndex);
+      }
+    }
   }
 });
 
