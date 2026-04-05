@@ -54,6 +54,7 @@ export interface AppState {
   settings: Settings;
   hnsw?: any;
   activeFileIndex: number | null;
+  lastViewedIndex: number | null;
 }
 
 /** DOM element references */

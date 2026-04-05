@@ -148,6 +148,7 @@ const state: AppState = {
   searchScores: null,
   settings,
   activeFileIndex: null,
+  lastViewedIndex: null,
 };
 
 // ── Camera (infinite canvas) ─────────────────────────────────────────────────
@@ -496,6 +497,7 @@ function resetAll() {
   state.searchScores = null;
   state.hnsw = undefined;
   state.activeFileIndex = null;
+  state.lastViewedIndex = null;
   localStorage.removeItem('po_fileKeys');
   localStorage.removeItem('po_umapPoints');
   localStorage.removeItem('po_clusters');
@@ -541,6 +543,18 @@ function render() {
   const useFull = drawSize > FULL_LOD_SIZE;
   const drawnFull = useFull ? new Set<number>() : null;
 
+  // Find index closest to center for highlighting if nothing viewed yet
+  let currentActive = state.lastViewedIndex;
+  if (currentActive === null && pts.length > 0) {
+    let minD = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = pts[i][0] - camera.x;
+      const dy = pts[i][1] - camera.y;
+      const d = dx * dx + dy * dy;
+      if (d < minD) { minD = d; currentActive = i; }
+    }
+  }
+
   // Frustum culling and visible list
   const visibleIndices: number[] = [];
   for (let i = 0; i < pts.length; i++) {
@@ -564,7 +578,7 @@ function render() {
       }
       // Then by distance to camera center
       const da = (pts[a][0] - camera.x)**2 + (pts[a][1] - camera.y)**2;
-      const db = (pts[b][0] - camera.x)**2 + (pts[b][1] - camera.y)**2;
+      const db = (pts[b][1] - camera.y)**2 + (pts[b][1] - camera.y)**2;
       return da - db;
     });
     visibleIndices.length = budget;
@@ -576,6 +590,8 @@ function render() {
 
     let alphaMultiplier = 1.0;
     let highlightBorder = null;
+    let isSelected = i === currentActive;
+
     if (state.searchResults) {
       const r = rank[i];
       if (r < 20) {
@@ -586,6 +602,11 @@ function render() {
       } else {
         alphaMultiplier = 0.1;
       }
+    }
+
+    if (isSelected) {
+      highlightBorder = '#fff';
+      alphaMultiplier = 1.0;
     }
 
     const clr = highlightBorder ?? (state.clusters?.length ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length] : '#6b7280');
@@ -612,7 +633,7 @@ function render() {
         ctx.drawImage(fullImg, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
-        ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
+        ctx.lineWidth = isSelected ? Math.max(3, 4 * Math.min(s, 1)) : Math.max(1.5, 2 * Math.min(s, 1));
         ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
         drawn = true;
       }
@@ -629,16 +650,21 @@ function render() {
         ctx.drawImage(thumb, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
-        ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
+        ctx.lineWidth = isSelected ? Math.max(3, 4 * Math.min(s, 1)) : Math.max(1.5, 2 * Math.min(s, 1));
         ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
       } else {
-        const r = Math.max(3, half * 0.3);
+        const r = isSelected ? Math.max(5, half * 0.4) : Math.max(3, half * 0.3);
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fillStyle = clr;
         ctx.globalAlpha = 0.8;
         ctx.fill();
         ctx.globalAlpha = 1;
+        if (isSelected) {
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
       }
     }
   }
@@ -1140,6 +1166,15 @@ const openFileModal = (index: number) => {
   dom.modalName.textContent = f.name.split('/').pop() || '';
   dom.modal.classList.add('open');
   state.activeFileIndex = index;
+  state.lastViewedIndex = index;
+
+  // Center camera on the active image
+  const pt = state.points[index];
+  if (pt) {
+    camera.x = pt[0];
+    camera.y = pt[1];
+    scheduleRender();
+  }
 };
 
 const closeModal = () => {
