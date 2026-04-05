@@ -1016,6 +1016,7 @@ dom.canvas.addEventListener('pointermove', (e) => {
     dragMoved += Math.abs(dx) + Math.abs(dy);
     camera.x -= dx / camera.scale;
     camera.y -= dy / camera.scale;
+    state.lastViewedIndex = null;
     scheduleRender();
   } else if (pointers.size === 2) {
     const pts = [...pointers.values()];
@@ -1032,6 +1033,7 @@ dom.canvas.addEventListener('pointermove', (e) => {
       camera.x += px / camera.scale - px / (camera.scale * ratio);
       camera.y += py / camera.scale - py / (camera.scale * ratio);
       camera.scale = Math.max(0.05, Math.min(20, camera.scale * ratio));
+      state.lastViewedIndex = null;
       scheduleRender();
     }
     lastPinchDist = dist;
@@ -1075,6 +1077,7 @@ dom.canvas.addEventListener('wheel', (e) => {
   camera.x += px / camera.scale - px / (camera.scale * factor);
   camera.y += py / camera.scale - py / (camera.scale * factor);
   camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor));
+  state.lastViewedIndex = null;
   scheduleRender();
 }, { passive: false });
 
@@ -1594,26 +1597,58 @@ function navigateModal(dir: 'left' | 'right' | 'up' | 'down') {
   }
 }
 
+function navigateCanvas(dir: 'left' | 'right' | 'up' | 'down') {
+  const pts = state.points;
+  if (!pts.length) return;
+
+  let startIndex = state.lastViewedIndex;
+  if (startIndex === null) {
+    let minD = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = pts[i][0] - camera.x;
+      const dy = pts[i][1] - camera.y;
+      const d = dx * dx + dy * dy;
+      if (d < minD) { minD = d; startIndex = i; }
+    }
+  }
+
+  if (startIndex === null) return;
+
+  const nextIndex = getNextImageInDirection(startIndex, pts, dir);
+  if (nextIndex !== startIndex) {
+    state.lastViewedIndex = nextIndex;
+    camera.x = pts[nextIndex][0];
+    camera.y = pts[nextIndex][1];
+    scheduleRender();
+  }
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === '`') {
     const open = debugOverlay.style.display === 'none';
     debugOverlay.style.display = open ? 'block' : 'none';
     if (open) refreshDebugOverlay();
-  } else if (state.activeFileIndex !== null) {
-    if (e.key === 'Escape') {
-      closeModal();
-      return;
-    }
+    return;
+  }
+  
+  if (state.activeFileIndex !== null && e.key === 'Escape') {
+    closeModal();
+    return;
+  }
 
-    let dir: 'left' | 'right' | 'up' | 'down' | null = null;
-    if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') dir = 'left';
-    else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') dir = 'right';
-    else if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') dir = 'up';
-    else if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') dir = 'down';
+  let dir: 'left' | 'right' | 'up' | 'down' | null = null;
+  if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') dir = 'left';
+  else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') dir = 'right';
+  else if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') dir = 'up';
+  else if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') dir = 'down';
 
-    if (dir) {
+  if (dir) {
+    if (state.activeFileIndex !== null) {
       e.preventDefault();
       navigateModal(dir);
+    } else if (state.phase === 'done' && document.activeElement?.tagName !== 'INPUT') {
+      e.preventDefault();
+      navigateCanvas(dir);
     }
   }
 });
