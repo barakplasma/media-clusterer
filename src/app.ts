@@ -16,6 +16,8 @@ import {
   cachePutBatch,
   cacheStats,
 } from './db';
+import { getNextImageInDirection } from './spatial';
+import { computeOptimalBatchSize } from './hardware';
 import type {
   AppState,
   Camera,
@@ -101,26 +103,6 @@ const dom: DOMElements = {
 
   // ── Constants ────────────────────────────────────────────────────────────────
 // ── Auto batch size ───────────────────────────────────────────────────────────
-function computeOptimalBatchSize(avgFileSizeBytes = 2 * 1024 * 1024): number {
-  // Estimate available memory headroom
-  const deviceMemoryGB: number = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 2;
-
-  // Chrome-only: use live heap headroom if available
-  const perfMem = (performance as Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number } }).memory;
-  const headroomBytes = perfMem
-    ? Math.max(0, perfMem.jsHeapSizeLimit - perfMem.usedJSHeapSize)
-    : deviceMemoryGB * 0.3 * 1024 * 1024 * 1024; // assume 30% of device RAM usable
-
-  // Apply a 20% safety margin to the available headroom
-  const safeHeadroomBytes = headroomBytes * 0.8;
-
-  // ViT-B/16: 197 patches × 768 dims × 12 layers × 4 attention tensors × 4 bytes × 3× safety margin
-  const vitActivationsPerImage = 197 * 768 * 12 * 4 * 4 * 3; // ~87MB
-  const bytesPerImageInference = Math.max(avgFileSizeBytes * 0.5, vitActivationsPerImage);
-
-  const optimal = Math.floor(safeHeadroomBytes / bytesPerImageInference);
-  return Math.max(1, optimal);
-}
 
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
@@ -1604,75 +1586,9 @@ function refreshDebugOverlay() {
   if (btn) debugOverlay.insertBefore(btn, debugOverlay.firstChild);
 }
 
-function getNextImageInDirection(currentIndex: number, direction: 'left' | 'right' | 'up' | 'down'): number {
-  const pts = state.points;
-  if (pts.length <= 1) return currentIndex;
-
-  const cur = pts[currentIndex];
-  let dx = 0, dy = 0;
-  if (direction === 'left') dx = -1;
-  else if (direction === 'right') dx = 1;
-  else if (direction === 'up') dy = -1;
-  else if (direction === 'down') dy = 1;
-
-  let bestIdx = -1;
-  let minCost = Infinity;
-
-  // 1. Find the nearest neighbor that lies in the requested direction
-  for (let i = 0; i < pts.length; i++) {
-    if (i === currentIndex) continue;
-    const p = pts[i];
-    const vx = p[0] - cur[0];
-    const vy = p[1] - cur[1];
-    
-    // Projection of V onto the direction vector D
-    const proj = vx * dx + vy * dy;
-    // Orthogonal distance from the direction vector D
-    const orth = Math.abs(vx * dy - vy * dx);
-
-    // Only consider points strictly in the forward half-plane
-    if (proj > 0) {
-      // Cost: squared distance, but heavily penalize orthogonal drift
-      // so it prefers moving in a straight line over a closer diagonal point
-      const cost = proj * proj + orth * orth * 3;
-      if (cost < minCost) {
-        minCost = cost;
-        bestIdx = i;
-      }
-    }
-  }
-
-  if (bestIdx !== -1) {
-    return bestIdx;
-  }
-
-  // 2. Wrap around: if at the edge, find the point furthest in the OPPOSITE direction
-  let wrapIdx = -1;
-  let minWrapScore = Infinity;
-  for (let i = 0; i < pts.length; i++) {
-    if (i === currentIndex) continue;
-    const p = pts[i];
-    const vx = p[0] - cur[0];
-    const vy = p[1] - cur[1];
-    
-    const proj = vx * dx + vy * dy;
-    const orth = Math.abs(vx * dy - vy * dx);
-
-    // We want the most negative projection (furthest backward). 
-    // We add an orthogonal penalty so it wraps to the same visual "row/column"
-    const score = proj + orth * 2; 
-    if (score < minWrapScore) {
-      minWrapScore = score;
-      wrapIdx = i;
-    }
-  }
-
-  return wrapIdx !== -1 ? wrapIdx : currentIndex;
-}
-
 function navigateModal(dir: 'left' | 'right' | 'up' | 'down') {
   if (state.activeFileIndex === null) return;
-  const nextIndex = getNextImageInDirection(state.activeFileIndex, dir);
+  const nextIndex = getNextImageInDirection(state.activeFileIndex, state.points, dir);
   if (nextIndex !== state.activeFileIndex) {
     openFileModal(nextIndex);
   }
