@@ -281,6 +281,35 @@
 
     #modal.open { display: flex; animation: fadeIn 0.2s ease-out; }
 
+    .modal-nav-btn {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 50%;
+      width: 44px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      cursor: pointer;
+      z-index: 10;
+      transition: background 0.2s, transform 0.1s;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .modal-nav-btn:hover { background: rgba(0, 0, 0, 0.8); }
+    .modal-nav-btn:active { transform: scale(0.9); }
+    #modal-nav-left { left: -16px; top: 50%; transform: translateY(-50%); }
+    #modal-nav-right { right: -16px; top: 50%; transform: translateY(-50%); }
+    #modal-nav-up { top: -16px; left: 50%; transform: translateX(-50%); }
+    #modal-nav-down { bottom: 20px; left: 50%; transform: translateX(-50%); }
+    #modal-nav-left:active { transform: translateY(-50%) scale(0.9); }
+    #modal-nav-right:active { transform: translateY(-50%) scale(0.9); }
+    #modal-nav-up:active { transform: translateX(-50%) scale(0.9); }
+    #modal-nav-down:active { transform: translateX(-50%) scale(0.9); }
+
     @keyframes fadeIn {
       from { opacity: 0; }
       to { opacity: 1; }
@@ -484,6 +513,10 @@
 
 <div id="modal">
   <div id="modal-content">
+    <button id="modal-nav-up" class="modal-nav-btn" title="Up">▲</button>
+    <button id="modal-nav-left" class="modal-nav-btn" title="Left">◀</button>
+    <button id="modal-nav-right" class="modal-nav-btn" title="Right">▶</button>
+    <button id="modal-nav-down" class="modal-nav-btn" title="Down">▼</button>
     <button id="modal-close" title="Close">✕</button>
     <img id="modal-img" alt="Full view">
     <video id="modal-video" controls loop style="max-width: 100%; max-height: calc(98dvh - 60px); display: none; background: #000; border-radius: 12px 12px 0 0;"></video>

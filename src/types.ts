@@ -68,6 +68,10 @@ export interface DOMElements {
   canvas: HTMLCanvasElement;
   modal: HTMLDivElement;
   modalClose: HTMLButtonElement;
+  modalNavLeft: HTMLButtonElement;
+  modalNavRight: HTMLButtonElement;
+  modalNavUp: HTMLButtonElement;
+  modalNavDown: HTMLButtonElement;
   modalImg: HTMLImageElement;
   modalVideo: HTMLVideoElement;
   modalName: HTMLDivElement;

@@ -62,6 +62,10 @@ const dom: DOMElements = {
   canvas: document.getElementById('canvas') as HTMLCanvasElement,
   modal: document.getElementById('modal') as HTMLDivElement,
   modalClose: document.getElementById('modal-close') as HTMLButtonElement,
+  modalNavLeft: document.getElementById('modal-nav-left') as HTMLButtonElement,
+  modalNavRight: document.getElementById('modal-nav-right') as HTMLButtonElement,
+  modalNavUp: document.getElementById('modal-nav-up') as HTMLButtonElement,
+  modalNavDown: document.getElementById('modal-nav-down') as HTMLButtonElement,
   modalImg: document.getElementById('modal-img') as HTMLImageElement,
   modalVideo: document.getElementById('modal-video') as HTMLVideoElement,
   modalName: document.getElementById('modal-name') as HTMLDivElement,
@@ -1584,6 +1588,14 @@ function getNextImageInDirection(currentIndex: number, direction: 'left' | 'righ
   }
 }
 
+function navigateModal(dir: 'left' | 'right' | 'up' | 'down') {
+  if (state.activeFileIndex === null) return;
+  const nextIndex = getNextImageInDirection(state.activeFileIndex, dir);
+  if (nextIndex !== state.activeFileIndex) {
+    openFileModal(nextIndex);
+  }
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === '`') {
     const open = debugOverlay.style.display === 'none';
@@ -1603,13 +1615,15 @@ document.addEventListener('keydown', (e) => {
 
     if (dir) {
       e.preventDefault();
-      const nextIndex = getNextImageInDirection(state.activeFileIndex, dir);
-      if (nextIndex !== state.activeFileIndex) {
-        openFileModal(nextIndex);
-      }
+      navigateModal(dir);
     }
   }
 });
+
+dom.modalNavLeft.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('left'); });
+dom.modalNavRight.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('right'); });
+dom.modalNavUp.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('up'); });
+dom.modalNavDown.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('down'); });
 
 const debugCopyBtn = document.getElementById('debug-copy-btn') as HTMLButtonElement;
 debugCopyBtn.addEventListener('click', async () => {
