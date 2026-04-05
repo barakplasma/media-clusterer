@@ -111,11 +111,14 @@ function computeOptimalBatchSize(avgFileSizeBytes = 2 * 1024 * 1024): number {
     ? Math.max(0, perfMem.jsHeapSizeLimit - perfMem.usedJSHeapSize)
     : deviceMemoryGB * 0.3 * 1024 * 1024 * 1024; // assume 30% of device RAM usable
 
+  // Apply a 20% safety margin to the available headroom
+  const safeHeadroomBytes = headroomBytes * 0.8;
+
   // ViT-B/16: 197 patches × 768 dims × 12 layers × 4 attention tensors × 4 bytes × 3× safety margin
   const vitActivationsPerImage = 197 * 768 * 12 * 4 * 4 * 3; // ~87MB
   const bytesPerImageInference = Math.max(avgFileSizeBytes * 0.5, vitActivationsPerImage);
 
-  const optimal = Math.floor(headroomBytes / bytesPerImageInference);
+  const optimal = Math.floor(safeHeadroomBytes / bytesPerImageInference);
   return Math.max(1, optimal);
 }
 
