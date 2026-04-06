@@ -530,46 +530,32 @@
     
     <div class="about-section">
       <h2>📸 🎥 Media Clusterer</h2>
-      <p>A private-by-design media explorer. Everything runs locally — no images, videos, or data ever leave your device.</p>
+      <p>Visualize and search your photos & videos locally using AI. Everything runs in-browser — zero uploads, zero server.</p>
     </div>
 
     <div class="about-section">
-      <h2>🧠 How it Works</h2>
-      <p>AI models run directly in your browser via <strong>WebGPU</strong> and <strong>Transformers.js</strong>:</p>
-      <ul>
-        <li><strong>Nomic-Embed-Vision</strong> — generates 768-dim vectors for every image/video frame, in batches for speed.</li>
-        <li><strong>UMAP / t-SNE / PCA</strong> (and more) — projects high-dimensional vectors onto the 2D canvas.</li>
-        <li><strong>HNSW index</strong> — fast approximate nearest-neighbour search powers semantic text queries.</li>
-        <li><strong>Nomic-Embed-Text</strong> — optional 134MB model for natural language search (enable in Settings).</li>
+      <h2>🧠 Built With</h2>
+      <ul style="list-style: none; padding: 0;">
+        <li>🤖 <a href="https://github.com/xenova/transformers.js" target="_blank" style="color: var(--primary); text-decoration: none;">Transformers.js</a> & <a href="https://www.nomic.ai/" target="_blank" style="color: var(--primary); text-decoration: none;">Nomic Embed</a> for AI</li>
+        <li>📊 <a href="https://github.com/saehm/DruidJS" target="_blank" style="color: var(--primary); text-decoration: none;">DruidJS</a> for projections (UMAP, t-SNE, PCA, etc.)</li>
+        <li>⚡ WebGPU for GPU acceleration</li>
+        <li>💾 IndexedDB for instant caching</li>
       </ul>
     </div>
 
     <div class="about-section">
-      <h2>⚡ Performance</h2>
-      <ul>
-        <li>Embeddings cached in <strong>IndexedDB</strong> — reload a folder instantly without re-running the model.</li>
-        <li>Batch size is configurable in Settings — higher values are faster but use more memory.</li>
-        <li>Resume button restores your last session without re-embedding.</li>
+      <h2>🖱️ Controls</h2>
+      <ul style="list-style: none; padding: 0;">
+        <li><strong>Pan:</strong> Click & drag • <strong>Zoom:</strong> Scroll/pinch</li>
+        <li><strong>Search:</strong> Type a description (requires text model)</li>
+        <li><strong>Resume:</strong> Reload your last session</li>
       </ul>
     </div>
 
-    <div class="about-section">
-      <h2>🛡️ Privacy</h2>
-      <p>Zero tracking. Zero uploads. Your folder stays local. AI models are cached in your browser for offline use.</p>
-    </div>
-
-    <div class="about-section">
-      <h2>🖱️ Navigation</h2>
-      <ul>
-        <li><strong>Pan:</strong> Click and drag.</li>
-        <li><strong>Zoom:</strong> Scroll wheel or pinch.</li>
-        <li><strong>Open:</strong> Tap any thumbnail.</li>
-        <li><strong>Search:</strong> Type a description (requires text model).</li>
-      </ul>
-    </div>
-
-    <div style="text-align: center; margin-top: 16px;">
-      <p style="font-size: 12px; color: var(--text-dim);">Media Clusterer • Built with ❤️ for Privacy</p>
+    <div style="text-align: center; margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px;">
+      <p style="font-size: 12px; color: var(--text-dim); margin-bottom: 8px;">
+        <a href="https://github.com/barakplasma/media-clusterer" target="_blank" style="color: var(--primary); text-decoration: none;">Source Code</a> • Built with ❤️ for Privacy
+      </p>
     </div>
   </div>
 </div>
