@@ -52,6 +52,55 @@ const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
 
+// ── Demo Images (Wikimedia Commons, CC-licensed) ──────────────────────────────
+interface DemoImage {
+  name: string;
+  url: string;
+}
+
+const DEMO_URLS: DemoImage[] = [
+  // Dogs (3)
+  { name: 'dog-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/34/Labrador_on_Quantock_%282175262184%29.jpg/640px-Labrador_on_Quantock_%282175262184%29.jpg' },
+  { name: 'dog-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/71/2-Brittany_Spaniel.jpg/640px-2-Brittany_Spaniel.jpg' },
+  { name: 'dog-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/YellowLabradorLooking_new.jpg/640px-YellowLabradorLooking_new.jpg' },
+  // Cats (3)
+  { name: 'cat-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg' },
+  { name: 'cat-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0b/FemaleLionAndHerCub.jpg/640px-FemaleLionAndHerCub.jpg' },
+  { name: 'cat-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b1/Felis_catus-cat_on_snow.jpg/640px-Felis_catus-cat_on_snow.jpg' },
+  // Horses (3)
+  { name: 'horse-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Appaloosa_foals.jpg/640px-Appaloosa_foals.jpg' },
+  { name: 'horse-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Nokota_Horses.jpg/640px-Nokota_Horses.jpg' },
+  { name: 'horse-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Horse_in_field.jpg/640px-Horse_in_field.jpg' },
+  // Butterflies (3)
+  { name: 'butterfly-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b1/Monarch_In_Central_Park.jpg/640px-Monarch_In_Central_Park.jpg' },
+  { name: 'butterfly-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/97/Papilio_machaon_old_world_swallowtail_butterfly.jpg/640px-Papilio_machaon_old_world_swallowtail_butterfly.jpg' },
+  { name: 'butterfly-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/640px-Camponotus_flavomarginatus_ant.jpg' },
+  // Spiders (3)
+  { name: 'spider-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/14/Gasteracantha_cancriformis00.jpg/640px-Gasteracantha_cancriformis00.jpg' },
+  { name: 'spider-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Salticidae_jumping_spider.jpg/640px-Salticidae_jumping_spider.jpg' },
+  { name: 'spider-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0c/Araneus_diadematus_-_Cropped.jpg/640px-Araneus_diadematus_-_Cropped.jpg' },
+  // Chickens (3)
+  { name: 'chicken-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Cock_001.jpg/640px-Cock_001.jpg' },
+  { name: 'chicken-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Haushuhn.jpg/640px-Haushuhn.jpg' },
+  { name: 'chicken-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f7/Coop_fryer.jpg/640px-Coop_fryer.jpg' },
+  // Elephants (3)
+  { name: 'elephant-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/04/Elephant_near_water_hole_%28Namibia%29.jpg/640px-Elephant_near_water_hole_%28Namibia%29.jpg' },
+  { name: 'elephant-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/African_Bush_Elephant.jpg/640px-African_Bush_Elephant.jpg' },
+  { name: 'elephant-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Elephants_Tarangire.jpg/640px-Elephants_Tarangire.jpg' },
+  // Sheep (3)
+  { name: 'sheep-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e4/Ovis_orientalis_aries_3.jpg/640px-Ovis_orientalis_aries_3.jpg' },
+  { name: 'sheep-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Sheep_female_black.jpg/640px-Sheep_female_black.jpg' },
+  { name: 'sheep-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Texel_ewe_2008.jpg/640px-Texel_ewe_2008.jpg' },
+  // Cows (3)
+  { name: 'cow-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/18/Cow_female_black_white.jpg/640px-Cow_female_black_white.jpg' },
+  { name: 'cow-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0c/Cow_female_brown.jpg/640px-Cow_female_brown.jpg' },
+  { name: 'cow-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/Cow_female_red.jpg/640px-Cow_female_red.jpg' },
+  // Squirrels (3)
+  { name: 'squirrel-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/640px-Camponotus_flavomarginatus_ant.jpg' },
+  { name: 'squirrel-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Sciurus_vulgaris_posing.jpg/640px-Sciurus_vulgaris_posing.jpg' },
+  { name: 'squirrel-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1c/Squirrel_posing.jpg/640px-Squirrel_posing.jpg' },
+];
+
 // ── DOM Elements ─────────────────────────────────────────────────────────────
 const dom: DOMElements = {
   loadModelBtn: document.getElementById('load-model-btn') as HTMLButtonElement,
@@ -93,6 +142,7 @@ const dom: DOMElements = {
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   headerResetBtn: document.getElementById('header-reset-btn') as HTMLButtonElement,
+  demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
@@ -214,6 +264,28 @@ async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
     }
   }
   await walk(dirHandle, '');
+  return files;
+}
+
+// ── Demo images loader ──────────────────────────────────────────────────────
+async function loadDemoImages(): Promise<PhotoFile[]> {
+  const files: PhotoFile[] = [];
+  for (const { name, url } of DEMO_URLS) {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const file = new File([blob], name, { type: blob.type });
+      files.push({
+        name,
+        size: file.size,
+        lastModified: Date.now(),
+        file,
+        objectURL: null
+      });
+    } catch (e) {
+      console.warn(`Failed to load demo image ${name}:`, e);
+    }
+  }
   return files;
 }
 
@@ -497,6 +569,7 @@ function resetAll() {
   dom.resumeBtn.disabled = true;
   dom.resumeBtn.classList.remove('primary');
   dom.openBtn.disabled = false;
+  dom.demoBtn.disabled = false;
   setProgress(0);
   setStatus('Cleared. Open a folder to start.');
   refreshCacheSize();
@@ -789,6 +862,7 @@ async function loadModel() {
   dom.loadModelBtn.hidden = true;
   dom.openBtn.disabled = false;
   dom.openBtn.classList.add('primary');
+  dom.demoBtn.disabled = false;
   if (!dom.resumeBtn.hidden) {
     dom.resumeBtn.disabled = false;
     dom.resumeBtn.classList.add('primary');
@@ -1379,6 +1453,12 @@ window.addEventListener('resize', () => {
 // ── Init ─────────────────────────────────────────────────────────────────────
 resizeCanvas();
 
+// Open about modal on first-ever visit
+if (!localStorage.getItem('mc_hasVisited')) {
+  localStorage.setItem('mc_hasVisited', 'true');
+  dom.aboutModal.classList.add('open');
+}
+
 const _savedKeys = localStorage.getItem('po_fileKeys');
 if (_savedKeys) {
   try {
@@ -1432,6 +1512,26 @@ dom.fileInput.addEventListener('change', async () => {
   }
 
   await processFiles(files);
+});
+
+dom.demoBtn.addEventListener('click', async () => {
+  setProgress(0);
+  setStatus('Fetching demo images…');
+  dom.demoBtn.disabled = true;
+
+  try {
+    const files = await loadDemoImages();
+    if (files.length > 0) {
+      await processFiles(files);
+    } else {
+      setStatus('Failed to load demo images');
+      dom.demoBtn.disabled = false;
+    }
+  } catch (e) {
+    console.error('Demo load error:', e);
+    setStatus('Error loading demo images');
+    dom.demoBtn.disabled = false;
+  }
 });
 
 dom.resumeBtn.addEventListener('click', async () => {

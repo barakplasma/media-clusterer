@@ -98,6 +98,7 @@ export interface DOMElements {
   bottomPanel: HTMLDivElement;
   headerRecenterBtn: HTMLButtonElement;
   headerResetBtn: HTMLButtonElement;
+  demoBtn: HTMLButtonElement;
 }
 
 /** IndexedDB cache entry */
