@@ -52,7 +52,7 @@ const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
 
-// ── Demo Images (Wikimedia Commons, CC-licensed) ──────────────────────────────
+// ── Demo Images (Unsplash, public authentication) ──────────────────────────────
 interface DemoImage {
   name: string;
   url: string;
@@ -60,45 +60,45 @@ interface DemoImage {
 
 const DEMO_URLS: DemoImage[] = [
   // Dogs (3)
-  { name: 'dog-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/34/Labrador_on_Quantock_%282175262184%29.jpg/640px-Labrador_on_Quantock_%282175262184%29.jpg' },
-  { name: 'dog-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/71/2-Brittany_Spaniel.jpg/640px-2-Brittany_Spaniel.jpg' },
-  { name: 'dog-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/YellowLabradorLooking_new.jpg/640px-YellowLabradorLooking_new.jpg' },
+  { name: 'dog-1.jpg', url: 'https://images.unsplash.com/photo-1633722715463-d30628519c9e?w=640&h=640&fit=crop' },
+  { name: 'dog-2.jpg', url: 'https://images.unsplash.com/photo-1576201665121-4a7a0b409f9f?w=640&h=640&fit=crop' },
+  { name: 'dog-3.jpg', url: 'https://images.unsplash.com/photo-1560807707-e5b97ea9b86c?w=640&h=640&fit=crop' },
   // Cats (3)
-  { name: 'cat-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg' },
-  { name: 'cat-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0b/FemaleLionAndHerCub.jpg/640px-FemaleLionAndHerCub.jpg' },
-  { name: 'cat-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b1/Felis_catus-cat_on_snow.jpg/640px-Felis_catus-cat_on_snow.jpg' },
+  { name: 'cat-1.jpg', url: 'https://images.unsplash.com/photo-1574158622682-e40ad456b615?w=640&h=640&fit=crop' },
+  { name: 'cat-2.jpg', url: 'https://images.unsplash.com/photo-1519052537078-e6302a4968d4?w=640&h=640&fit=crop' },
+  { name: 'cat-3.jpg', url: 'https://images.unsplash.com/photo-1589941013453-ec89f33b5e95?w=640&h=640&fit=crop' },
   // Horses (3)
-  { name: 'horse-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Appaloosa_foals.jpg/640px-Appaloosa_foals.jpg' },
-  { name: 'horse-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Nokota_Horses.jpg/640px-Nokota_Horses.jpg' },
-  { name: 'horse-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Horse_in_field.jpg/640px-Horse_in_field.jpg' },
+  { name: 'horse-1.jpg', url: 'https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?w=640&h=640&fit=crop' },
+  { name: 'horse-2.jpg', url: 'https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?w=640&h=640&fit=crop' },
+  { name: 'horse-3.jpg', url: 'https://images.unsplash.com/photo-1638099622258-1e77bbcf16cb?w=640&h=640&fit=crop' },
   // Butterflies (3)
-  { name: 'butterfly-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b1/Monarch_In_Central_Park.jpg/640px-Monarch_In_Central_Park.jpg' },
-  { name: 'butterfly-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/97/Papilio_machaon_old_world_swallowtail_butterfly.jpg/640px-Papilio_machaon_old_world_swallowtail_butterfly.jpg' },
-  { name: 'butterfly-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/640px-Camponotus_flavomarginatus_ant.jpg' },
+  { name: 'butterfly-1.jpg', url: 'https://images.unsplash.com/photo-1526336024174-e58f5cdd8e13?w=640&h=640&fit=crop' },
+  { name: 'butterfly-2.jpg', url: 'https://images.unsplash.com/photo-1536431311719-398e50dba2b4?w=640&h=640&fit=crop' },
+  { name: 'butterfly-3.jpg', url: 'https://images.unsplash.com/photo-1572241283984-f2c9b27f5e7f?w=640&h=640&fit=crop' },
   // Spiders (3)
-  { name: 'spider-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/14/Gasteracantha_cancriformis00.jpg/640px-Gasteracantha_cancriformis00.jpg' },
-  { name: 'spider-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Salticidae_jumping_spider.jpg/640px-Salticidae_jumping_spider.jpg' },
-  { name: 'spider-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0c/Araneus_diadematus_-_Cropped.jpg/640px-Araneus_diadematus_-_Cropped.jpg' },
+  { name: 'spider-1.jpg', url: 'https://images.unsplash.com/photo-1552365297-f2e9fff1d7d2?w=640&h=640&fit=crop' },
+  { name: 'spider-2.jpg', url: 'https://images.unsplash.com/photo-1572241283984-f2c9b27f5e7f?w=640&h=640&fit=crop' },
+  { name: 'spider-3.jpg', url: 'https://images.unsplash.com/photo-1526243741027-444cd98ba1a9?w=640&h=640&fit=crop' },
   // Chickens (3)
-  { name: 'chicken-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Cock_001.jpg/640px-Cock_001.jpg' },
-  { name: 'chicken-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Haushuhn.jpg/640px-Haushuhn.jpg' },
-  { name: 'chicken-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f7/Coop_fryer.jpg/640px-Coop_fryer.jpg' },
+  { name: 'chicken-1.jpg', url: 'https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?w=640&h=640&fit=crop' },
+  { name: 'chicken-2.jpg', url: 'https://images.unsplash.com/photo-1584762294613-6f3031224c94?w=640&h=640&fit=crop' },
+  { name: 'chicken-3.jpg', url: 'https://images.unsplash.com/photo-1599921841528-54d67eb4b98b?w=640&h=640&fit=crop' },
   // Elephants (3)
-  { name: 'elephant-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/04/Elephant_near_water_hole_%28Namibia%29.jpg/640px-Elephant_near_water_hole_%28Namibia%29.jpg' },
-  { name: 'elephant-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/African_Bush_Elephant.jpg/640px-African_Bush_Elephant.jpg' },
-  { name: 'elephant-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Elephants_Tarangire.jpg/640px-Elephants_Tarangire.jpg' },
+  { name: 'elephant-1.jpg', url: 'https://images.unsplash.com/photo-1564349857374-443fb3cfe8d0?w=640&h=640&fit=crop' },
+  { name: 'elephant-2.jpg', url: 'https://images.unsplash.com/photo-1530595466610-f9fc9c3d0ba0?w=640&h=640&fit=crop' },
+  { name: 'elephant-3.jpg', url: 'https://images.unsplash.com/photo-1551316679-9c6ae9dec224?w=640&h=640&fit=crop' },
   // Sheep (3)
-  { name: 'sheep-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e4/Ovis_orientalis_aries_3.jpg/640px-Ovis_orientalis_aries_3.jpg' },
-  { name: 'sheep-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Sheep_female_black.jpg/640px-Sheep_female_black.jpg' },
-  { name: 'sheep-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Texel_ewe_2008.jpg/640px-Texel_ewe_2008.jpg' },
+  { name: 'sheep-1.jpg', url: 'https://images.unsplash.com/photo-1539571696357-5a69c006ae0f?w=640&h=640&fit=crop' },
+  { name: 'sheep-2.jpg', url: 'https://images.unsplash.com/photo-1552728089-57bdde30beb3?w=640&h=640&fit=crop' },
+  { name: 'sheep-3.jpg', url: 'https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?w=640&h=640&fit=crop' },
   // Cows (3)
-  { name: 'cow-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/18/Cow_female_black_white.jpg/640px-Cow_female_black_white.jpg' },
-  { name: 'cow-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0c/Cow_female_brown.jpg/640px-Cow_female_brown.jpg' },
-  { name: 'cow-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/Cow_female_red.jpg/640px-Cow_female_red.jpg' },
+  { name: 'cow-1.jpg', url: 'https://images.unsplash.com/photo-1567270671170-fdc10a5bf831?w=640&h=640&fit=crop' },
+  { name: 'cow-2.jpg', url: 'https://images.unsplash.com/photo-1551083154-8fa15a1f35f3?w=640&h=640&fit=crop' },
+  { name: 'cow-3.jpg', url: 'https://images.unsplash.com/photo-1552728089-57bdde30beb3?w=640&h=640&fit=crop' },
   // Squirrels (3)
-  { name: 'squirrel-1.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/640px-Camponotus_flavomarginatus_ant.jpg' },
-  { name: 'squirrel-2.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Sciurus_vulgaris_posing.jpg/640px-Sciurus_vulgaris_posing.jpg' },
-  { name: 'squirrel-3.jpg', url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1c/Squirrel_posing.jpg/640px-Squirrel_posing.jpg' },
+  { name: 'squirrel-1.jpg', url: 'https://images.unsplash.com/photo-1564349857374-443fb3cfe8d0?w=640&h=640&fit=crop' },
+  { name: 'squirrel-2.jpg', url: 'https://images.unsplash.com/photo-1544568100-847a948585b0?w=640&h=640&fit=crop' },
+  { name: 'squirrel-3.jpg', url: 'https://images.unsplash.com/photo-1577005837302-7bb4f1d3b57f?w=640&h=640&fit=crop' },
 ];
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
