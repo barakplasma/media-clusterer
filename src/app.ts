@@ -52,6 +52,10 @@ const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
 
+// ── Demo Images (Unsplash API, public authentication) ──────────────────────────
+const UNSPLASH_ACCESS_KEY = 'IeS82UQjZMl96I9pVe3ag7hPn1UltJsR5xSt_orlAk8';
+const DEMO_CATEGORIES = ['dog', 'cat', 'horse', 'butterfly', 'spider', 'chicken', 'elephant', 'sheep', 'cow', 'squirrel'];
+
 // ── DOM Elements ─────────────────────────────────────────────────────────────
 const dom: DOMElements = {
   loadModelBtn: document.getElementById('load-model-btn') as HTMLButtonElement,
@@ -92,7 +96,7 @@ const dom: DOMElements = {
   batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
-  headerResetBtn: document.getElementById('header-reset-btn') as HTMLButtonElement,
+  demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
@@ -214,6 +218,50 @@ async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
     }
   }
   await walk(dirHandle, '');
+  return files;
+}
+
+// ── Demo images loader ──────────────────────────────────────────────────────
+async function loadDemoImages(): Promise<PhotoFile[]> {
+  const files: PhotoFile[] = [];
+
+  for (const category of DEMO_CATEGORIES) {
+    try {
+      // Fetch 3 random images from Unsplash for this category
+      const url = `https://api.unsplash.com/photos/random?client_id=${UNSPLASH_ACCESS_KEY}&query=${category}&count=3&orientation=landscape`;
+      const res = await fetch(url);
+
+      if (!res.ok) {
+        console.warn(`Unsplash API error for ${category}:`, res.status);
+        continue;
+      }
+
+      const photos = await res.json() as Array<{ id: string; urls: { regular: string } }>;
+
+      for (let i = 0; i < photos.length; i++) {
+        try {
+          const photoUrl = photos[i].urls.regular;
+          const imgRes = await fetch(photoUrl);
+          const blob = await imgRes.blob();
+          const name = `${category}-${i + 1}.jpg`;
+          const file = new File([blob], name, { type: 'image/jpeg' });
+
+          files.push({
+            name,
+            size: file.size,
+            lastModified: Date.now(),
+            file,
+            objectURL: null
+          });
+        } catch (e) {
+          console.warn(`Failed to load ${category} image ${i}:`, e);
+        }
+      }
+    } catch (e) {
+      console.warn(`Failed to fetch ${category} from Unsplash:`, e);
+    }
+  }
+
   return files;
 }
 
@@ -489,7 +537,6 @@ function resetAll() {
   dom.recenterBtn.disabled = true;
   dom.resetBtn.disabled = true;
   dom.headerRecenterBtn.disabled = true;
-  dom.headerResetBtn.disabled = true;
   dom.searchInput.disabled = true;
   dom.searchInput.value = '';
   dom.searchClearBtn.hidden = true;
@@ -497,6 +544,7 @@ function resetAll() {
   dom.resumeBtn.disabled = true;
   dom.resumeBtn.classList.remove('primary');
   dom.openBtn.disabled = false;
+  dom.demoBtn.disabled = false;
   setProgress(0);
   setStatus('Cleared. Open a folder to start.');
   refreshCacheSize();
@@ -789,6 +837,7 @@ async function loadModel() {
   dom.loadModelBtn.hidden = true;
   dom.openBtn.disabled = false;
   dom.openBtn.classList.add('primary');
+  dom.demoBtn.disabled = false;
   if (!dom.resumeBtn.hidden) {
     dom.resumeBtn.disabled = false;
     dom.resumeBtn.classList.add('primary');
@@ -951,7 +1000,6 @@ async function processFiles(files: PhotoFile[]) {
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.headerRecenterBtn.disabled = false;
-    dom.headerResetBtn.disabled = false;
     dom.searchInput.disabled = false;
 
     state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
@@ -1084,7 +1132,6 @@ dom.canvas.addEventListener('wheel', (e) => {
 dom.recenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
 dom.resetBtn.addEventListener('click', resetAll);
 dom.headerRecenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
-dom.headerResetBtn.addEventListener('click', resetAll);
 
 // ── Search input ─────────────────────────────────────────────────────────────
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -1379,6 +1426,12 @@ window.addEventListener('resize', () => {
 // ── Init ─────────────────────────────────────────────────────────────────────
 resizeCanvas();
 
+// Open about modal on first-ever visit
+if (!localStorage.getItem('mc_hasVisited')) {
+  localStorage.setItem('mc_hasVisited', 'true');
+  dom.aboutModal.classList.add('open');
+}
+
 const _savedKeys = localStorage.getItem('po_fileKeys');
 if (_savedKeys) {
   try {
@@ -1432,6 +1485,26 @@ dom.fileInput.addEventListener('change', async () => {
   }
 
   await processFiles(files);
+});
+
+dom.demoBtn.addEventListener('click', async () => {
+  setProgress(0);
+  setStatus('Fetching demo images…');
+  dom.demoBtn.disabled = true;
+
+  try {
+    const files = await loadDemoImages();
+    if (files.length > 0) {
+      await processFiles(files);
+    } else {
+      setStatus('Failed to load demo images');
+      dom.demoBtn.disabled = false;
+    }
+  } catch (e) {
+    console.error('Demo load error:', e);
+    setStatus('Error loading demo images');
+    dom.demoBtn.disabled = false;
+  }
 });
 
 dom.resumeBtn.addEventListener('click', async () => {
@@ -1507,7 +1580,6 @@ dom.resumeBtn.addEventListener('click', async () => {
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.headerRecenterBtn.disabled = false;
-    dom.headerResetBtn.disabled = false;
     dom.searchInput.disabled = false;
   } catch (err) {
     if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);

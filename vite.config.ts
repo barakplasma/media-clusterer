@@ -18,6 +18,9 @@ export default defineConfig({
     __GIT_BRANCH__: JSON.stringify(gitBranch),
     __GIT_COMMIT__: JSON.stringify(gitCommit),
   },
+  build: {
+    sourcemap: true,
+  },
   test: {
     globals: true,
     environment: 'jsdom',

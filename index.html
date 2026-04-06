@@ -475,11 +475,13 @@
     <button id="open-btn" disabled title="Only compatible media files will be processed">
       <span>📂</span> Open Media Folder
     </button>
+    <button id="demo-btn" disabled title="Load 30 sample animal photos">
+      <span>🐾</span> Try Demo
+    </button>
     <input type="file" id="file-input" multiple webkitdirectory accept="image/*,video/mp4,video/webm" hidden>
   </div>
   <div class="controls" id="header-controls" style="display: none; margin-top: 4px;">
-    <button id="header-recenter-btn" disabled title="Recenter View" style="flex: 1;">⌖</button>
-    <button id="header-reset-btn" disabled title="Reset All Data" style="flex: 1;">✕ Reset</button>
+    <button id="header-recenter-btn" disabled title="Recenter View" style="padding: 4px 8px; font-size: 12px;">⌖</button>
   </div>
   
   <div id="progress-wrap"><div id="progress-bar"></div></div>
@@ -549,6 +551,16 @@
         <li><strong>Pan:</strong> Click & drag • <strong>Zoom:</strong> Scroll/pinch</li>
         <li><strong>Search:</strong> Type a description (requires text model)</li>
         <li><strong>Resume:</strong> Reload your last session</li>
+      </ul>
+    </div>
+
+    <div class="about-section">
+      <h2>✅ Requirements</h2>
+      <ul style="list-style: none; padding: 0; font-size: 13px;">
+        <li>✓ Modern browser with <strong>WebGPU</strong> support (Chrome/Edge 113+)</li>
+        <li>✓ GPU with ≥4GB VRAM recommended</li>
+        <li>✓ ~380 MB for vision model + ~134 MB for text search (optional)</li>
+        <li>✓ Media formats: JPG, PNG, WebP, MP4, WebM</li>
       </ul>
     </div>
 
