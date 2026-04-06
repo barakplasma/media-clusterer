@@ -52,54 +52,9 @@ const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
 
-// ── Demo Images (Unsplash, public authentication) ──────────────────────────────
-interface DemoImage {
-  name: string;
-  url: string;
-}
-
-const DEMO_URLS: DemoImage[] = [
-  // Dogs (3)
-  { name: 'dog-1.jpg', url: 'https://images.unsplash.com/photo-1633722715463-d30628519c9e?w=640&h=640&fit=crop' },
-  { name: 'dog-2.jpg', url: 'https://images.unsplash.com/photo-1576201665121-4a7a0b409f9f?w=640&h=640&fit=crop' },
-  { name: 'dog-3.jpg', url: 'https://images.unsplash.com/photo-1560807707-e5b97ea9b86c?w=640&h=640&fit=crop' },
-  // Cats (3)
-  { name: 'cat-1.jpg', url: 'https://images.unsplash.com/photo-1574158622682-e40ad456b615?w=640&h=640&fit=crop' },
-  { name: 'cat-2.jpg', url: 'https://images.unsplash.com/photo-1519052537078-e6302a4968d4?w=640&h=640&fit=crop' },
-  { name: 'cat-3.jpg', url: 'https://images.unsplash.com/photo-1589941013453-ec89f33b5e95?w=640&h=640&fit=crop' },
-  // Horses (3)
-  { name: 'horse-1.jpg', url: 'https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?w=640&h=640&fit=crop' },
-  { name: 'horse-2.jpg', url: 'https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?w=640&h=640&fit=crop' },
-  { name: 'horse-3.jpg', url: 'https://images.unsplash.com/photo-1638099622258-1e77bbcf16cb?w=640&h=640&fit=crop' },
-  // Butterflies (3)
-  { name: 'butterfly-1.jpg', url: 'https://images.unsplash.com/photo-1526336024174-e58f5cdd8e13?w=640&h=640&fit=crop' },
-  { name: 'butterfly-2.jpg', url: 'https://images.unsplash.com/photo-1536431311719-398e50dba2b4?w=640&h=640&fit=crop' },
-  { name: 'butterfly-3.jpg', url: 'https://images.unsplash.com/photo-1572241283984-f2c9b27f5e7f?w=640&h=640&fit=crop' },
-  // Spiders (3)
-  { name: 'spider-1.jpg', url: 'https://images.unsplash.com/photo-1552365297-f2e9fff1d7d2?w=640&h=640&fit=crop' },
-  { name: 'spider-2.jpg', url: 'https://images.unsplash.com/photo-1572241283984-f2c9b27f5e7f?w=640&h=640&fit=crop' },
-  { name: 'spider-3.jpg', url: 'https://images.unsplash.com/photo-1526243741027-444cd98ba1a9?w=640&h=640&fit=crop' },
-  // Chickens (3)
-  { name: 'chicken-1.jpg', url: 'https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?w=640&h=640&fit=crop' },
-  { name: 'chicken-2.jpg', url: 'https://images.unsplash.com/photo-1584762294613-6f3031224c94?w=640&h=640&fit=crop' },
-  { name: 'chicken-3.jpg', url: 'https://images.unsplash.com/photo-1599921841528-54d67eb4b98b?w=640&h=640&fit=crop' },
-  // Elephants (3)
-  { name: 'elephant-1.jpg', url: 'https://images.unsplash.com/photo-1564349857374-443fb3cfe8d0?w=640&h=640&fit=crop' },
-  { name: 'elephant-2.jpg', url: 'https://images.unsplash.com/photo-1530595466610-f9fc9c3d0ba0?w=640&h=640&fit=crop' },
-  { name: 'elephant-3.jpg', url: 'https://images.unsplash.com/photo-1551316679-9c6ae9dec224?w=640&h=640&fit=crop' },
-  // Sheep (3)
-  { name: 'sheep-1.jpg', url: 'https://images.unsplash.com/photo-1539571696357-5a69c006ae0f?w=640&h=640&fit=crop' },
-  { name: 'sheep-2.jpg', url: 'https://images.unsplash.com/photo-1552728089-57bdde30beb3?w=640&h=640&fit=crop' },
-  { name: 'sheep-3.jpg', url: 'https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?w=640&h=640&fit=crop' },
-  // Cows (3)
-  { name: 'cow-1.jpg', url: 'https://images.unsplash.com/photo-1567270671170-fdc10a5bf831?w=640&h=640&fit=crop' },
-  { name: 'cow-2.jpg', url: 'https://images.unsplash.com/photo-1551083154-8fa15a1f35f3?w=640&h=640&fit=crop' },
-  { name: 'cow-3.jpg', url: 'https://images.unsplash.com/photo-1552728089-57bdde30beb3?w=640&h=640&fit=crop' },
-  // Squirrels (3)
-  { name: 'squirrel-1.jpg', url: 'https://images.unsplash.com/photo-1564349857374-443fb3cfe8d0?w=640&h=640&fit=crop' },
-  { name: 'squirrel-2.jpg', url: 'https://images.unsplash.com/photo-1544568100-847a948585b0?w=640&h=640&fit=crop' },
-  { name: 'squirrel-3.jpg', url: 'https://images.unsplash.com/photo-1577005837302-7bb4f1d3b57f?w=640&h=640&fit=crop' },
-];
+// ── Demo Images (Unsplash API, public authentication) ──────────────────────────
+const UNSPLASH_ACCESS_KEY = 'IeS82UQjZMl96I9pVe3ag7hPn1UltJsR5xSt_orlAk8';
+const DEMO_CATEGORIES = ['dog', 'cat', 'horse', 'butterfly', 'spider', 'chicken', 'elephant', 'sheep', 'cow', 'squirrel'];
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
 const dom: DOMElements = {
@@ -270,22 +225,44 @@ async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
 // ── Demo images loader ──────────────────────────────────────────────────────
 async function loadDemoImages(): Promise<PhotoFile[]> {
   const files: PhotoFile[] = [];
-  for (const { name, url } of DEMO_URLS) {
+
+  for (const category of DEMO_CATEGORIES) {
     try {
+      // Fetch 3 random images from Unsplash for this category
+      const url = `https://api.unsplash.com/photos/random?client_id=${UNSPLASH_ACCESS_KEY}&query=${category}&count=3&orientation=landscape`;
       const res = await fetch(url);
-      const blob = await res.blob();
-      const file = new File([blob], name, { type: blob.type });
-      files.push({
-        name,
-        size: file.size,
-        lastModified: Date.now(),
-        file,
-        objectURL: null
-      });
+
+      if (!res.ok) {
+        console.warn(`Unsplash API error for ${category}:`, res.status);
+        continue;
+      }
+
+      const photos = await res.json() as Array<{ id: string; urls: { regular: string } }>;
+
+      for (let i = 0; i < photos.length; i++) {
+        try {
+          const photoUrl = photos[i].urls.regular;
+          const imgRes = await fetch(photoUrl);
+          const blob = await imgRes.blob();
+          const name = `${category}-${i + 1}.jpg`;
+          const file = new File([blob], name, { type: 'image/jpeg' });
+
+          files.push({
+            name,
+            size: file.size,
+            lastModified: Date.now(),
+            file,
+            objectURL: null
+          });
+        } catch (e) {
+          console.warn(`Failed to load ${category} image ${i}:`, e);
+        }
+      }
     } catch (e) {
-      console.warn(`Failed to load demo image ${name}:`, e);
+      console.warn(`Failed to fetch ${category} from Unsplash:`, e);
     }
   }
+
   return files;
 }
 
