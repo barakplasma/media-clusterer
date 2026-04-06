@@ -53,6 +53,8 @@ export interface AppState {
   fileKeys?: string[];
   settings: Settings;
   hnsw?: any;
+  activeFileIndex: number | null;
+  lastViewedIndex: number | null;
 }
 
 /** DOM element references */
@@ -67,6 +69,10 @@ export interface DOMElements {
   canvas: HTMLCanvasElement;
   modal: HTMLDivElement;
   modalClose: HTMLButtonElement;
+  modalNavLeft: HTMLButtonElement;
+  modalNavRight: HTMLButtonElement;
+  modalNavUp: HTMLButtonElement;
+  modalNavDown: HTMLButtonElement;
   modalImg: HTMLImageElement;
   modalVideo: HTMLVideoElement;
   modalName: HTMLDivElement;

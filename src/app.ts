@@ -16,6 +16,8 @@ import {
   cachePutBatch,
   cacheStats,
 } from './db';
+import { getNextImageInDirection } from './spatial';
+import { computeOptimalBatchSize } from './hardware';
 import type {
   AppState,
   Camera,
@@ -62,6 +64,10 @@ const dom: DOMElements = {
   canvas: document.getElementById('canvas') as HTMLCanvasElement,
   modal: document.getElementById('modal') as HTMLDivElement,
   modalClose: document.getElementById('modal-close') as HTMLButtonElement,
+  modalNavLeft: document.getElementById('modal-nav-left') as HTMLButtonElement,
+  modalNavRight: document.getElementById('modal-nav-right') as HTMLButtonElement,
+  modalNavUp: document.getElementById('modal-nav-up') as HTMLButtonElement,
+  modalNavDown: document.getElementById('modal-nav-down') as HTMLButtonElement,
   modalImg: document.getElementById('modal-img') as HTMLImageElement,
   modalVideo: document.getElementById('modal-video') as HTMLVideoElement,
   modalName: document.getElementById('modal-name') as HTMLDivElement,
@@ -97,23 +103,6 @@ const dom: DOMElements = {
 
   // ── Constants ────────────────────────────────────────────────────────────────
 // ── Auto batch size ───────────────────────────────────────────────────────────
-function computeOptimalBatchSize(avgFileSizeBytes = 2 * 1024 * 1024): number {
-  // Estimate available memory headroom
-  const deviceMemoryGB: number = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 2;
-
-  // Chrome-only: use live heap headroom if available
-  const perfMem = (performance as Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number } }).memory;
-  const headroomBytes = perfMem
-    ? Math.max(0, perfMem.jsHeapSizeLimit - perfMem.usedJSHeapSize)
-    : deviceMemoryGB * 0.3 * 1024 * 1024 * 1024; // assume 30% of device RAM usable
-
-  // ViT-B/16: 197 patches × 768 dims × 12 layers × 4 attention tensors × 4 bytes × 3× safety margin
-  const vitActivationsPerImage = 197 * 768 * 12 * 4 * 4 * 3; // ~87MB
-  const bytesPerImageInference = Math.max(avgFileSizeBytes * 0.5, vitActivationsPerImage);
-
-  const optimal = Math.floor(headroomBytes / bytesPerImageInference);
-  return Math.max(1, optimal);
-}
 
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
@@ -140,6 +129,8 @@ const state: AppState = {
   searchQuery: '',
   searchScores: null,
   settings,
+  activeFileIndex: null,
+  lastViewedIndex: null,
 };
 
 // ── Camera (infinite canvas) ─────────────────────────────────────────────────
@@ -487,6 +478,8 @@ function resetAll() {
   state.searchQuery = '';
   state.searchScores = null;
   state.hnsw = undefined;
+  state.activeFileIndex = null;
+  state.lastViewedIndex = null;
   localStorage.removeItem('po_fileKeys');
   localStorage.removeItem('po_umapPoints');
   localStorage.removeItem('po_clusters');
@@ -532,6 +525,18 @@ function render() {
   const useFull = drawSize > FULL_LOD_SIZE;
   const drawnFull = useFull ? new Set<number>() : null;
 
+  // Find index closest to center for highlighting if nothing viewed yet
+  let currentActive = state.lastViewedIndex;
+  if (currentActive === null && pts.length > 0) {
+    let minD = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = pts[i][0] - camera.x;
+      const dy = pts[i][1] - camera.y;
+      const d = dx * dx + dy * dy;
+      if (d < minD) { minD = d; currentActive = i; }
+    }
+  }
+
   // Frustum culling and visible list
   const visibleIndices: number[] = [];
   for (let i = 0; i < pts.length; i++) {
@@ -555,7 +560,7 @@ function render() {
       }
       // Then by distance to camera center
       const da = (pts[a][0] - camera.x)**2 + (pts[a][1] - camera.y)**2;
-      const db = (pts[b][0] - camera.x)**2 + (pts[b][1] - camera.y)**2;
+      const db = (pts[b][1] - camera.y)**2 + (pts[b][1] - camera.y)**2;
       return da - db;
     });
     visibleIndices.length = budget;
@@ -567,6 +572,8 @@ function render() {
 
     let alphaMultiplier = 1.0;
     let highlightBorder = null;
+    let isSelected = i === currentActive;
+
     if (state.searchResults) {
       const r = rank[i];
       if (r < 20) {
@@ -577,6 +584,11 @@ function render() {
       } else {
         alphaMultiplier = 0.1;
       }
+    }
+
+    if (isSelected) {
+      highlightBorder = '#fff';
+      alphaMultiplier = 1.0;
     }
 
     const clr = highlightBorder ?? (state.clusters?.length ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length] : '#6b7280');
@@ -603,7 +615,7 @@ function render() {
         ctx.drawImage(fullImg, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
-        ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
+        ctx.lineWidth = isSelected ? Math.max(3, 4 * Math.min(s, 1)) : Math.max(1.5, 2 * Math.min(s, 1));
         ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
         drawn = true;
       }
@@ -620,16 +632,21 @@ function render() {
         ctx.drawImage(thumb, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
-        ctx.lineWidth = Math.max(1.5, 2 * Math.min(s, 1));
+        ctx.lineWidth = isSelected ? Math.max(3, 4 * Math.min(s, 1)) : Math.max(1.5, 2 * Math.min(s, 1));
         ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
       } else {
-        const r = Math.max(3, half * 0.3);
+        const r = isSelected ? Math.max(5, half * 0.4) : Math.max(3, half * 0.3);
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fillStyle = clr;
         ctx.globalAlpha = 0.8;
         ctx.fill();
         ctx.globalAlpha = 1;
+        if (isSelected) {
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
       }
     }
   }
@@ -999,6 +1016,7 @@ dom.canvas.addEventListener('pointermove', (e) => {
     dragMoved += Math.abs(dx) + Math.abs(dy);
     camera.x -= dx / camera.scale;
     camera.y -= dy / camera.scale;
+    state.lastViewedIndex = null;
     scheduleRender();
   } else if (pointers.size === 2) {
     const pts = [...pointers.values()];
@@ -1015,6 +1033,7 @@ dom.canvas.addEventListener('pointermove', (e) => {
       camera.x += px / camera.scale - px / (camera.scale * ratio);
       camera.y += py / camera.scale - py / (camera.scale * ratio);
       camera.scale = Math.max(0.05, Math.min(20, camera.scale * ratio));
+      state.lastViewedIndex = null;
       scheduleRender();
     }
     lastPinchDist = dist;
@@ -1039,25 +1058,7 @@ dom.canvas.addEventListener('pointerup', (e) => {
       if (d < minD) { minD = d; closest = i; }
     }
     if (closest >= 0) {
-      const f = state.files[closest];
-      const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-      
-      if (VIDEO_EXTS.has(ext)) {
-        dom.modalImg.style.display = 'none';
-        dom.modalVideo.style.display = 'block';
-        dom.modalVideo.loop = state.settings.loopVideos;
-        dom.modalVideo.src = f.objectURL || '';
-        dom.modalVideo.play().catch(() => {}); // Autoplay when opened
-      } else {
-        dom.modalVideo.style.display = 'none';
-        dom.modalVideo.pause();
-        dom.modalVideo.src = '';
-        dom.modalImg.style.display = 'block';
-        dom.modalImg.src = f.objectURL || '';
-      }
-      
-      dom.modalName.textContent = f.name.split('/').pop() || '';
-      dom.modal.classList.add('open');
+      openFileModal(closest);
     }
   }
 });
@@ -1076,6 +1077,7 @@ dom.canvas.addEventListener('wheel', (e) => {
   camera.x += px / camera.scale - px / (camera.scale * factor);
   camera.y += py / camera.scale - py / (camera.scale * factor);
   camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor));
+  state.lastViewedIndex = null;
   scheduleRender();
 }, { passive: false });
 
@@ -1128,10 +1130,43 @@ dom.searchClearBtn.addEventListener('click', () => {
   scheduleRender();
 });
 
+const openFileModal = (index: number) => {
+  const f = state.files[index];
+  const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+  
+  if (VIDEO_EXTS.has(ext)) {
+    dom.modalImg.style.display = 'none';
+    dom.modalVideo.style.display = 'block';
+    dom.modalVideo.loop = state.settings.loopVideos;
+    dom.modalVideo.src = f.objectURL || '';
+    dom.modalVideo.play().catch(() => {}); // Autoplay when opened
+  } else {
+    dom.modalVideo.style.display = 'none';
+    dom.modalVideo.pause();
+    dom.modalVideo.src = '';
+    dom.modalImg.style.display = 'block';
+    dom.modalImg.src = f.objectURL || '';
+  }
+  
+  dom.modalName.textContent = f.name.split('/').pop() || '';
+  dom.modal.classList.add('open');
+  state.activeFileIndex = index;
+  state.lastViewedIndex = index;
+
+  // Center camera on the active image
+  const pt = state.points[index];
+  if (pt) {
+    camera.x = pt[0];
+    camera.y = pt[1];
+    scheduleRender();
+  }
+};
+
 const closeModal = () => {
   dom.modal.classList.remove('open');
   dom.modalVideo.pause();
   dom.modalVideo.src = '';
+  state.activeFileIndex = null;
 };
 
 dom.modalClose.addEventListener('click', closeModal);
@@ -1554,13 +1589,74 @@ function refreshDebugOverlay() {
   if (btn) debugOverlay.insertBefore(btn, debugOverlay.firstChild);
 }
 
+function navigateModal(dir: 'left' | 'right' | 'up' | 'down') {
+  if (state.activeFileIndex === null) return;
+  const nextIndex = getNextImageInDirection(state.activeFileIndex, state.points, dir);
+  if (nextIndex !== state.activeFileIndex) {
+    openFileModal(nextIndex);
+  }
+}
+
+function navigateCanvas(dir: 'left' | 'right' | 'up' | 'down') {
+  const pts = state.points;
+  if (!pts.length) return;
+
+  let startIndex = state.lastViewedIndex;
+  if (startIndex === null) {
+    let minD = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = pts[i][0] - camera.x;
+      const dy = pts[i][1] - camera.y;
+      const d = dx * dx + dy * dy;
+      if (d < minD) { minD = d; startIndex = i; }
+    }
+  }
+
+  if (startIndex === null) return;
+
+  const nextIndex = getNextImageInDirection(startIndex, pts, dir);
+  if (nextIndex !== startIndex) {
+    state.lastViewedIndex = nextIndex;
+    camera.x = pts[nextIndex][0];
+    camera.y = pts[nextIndex][1];
+    scheduleRender();
+  }
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === '`') {
     const open = debugOverlay.style.display === 'none';
     debugOverlay.style.display = open ? 'block' : 'none';
     if (open) refreshDebugOverlay();
+    return;
+  }
+  
+  if (state.activeFileIndex !== null && e.key === 'Escape') {
+    closeModal();
+    return;
+  }
+
+  let dir: 'left' | 'right' | 'up' | 'down' | null = null;
+  if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') dir = 'left';
+  else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') dir = 'right';
+  else if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') dir = 'up';
+  else if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') dir = 'down';
+
+  if (dir) {
+    if (state.activeFileIndex !== null) {
+      e.preventDefault();
+      navigateModal(dir);
+    } else if (state.phase === 'done' && document.activeElement?.tagName !== 'INPUT') {
+      e.preventDefault();
+      navigateCanvas(dir);
+    }
   }
 });
+
+dom.modalNavLeft.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('left'); });
+dom.modalNavRight.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('right'); });
+dom.modalNavUp.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('up'); });
+dom.modalNavDown.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('down'); });
 
 const debugCopyBtn = document.getElementById('debug-copy-btn') as HTMLButtonElement;
 debugCopyBtn.addEventListener('click', async () => {
