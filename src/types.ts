@@ -97,7 +97,6 @@ export interface DOMElements {
   batchSizeAutoBtn: HTMLButtonElement;
   bottomPanel: HTMLDivElement;
   headerRecenterBtn: HTMLButtonElement;
-  headerResetBtn: HTMLButtonElement;
   demoBtn: HTMLButtonElement;
 }
 

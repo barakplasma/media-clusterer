@@ -96,7 +96,6 @@ const dom: DOMElements = {
   batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
-  headerResetBtn: document.getElementById('header-reset-btn') as HTMLButtonElement,
   demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
   };
 
@@ -538,7 +537,6 @@ function resetAll() {
   dom.recenterBtn.disabled = true;
   dom.resetBtn.disabled = true;
   dom.headerRecenterBtn.disabled = true;
-  dom.headerResetBtn.disabled = true;
   dom.searchInput.disabled = true;
   dom.searchInput.value = '';
   dom.searchClearBtn.hidden = true;
@@ -1002,7 +1000,6 @@ async function processFiles(files: PhotoFile[]) {
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.headerRecenterBtn.disabled = false;
-    dom.headerResetBtn.disabled = false;
     dom.searchInput.disabled = false;
 
     state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
@@ -1135,7 +1132,6 @@ dom.canvas.addEventListener('wheel', (e) => {
 dom.recenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
 dom.resetBtn.addEventListener('click', resetAll);
 dom.headerRecenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
-dom.headerResetBtn.addEventListener('click', resetAll);
 
 // ── Search input ─────────────────────────────────────────────────────────────
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -1584,7 +1580,6 @@ dom.resumeBtn.addEventListener('click', async () => {
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.headerRecenterBtn.disabled = false;
-    dom.headerResetBtn.disabled = false;
     dom.searchInput.disabled = false;
   } catch (err) {
     if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);
