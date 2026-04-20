@@ -94,6 +94,7 @@ const dom: DOMElements = {
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
   batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
   batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
+  randomSampleSizeInput: document.getElementById('random-sample-size') as HTMLInputElement,
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
@@ -116,6 +117,7 @@ const DEFAULT_SETTINGS: Settings = {
   enableTextSearch: false,
   projectionMethod: 'TSNE',
   batchSize: IS_MOBILE ? 4 : 16,
+  randomSampleSize: 100,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -1023,7 +1025,16 @@ async function run(dirHandle: DirectoryHandle) {
 
   try {
     setStatus('Scanning folder…');
-    const files = await collectImages(dirHandle);
+    let files = await collectImages(dirHandle);
+    const n = state.settings.randomSampleSize;
+    if (n > 0 && files.length > n) {
+      // Fisher-Yates partial shuffle to pick n random files
+      for (let i = 0; i < n; i++) {
+        const j = i + Math.floor(Math.random() * (files.length - i));
+        [files[i], files[j]] = [files[j], files[i]];
+      }
+      files = files.slice(0, n);
+    }
     await processFiles(files);
   } catch (err) {
     console.error(err);
@@ -1240,6 +1251,7 @@ dom.themeSelect.value = state.settings.theme;
 dom.enableSearchToggle.checked = state.settings.enableTextSearch;
 if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
 dom.batchSizeInput.value = state.settings.batchSize.toString();
+dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
@@ -1348,6 +1360,12 @@ dom.batchSizeAutoBtn.addEventListener('click', () => {
   const optimal = computeOptimalBatchSize(avgFileSize);
   state.settings.batchSize = optimal;
   dom.batchSizeInput.value = optimal.toString();
+  saveSettings();
+});
+
+dom.randomSampleSizeInput.addEventListener('input', () => {
+  const v = parseInt(dom.randomSampleSizeInput.value) || 0;
+  state.settings.randomSampleSize = Math.max(0, v);
   saveSettings();
 });
 
