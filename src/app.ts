@@ -197,8 +197,13 @@ function scheduleRender() {
 }
 
 // ── File collection ──────────────────────────────────────────────────────────
-async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
-  const files: PhotoFile[] = [];
+async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0): Promise<PhotoFile[]> {
+  // Phase 1: walk the tree and collect lightweight file references.
+  // When sampleSize > 0, use reservoir sampling so memory stays bounded at O(sampleSize).
+  type Ref = { name: string; handle: FileSystemHandle };
+  const refs: Ref[] = [];
+  let seen = 0;
+
   async function walk(handle: DirectoryHandle, prefix: string) {
     for await (const [name, entry] of handle.entries()) {
       if (name.startsWith('.')) continue;
@@ -207,19 +212,35 @@ async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
       } else {
         const ext = name.split('.').pop()?.toLowerCase() ?? '';
         if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
-          const file = await entry.getFile();
-          files.push({
-            name: `${prefix}${name}`,
-            size: file.size,
-            lastModified: file.lastModified,
-            file,
-            objectURL: null
-          });
+          const ref: Ref = { name: `${prefix}${name}`, handle: entry };
+          if (sampleSize <= 0) {
+            refs.push(ref);
+          } else if (refs.length < sampleSize) {
+            refs.push(ref);
+          } else {
+            // Reservoir sampling (Algorithm R): replace slot j with prob sampleSize/(seen+1)
+            const j = Math.floor(Math.random() * (seen + 1));
+            if (j < sampleSize) refs[j] = ref;
+          }
+          seen++;
         }
       }
     }
   }
   await walk(dirHandle, '');
+
+  // Phase 2: fetch File objects only for the selected refs.
+  const files: PhotoFile[] = [];
+  for (const ref of refs) {
+    const file = await ref.handle.getFile();
+    files.push({
+      name: ref.name,
+      size: file.size,
+      lastModified: file.lastModified,
+      file,
+      objectURL: null
+    });
+  }
   return files;
 }
 
@@ -1025,16 +1046,7 @@ async function run(dirHandle: DirectoryHandle) {
 
   try {
     setStatus('Scanning folder…');
-    let files = await collectImages(dirHandle);
-    const n = state.settings.randomSampleSize;
-    if (n > 0 && files.length > n) {
-      // Fisher-Yates partial shuffle to pick n random files
-      for (let i = 0; i < n; i++) {
-        const j = i + Math.floor(Math.random() * (files.length - i));
-        [files[i], files[j]] = [files[j], files[i]];
-      }
-      files = files.slice(0, n);
-    }
+    const files = await collectImages(dirHandle, state.settings.randomSampleSize);
     await processFiles(files);
   } catch (err) {
     console.error(err);
