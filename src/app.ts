@@ -94,6 +94,7 @@ const dom: DOMElements = {
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
   batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
   batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
+  randomSampleSizeInput: document.getElementById('random-sample-size') as HTMLInputElement,
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
@@ -116,6 +117,7 @@ const DEFAULT_SETTINGS: Settings = {
   enableTextSearch: false,
   projectionMethod: 'TSNE',
   batchSize: IS_MOBILE ? 4 : 16,
+  randomSampleSize: 100,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -195,8 +197,13 @@ function scheduleRender() {
 }
 
 // ── File collection ──────────────────────────────────────────────────────────
-async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
-  const files: PhotoFile[] = [];
+async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0): Promise<PhotoFile[]> {
+  // Phase 1: walk the tree and collect lightweight file references.
+  // When sampleSize > 0, use reservoir sampling so memory stays bounded at O(sampleSize).
+  type Ref = { name: string; handle: FileSystemHandle };
+  const refs: Ref[] = [];
+  let seen = 0;
+
   async function walk(handle: DirectoryHandle, prefix: string) {
     for await (const [name, entry] of handle.entries()) {
       if (name.startsWith('.')) continue;
@@ -205,19 +212,35 @@ async function collectImages(dirHandle: DirectoryHandle): Promise<PhotoFile[]> {
       } else {
         const ext = name.split('.').pop()?.toLowerCase() ?? '';
         if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
-          const file = await entry.getFile();
-          files.push({
-            name: `${prefix}${name}`,
-            size: file.size,
-            lastModified: file.lastModified,
-            file,
-            objectURL: null
-          });
+          const ref: Ref = { name: `${prefix}${name}`, handle: entry };
+          if (sampleSize <= 0) {
+            refs.push(ref);
+          } else if (refs.length < sampleSize) {
+            refs.push(ref);
+          } else {
+            // Reservoir sampling (Algorithm R): replace slot j with prob sampleSize/(seen+1)
+            const j = Math.floor(Math.random() * (seen + 1));
+            if (j < sampleSize) refs[j] = ref;
+          }
+          seen++;
         }
       }
     }
   }
   await walk(dirHandle, '');
+
+  // Phase 2: fetch File objects only for the selected refs.
+  const files: PhotoFile[] = [];
+  for (const ref of refs) {
+    const file = await ref.handle.getFile();
+    files.push({
+      name: ref.name,
+      size: file.size,
+      lastModified: file.lastModified,
+      file,
+      objectURL: null
+    });
+  }
   return files;
 }
 
@@ -1023,7 +1046,7 @@ async function run(dirHandle: DirectoryHandle) {
 
   try {
     setStatus('Scanning folder…');
-    const files = await collectImages(dirHandle);
+    const files = await collectImages(dirHandle, state.settings.randomSampleSize);
     await processFiles(files);
   } catch (err) {
     console.error(err);
@@ -1240,6 +1263,7 @@ dom.themeSelect.value = state.settings.theme;
 dom.enableSearchToggle.checked = state.settings.enableTextSearch;
 if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
 dom.batchSizeInput.value = state.settings.batchSize.toString();
+dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
@@ -1348,6 +1372,12 @@ dom.batchSizeAutoBtn.addEventListener('click', () => {
   const optimal = computeOptimalBatchSize(avgFileSize);
   state.settings.batchSize = optimal;
   dom.batchSizeInput.value = optimal.toString();
+  saveSettings();
+});
+
+dom.randomSampleSizeInput.addEventListener('input', () => {
+  const v = parseInt(dom.randomSampleSizeInput.value) || 0;
+  state.settings.randomSampleSize = Math.max(0, v);
   saveSettings();
 });
 

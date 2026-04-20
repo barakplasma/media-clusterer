@@ -578,6 +578,14 @@
     <h2 style="color: var(--primary); margin-bottom: 24px; font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 12px;">⚙️ Settings</h2>
     
     <div class="setting-item">
+      <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+        <span>Random Sample Size</span>
+        <input type="number" id="random-sample-size" value="100" style="width: 72px; padding: 4px 6px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 4px; text-align: center;">
+      </label>
+      <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">When a folder has more than this many files, load a random sample of that size. Set to 0 to load all files.</div>
+    </div>
+
+    <div class="setting-item">
       <label>Thumbnail Density</label>
       <div style="display: flex; align-items: center; gap: 10px;">
         <span style="font-size: 12px; color: var(--text-dim);">Tight</span>

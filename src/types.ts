@@ -36,6 +36,7 @@ export interface Settings {
   enableTextSearch: boolean;
   projectionMethod: ProjectionMethod;
   batchSize: number;    // GPU inference batch size (higher = faster, more memory)
+  randomSampleSize: number; // 0 = load all; >0 = randomly sample n files when folder has more than n
 }
 
 /** Application state */
@@ -95,6 +96,7 @@ export interface DOMElements {
   projectionSelect: HTMLSelectElement;
   batchSizeInput: HTMLInputElement;
   batchSizeAutoBtn: HTMLButtonElement;
+  randomSampleSizeInput: HTMLInputElement;
   bottomPanel: HTMLDivElement;
   headerRecenterBtn: HTMLButtonElement;
   demoBtn: HTMLButtonElement;
