@@ -25,3 +25,10 @@ export function computeOptimalBatchSize(
   const optimal = Math.floor(safeHeadroomBytes / bytesPerImageInference);
   return Math.max(1, optimal);
 }
+
+export function getMemoryPressure(): { freeRatio: number } | null {
+  const memory = typeof performance !== 'undefined' ? (performance as any).memory : undefined;
+  if (!memory?.jsHeapSizeLimit) return null;
+  const freeRatio = Math.max(0, (memory.jsHeapSizeLimit - memory.usedJSHeapSize) / memory.jsHeapSizeLimit);
+  return { freeRatio };
+}
