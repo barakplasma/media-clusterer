@@ -25,7 +25,7 @@ import {
 } from './db';
 import { getNextImageInDirection } from './spatial';
 import '@picocss/pico/css/pico.conditional.min.css';
-import { computeOptimalBatchSize } from './hardware';
+import { computeOptimalBatchSize, getMemoryPressure } from './hardware';
 import type {
   AppState,
   Camera,
@@ -1463,6 +1463,15 @@ async function embedAll(files: PhotoFile[]) {
     const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
     setStatus(`Embedding ${done} / ${files.length} images…${fromCache}`);
     setProgress(10 + (done / files.length) * 80); // 10% to 90%
+
+    const pressure = getMemoryPressure();
+    if (pressure !== null && pressure.freeRatio < 0.20) {
+      setStatus(`Low memory (${(pressure.freeRatio * 100).toFixed(0)}% free) — stopping at ${done} / ${files.length} files…`);
+      await cachePutBatch(writeQueue);
+      writeQueue.length = 0;
+      return vectors.slice(0, done);
+    }
+
     await yieldMain();
   }
 
@@ -1554,6 +1563,14 @@ async function processFiles(files: PhotoFile[]) {
     state.thumbnails = initThumbnails(files);
 
     const vectors = await embedAll(files);
+
+    if (vectors.length < files.length) {
+      const n = vectors.length;
+      state.files = state.files.slice(0, n);
+      state.thumbnails = state.thumbnails.slice(0, n);
+      files = state.files;
+    }
+
     state.vectors = vectors;
 
     setStatus('Building search index…');
