@@ -92,6 +92,7 @@ const dom: DOMElements = {
   drawBudgetSlider: document.getElementById('draw-budget-slider') as HTMLInputElement,
   enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
+  viewerOnlyToggle: document.getElementById('viewer-only-toggle') as HTMLInputElement,
   batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
   batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
   randomSampleSizeInput: document.getElementById('random-sample-size') as HTMLInputElement,
@@ -118,6 +119,7 @@ const DEFAULT_SETTINGS: Settings = {
   projectionMethod: 'TSNE',
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
+  viewerOnly: false,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -158,7 +160,11 @@ const storageBadgeEl = document.getElementById('storage-badge');
 
 function updateDeviceBadge() {
   if (!deviceBadgeEl) return;
-  if (modelDevice === 'webgpu') {
+
+  if (state.settings.viewerOnly) {
+    deviceBadgeEl.textContent = 'Viewer';
+    deviceBadgeEl.style.color = '#4ade80'; // Green for viewer mode
+  } else if (modelDevice === 'webgpu') {
     deviceBadgeEl.textContent = 'WebGPU';
     deviceBadgeEl.style.color = '#4ade80';
   } else if (modelDevice === 'cpu') {
@@ -517,6 +523,73 @@ async function spreadPointsAsync(projectedPoints: number[][]): Promise<Point[]> 
     if (!moved) break;
   }
   return pts as Point[];
+}
+
+/**
+ * Generate grid-based 2D coordinates from folder structure and datetime.
+ * Creates a "folder clusters" layout:
+ * - Folders arranged in a horizontal grid
+ * - Within each folder, photos arranged by date (vertical time flow)
+ * - Almost grid-like for predictable navigation
+ */
+function generateMetadataBasedLayout(files: PhotoFile[]): Point[] {
+  if (files.length === 0) return [];
+
+  // Group files by folder path
+  const folderGroups = new Map<string, Array<{ index: number; lastModified: number }>>();
+  for (let i = 0; i < files.length; i++) {
+    const pathParts = files[i].name.split('/');
+    const folder = pathParts.slice(0, -1).join('/') || '(root)';
+    if (!folderGroups.has(folder)) {
+      folderGroups.set(folder, []);
+    }
+    folderGroups.get(folder)!.push({ index: i, lastModified: files[i].lastModified });
+  }
+
+  // Sort each group by date and collect folders in sorted order
+  const sortedFolders: Array<{ folder: string; files: Array<{ index: number; lastModified: number }> }> = [];
+  for (const [folder, fileGroup] of folderGroups) {
+    fileGroup.sort((a, b) => a.lastModified - b.lastModified);
+    sortedFolders.push({ folder, files: fileGroup });
+  }
+  sortedFolders.sort((a, b) => a.folder.localeCompare(b.folder));
+
+  // Calculate grid dimensions
+  const numFolders = sortedFolders.length;
+  const foldersPerRow = Math.ceil(Math.sqrt(numFolders * 1.5)); // Slightly wider grid
+  const folderGridWidth = foldersPerRow * THUMB_WORLD * 4; // Space between folder groups
+  const fileGridSize = THUMB_WORLD * 1.5; // Space between files in a folder
+
+  const points: Point[] = new Array(files.length) as Point[];
+
+  for (let folderIdx = 0; folderIdx < sortedFolders.length; folderIdx++) {
+    const { files: folderFiles } = sortedFolders[folderIdx];
+
+    // Folder position in the grid
+    const folderCol = folderIdx % foldersPerRow;
+    const folderRow = Math.floor(folderIdx / foldersPerRow);
+    const folderOffsetX = folderCol * folderGridWidth;
+    const folderOffsetY = folderRow * folderGridWidth;
+
+    // Files within this folder - also in a grid
+    const numFiles = folderFiles.length;
+    const filesPerCol = Math.ceil(Math.sqrt(numFiles));
+
+    for (let i = 0; i < folderFiles.length; i++) {
+      const { index } = folderFiles[i];
+
+      // Position within folder grid (time flows downward)
+      const fileCol = i % filesPerCol;
+      const fileRow = Math.floor(i / filesPerCol);
+
+      const x = folderOffsetX + fileCol * fileGridSize;
+      const y = folderOffsetY + fileRow * fileGridSize;
+
+      points[index] = [x, y];
+    }
+  }
+
+  return points;
 }
 
 function fitCamera() {
@@ -990,6 +1063,42 @@ async function processFiles(files: PhotoFile[]) {
     return;
   }
   state.files = files;
+
+  // VIEWER MODE: Skip all AI processing
+  if (state.settings.viewerOnly) {
+    setStatus(`Viewer mode: ${files.length} files (no AI)`);
+    setProgress(10);
+
+    state.thumbnails = initThumbnails(files);
+
+    // Generate metadata-based grid layout
+    state.phase = 'done';
+    setProgress(50);
+    const layoutPoints = generateMetadataBasedLayout(files);
+    state.rawPoints = layoutPoints.map(p => [p[0], p[1]]);
+
+    // No semantic clustering in viewer mode - use folder-based colors if needed
+    state.clusters = null;
+    state.vectors = [];
+
+    resizeCanvas();
+    state.points = await spreadPointsAsync(state.rawPoints);
+    fitCamera();
+    scheduleRender();
+    setProgress(100);
+
+    setStatus(`${files.length} media files — viewer mode (arranged by folder & date)`);
+    if (dom.statsEl) dom.statsEl.textContent = `${files.length} files · viewer mode`;
+    dom.recenterBtn.disabled = false;
+    dom.resetBtn.disabled = false;
+    dom.headerRecenterBtn.disabled = false;
+    dom.searchInput.disabled = true;  // No search in viewer mode
+
+    dom.openBtn.disabled = false;
+    return;
+  }
+
+  // AI MODE: Full embedding and projection pipeline
   setStatus(`Found ${files.length} media files. Loading thumbnails…`);
 
   try {
@@ -997,7 +1106,7 @@ async function processFiles(files: PhotoFile[]) {
 
     const vectors = await embedAll(files);
     state.vectors = vectors;
-    
+
     setStatus('Building search index…');
     state.hnsw = new druid.HNSW(vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
 
@@ -1264,9 +1373,18 @@ dom.enableSearchToggle.checked = state.settings.enableTextSearch;
 if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
 dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
+dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
+  // In viewer mode, always disable search
+  if (state.settings.viewerOnly) {
+    dom.bottomPanel.style.display = 'none';
+    dom.headerRecenterBtn.parentElement!.style.display = 'flex';
+    dom.searchInput.disabled = true;
+    return;
+  }
+
   if (state.settings.enableTextSearch) {
     dom.bottomPanel.style.display = 'flex';
     dom.headerRecenterBtn.parentElement!.style.display = 'none';
@@ -1292,6 +1410,13 @@ dom.settingsModal.addEventListener('click', (e) => {
 });
 
 dom.enableSearchToggle.addEventListener('change', async () => {
+  // Prevent enabling search in viewer mode
+  if (state.settings.viewerOnly && dom.enableSearchToggle.checked) {
+    dom.enableSearchToggle.checked = false;
+    setStatus('Text search is not available in viewer mode.');
+    return;
+  }
+
   state.settings.enableTextSearch = dom.enableSearchToggle.checked;
   saveSettings();
   updateSearchUI();
@@ -1384,6 +1509,31 @@ dom.randomSampleSizeInput.addEventListener('input', () => {
 dom.loopToggle.addEventListener('change', () => {
   state.settings.loopVideos = dom.loopToggle.checked;
   saveSettings();
+});
+
+dom.viewerOnlyToggle.addEventListener('change', async () => {
+  state.settings.viewerOnly = dom.viewerOnlyToggle.checked;
+  saveSettings();
+  updateSearchUI();
+  updateDeviceBadge();
+
+  // If enabling viewer mode and we're idle, update UI immediately
+  if (state.settings.viewerOnly && state.phase === 'idle') {
+    dom.loadModelBtn.hidden = true;
+    dom.openBtn.disabled = false;
+    dom.openBtn.classList.add('primary');
+    dom.demoBtn.disabled = false;
+    setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+  } else if (!state.settings.viewerOnly && state.phase === 'idle') {
+    // Switching back to AI mode
+    dom.loadModelBtn.hidden = false;
+    setStatus('AI mode enabled — click "Load AI Models" to begin.');
+  }
+
+  // If changing mode with loaded data, need to reset and reprocess
+  if (state.phase === 'done' && state.files.length > 0) {
+    setStatus('Mode changed. Reset to apply changes, or open a new folder.');
+  }
 });
 
 dom.themeSelect.addEventListener('change', () => {
@@ -1616,17 +1766,27 @@ dom.resumeBtn.addEventListener('click', async () => {
   }
 });
 
-// Auto-start model loading
-dom.loadModelBtn.disabled = true;
-(async () => {
-  try {
-    await loadModel();
-  } catch (err) {
-    dom.loadModelBtn.hidden = false;
-    dom.loadModelBtn.disabled = false;
-    setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
-  }
-})();
+// Auto-start model loading (only if not in viewer mode)
+if (!state.settings.viewerOnly) {
+  dom.loadModelBtn.disabled = true;
+  (async () => {
+    try {
+      await loadModel();
+    } catch (err) {
+      dom.loadModelBtn.hidden = false;
+      dom.loadModelBtn.disabled = false;
+      setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
+    }
+  })();
+} else {
+  // Viewer mode: update UI to reflect no AI needed
+  dom.loadModelBtn.hidden = true;
+  dom.openBtn.disabled = false;
+  dom.openBtn.classList.add('primary');
+  dom.demoBtn.disabled = false;
+  setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+  updateDeviceBadge();
+}
 
 // ── Debug overlay (press ` to toggle) ────────────────────────────────────────
 const debugOverlay = document.getElementById('debug-overlay') as HTMLDivElement;
@@ -1646,6 +1806,7 @@ function buildDebugInfo(): string {
     `── state ───────────────────`,
     `phase:       ${state.phase}`,
     `files:       ${state.files.length}`,
+    `viewerOnly:  ${state.settings.viewerOnly ? 'YES' : 'no'}`,
     `vectors:     ${state.vectors.length}`,
     `points:      ${state.points.length}`,
     `hnsw:        ${state.hnsw ? 'built' : 'none'}`,
@@ -1751,6 +1912,34 @@ document.addEventListener('keydown', (e) => {
     } else if (state.phase === 'done' && document.activeElement?.tagName !== 'INPUT') {
       e.preventDefault();
       navigateCanvas(dir);
+    }
+  }
+
+  // n/p keys for sequential next/previous (looping through all media)
+  const key = e.key.toLowerCase();
+  if ((key === 'n' || key === 'p') && state.phase === 'done' && state.files.length > 0) {
+    e.preventDefault();
+
+    // Determine current index
+    let currentIndex = state.activeFileIndex ?? state.lastViewedIndex;
+    if (currentIndex === null) {
+      // Find index closest to camera center
+      const pts = state.points;
+      let minD = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const dx = pts[i][0] - camera.x;
+        const dy = pts[i][1] - camera.y;
+        const d = dx * dx + dy * dy;
+        if (d < minD) { minD = d; currentIndex = i; }
+      }
+    }
+
+    if (currentIndex !== null) {
+      const nextIndex = key === 'n'
+        ? (currentIndex + 1) % state.files.length  // Next, wrapping to 0
+        : (currentIndex - 1 + state.files.length) % state.files.length;  // Previous, wrapping to end
+
+      openFileModal(nextIndex);
     }
   }
 });

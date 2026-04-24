@@ -576,7 +576,16 @@
   <div id="settings-content" class="modal-box">
     <button id="settings-close" class="close-x">✕</button>
     <h2 style="color: var(--primary); margin-bottom: 24px; font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 12px;">⚙️ Settings</h2>
-    
+
+    <div class="setting-item" style="padding: 12px; background: rgba(88, 166, 255, 0.1); border: 1px solid var(--primary); border-radius: 8px;">
+      <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;">
+        <input type="checkbox" id="viewer-only-toggle"> <strong>Viewer Only Mode (No AI)</strong>
+      </label>
+      <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
+        Skip AI model loading. Photos arranged in a grid by folder and date. Much faster, but no semantic search or smart clustering.
+      </div>
+    </div>
+
     <div class="setting-item">
       <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
         <span>Random Sample Size</span>

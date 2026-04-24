@@ -37,6 +37,7 @@ export interface Settings {
   projectionMethod: ProjectionMethod;
   batchSize: number;    // GPU inference batch size (higher = faster, more memory)
   randomSampleSize: number; // 0 = load all; >0 = randomly sample n files when folder has more than n
+  viewerOnly: boolean;  // Skip AI models, arrange by folder/date instead
 }
 
 /** Application state */
@@ -94,6 +95,7 @@ export interface DOMElements {
   drawBudgetSlider: HTMLInputElement;
   enableSearchToggle: HTMLInputElement;
   projectionSelect: HTMLSelectElement;
+  viewerOnlyToggle: HTMLInputElement;
   batchSizeInput: HTMLInputElement;
   batchSizeAutoBtn: HTMLButtonElement;
   randomSampleSizeInput: HTMLInputElement;
