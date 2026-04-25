@@ -19,10 +19,36 @@ A high-performance, **zero-server**, local AI media management tool that runs en
 - **Cluster Visualization**: Visually similar media are automatically grouped and colored using k-means clustering.
 - **Smart Caching**: Embeddings are cached in IndexedDB for instant re-opening of previously processed folders.
 
+## 🆕 v2.3.0 New Features
+
+### Viewer-Only Mode
+- **Skip AI processing** - Browse photos instantly without loading embeddings
+- Files arranged by **folder structure then date** (matches visual grid layout)
+- Enable via settings toggle or use with folders that have thousands of images
+- Resume button now works for both viewer and AI modes
+
+### Enhanced Navigation
+- **URL state navigation** - Filtered views can be bookmarked and shared
+  - `#folder:path/to/folder` - Current folder location
+  - `#dt:2025-01-15T14:30` - Datetime filter (day/hour/minute granularity)
+- **Browser back/forward** support for navigation history
+- **Clickable breadcrumb navigation** in modal footer:
+  - Folder path breadcrumbs with up-one-level arrow (↑)
+  - Datetime breadcrumbs (year → month → day → hour → minute)
+  - Each breadcrumb click resans the full folder with new filter
+
+### Keyboard Navigation
+- **n/p keys** for sequential next/previous through all media in datetime order
+- Works consistently in both viewer-only and AI modes
+
+### Enhanced Modal Footer
+- Single-row layout showing relative path, filename, datetime, file size, and resolution
+- Camera/video metadata display (placeholder for future EXIF support)
+
 ## 🛠️ Technology Stack
 
 - **Language**: TypeScript (Strict)
-- **AI Engine**: [Transformers.js](https://huggingface.co/docs/transformers.js) (v4+)
+- **AI Engine**: [Transformers.js](https://huggingface.co/docs/transformers.js) (v4.2.0)
 - **Build Tool**: [Vite](https://vitejs.dev/) (v8+ with Rolldown)
 - **Projections**: [DruidJS](https://github.com/saehm/DruidJS)
 - **Deployment**: [Cloudflare Pages](https://pages.cloudflare.com/)
@@ -60,6 +86,26 @@ npm run build
 # Deploy to Cloudflare Pages (Manual)
 npm run deploy
 ```
+
+## 🔧 Keyboard Shortcuts
+
+- **Arrow keys / WASD** - Pan around the canvas
+- **Mouse wheel** - Zoom in/out
+- **n / p** - Next/previous file (in datetime order)
+- **Escape** - Close modal or clear search
+- **`** - Toggle debug overlay
+
+## 📋 Settings
+
+- **Density**: Adjust clustering tightness (lower = tighter, higher = sparse)
+- **Loop Videos**: Toggle video looping in modal
+- **Theme**: Dark, Light, or System
+- **Draw Budget**: Max items to render per frame (performance)
+- **Text Search**: Enable/disable semantic search
+- **Projection Method**: Choose dimensionality reduction algorithm
+- **Batch Size**: GPU inference batch size (higher = faster, more memory)
+- **Random Sample Size**: Limit files loaded (0 = all, >0 = random sample)
+- **Viewer Only Mode**: Skip AI processing, arrange by folder/date
 
 ---
 
