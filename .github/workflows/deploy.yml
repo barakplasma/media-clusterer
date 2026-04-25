@@ -11,6 +11,11 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+permissions:
+  contents: read
+  deployments: write
+  pull-requests: write
+
 jobs:
   validate-and-deploy:
     runs-on: ubuntu-latest
