@@ -54,7 +54,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BRANCH: ${{ github.head_ref }}
-          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           BRANCH_URL="https://${PR_BRANCH}.media-clusterer.pages.dev"
           SHORT_SHA="${COMMIT_SHA:0:7}"
