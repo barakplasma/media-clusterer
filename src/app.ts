@@ -50,6 +50,8 @@ const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const BATCH_SIZE = IS_MOBILE ? 4 : 16; // fallback before settings load
 const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
+const MAX_THUMBNAILS_CACHE = 2000; // Max decoded thumbnails to keep in memory (LRU)
+const MAX_FULL_IMAGES = 100; // Max full-res images to keep in memory (LRU)
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
 
 // ── Demo Images (Unsplash API, public authentication) ──────────────────────────
@@ -333,10 +335,7 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
 
 // ── Thumbnail preloader ──────────────────────────────────────────────────────
 function initThumbnails(files: PhotoFile[]): (ImageBitmap | null)[] {
-  // Thumbnails are decoded lazily on first render — no upfront work here
-  for (const f of files) {
-    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
-  }
+  // ObjectURLs are now created lazily on first use to avoid OOM with large folders
   return new Array<ImageBitmap | null>(files.length).fill(null);
 }
 
@@ -344,11 +343,31 @@ function lazyDecodeThumbnail(idx: number) {
   if (thumbDecoding.has(idx) || state.thumbnails[idx]) return;
   thumbDecoding.add(idx);
   const f = state.files[idx];
+
+  // Create objectURL lazily if needed (for large folders, don't create all upfront)
+  if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
+
   const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
 
   const done = (bm: ImageBitmap | null) => {
     state.thumbnails[idx] = bm;
     thumbDecoding.delete(idx);
+
+    // Update LRU: remove if present, add to end (most recently used)
+    thumbnailLRU.delete(idx);
+    thumbnailLRU.add(idx);
+
+    // Evict least recently used thumbnails if over cache limit
+    while (thumbnailLRU.size > MAX_THUMBNAILS_CACHE) {
+      const lruIdx = thumbnailLRU.values().next().value; // Get first (oldest)
+      if (lruIdx !== undefined) {
+        thumbnailLRU.delete(lruIdx);
+        const oldBm = state.thumbnails[lruIdx];
+        if (oldBm?.close) oldBm.close();
+        state.thumbnails[lruIdx] = null;
+      }
+    }
+
     scheduleRender();
   };
 
@@ -466,7 +485,9 @@ async function kmeansAsync(points: number[][], k: number, maxIter = 60): Promise
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 const fullImages = new Map<number, HTMLImageElement>(); // index → HTMLImageElement
+const fullImageLRU = new Set<number>();                // LRU tracking for full-res images
 const thumbDecoding = new Set<number>();               // indices currently being decoded
+const thumbnailLRU = new Set<number>();                // indices in LRU order (most recently used at end)
 
 function resizeCanvas() {
   const wrap = dom.canvas.parentElement;
@@ -554,10 +575,15 @@ function generateMetadataBasedLayout(files: PhotoFile[]): Point[] {
   }
   sortedFolders.sort((a, b) => a.folder.localeCompare(b.folder));
 
-  // Calculate grid dimensions
+  // Calculate grid dimensions - first find max files per column across all folders
   const numFolders = sortedFolders.length;
   const foldersPerRow = Math.ceil(Math.sqrt(numFolders * 1.5)); // Slightly wider grid
-  const folderGridWidth = foldersPerRow * THUMB_WORLD * 4; // Space between folder groups
+  let maxFilesPerCol = 0;
+  for (const { files: folderFiles } of sortedFolders) {
+    const filesPerCol = Math.ceil(Math.sqrt(folderFiles.length));
+    if (filesPerCol > maxFilesPerCol) maxFilesPerCol = filesPerCol;
+  }
+  const folderGridWidth = foldersPerRow * THUMB_WORLD * (maxFilesPerCol + 1); // Space based on largest folder
   const fileGridSize = THUMB_WORLD * 1.5; // Space between files in a folder
 
   const points: Point[] = new Array(files.length) as Point[];
@@ -612,7 +638,9 @@ function resetAll() {
   for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
   for (const img of fullImages.values()) img.src = '';
   fullImages.clear();
+  fullImageLRU.clear();
   thumbDecoding.clear();
+  thumbnailLRU.clear();
   for (const f of state.files) {
     if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
   }
@@ -742,15 +770,35 @@ function render() {
       drawnFull.add(i);
       let fullImg = fullImages.get(i);
       if (!fullImg) {
+        // Evict LRU full images if over limit
+        while (fullImageLRU.size >= MAX_FULL_IMAGES) {
+          const lruIdx = fullImageLRU.values().next().value;
+          if (lruIdx !== undefined) {
+            fullImageLRU.delete(lruIdx);
+            const oldImg = fullImages.get(lruIdx);
+            if (oldImg) oldImg.src = '';
+            fullImages.delete(lruIdx);
+          }
+        }
+
+        // Ensure objectURL exists
+        const f = state.files[i];
+        if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
+
         fullImg = new Image();
         fullImg.onload = () => {
           if (fullImg) {
             fullImg.decode().then(() => scheduleRender()).catch(() => scheduleRender());
           }
         };
-        fullImg.src = state.files[i].objectURL || '';
+        fullImg.src = f.objectURL;
         fullImages.set(i, fullImg);
       }
+
+      // Update LRU for full image access
+      fullImageLRU.delete(i);
+      fullImageLRU.add(i);
+
       if (fullImg.complete && fullImg.naturalWidth > 0) {
         const ratio = fullImg.naturalWidth / fullImg.naturalHeight;
         const dw = ratio >= 1 ? drawSize : drawSize * ratio;
@@ -769,6 +817,10 @@ function render() {
       const thumb = thumbs[i];
       if (!thumb) lazyDecodeThumbnail(i);
       if (thumb && thumb.width > 0) {
+        // Update LRU when thumbnail is actually used for rendering
+        thumbnailLRU.delete(i);
+        thumbnailLRU.add(i);
+
         const ratio = thumb.width / thumb.height;
         const dw = ratio >= 1 ? drawSize : drawSize * ratio;
         const dh = ratio >= 1 ? drawSize / ratio : drawSize;
@@ -796,12 +848,19 @@ function render() {
   }
 
   if (useFull && drawnFull) {
+    // Evict full images that weren't drawn this frame
     for (const [idx, img] of fullImages) {
-      if (!drawnFull.has(idx)) { img.src = ''; fullImages.delete(idx); }
+      if (!drawnFull.has(idx)) {
+        img.src = '';
+        fullImages.delete(idx);
+        fullImageLRU.delete(idx);
+      }
     }
   } else {
+    // Full-res disabled, clear all
     for (const img of fullImages.values()) img.src = '';
     fullImages.clear();
+    fullImageLRU.clear();
   }
 }
 
@@ -1069,12 +1128,27 @@ async function processFiles(files: PhotoFile[]) {
     setStatus(`Viewer mode: ${files.length} files (no AI)`);
     setProgress(10);
 
-    state.thumbnails = initThumbnails(files);
+    // Sort files by folder then date to match visual grid layout
+    // This ensures n/p navigation follows the visual order
+    const folderGroups = new Map<string, PhotoFile[]>();
+    for (const f of files) {
+      const pathParts = f.name.split('/');
+      const folder = pathParts.slice(0, -1).join('/') || '(root)';
+      if (!folderGroups.has(folder)) folderGroups.set(folder, []);
+      folderGroups.get(folder)!.push(f);
+    }
+    const sortedFolders = Array.from(folderGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [, folderFiles] of sortedFolders) {
+      folderFiles.sort((a, b) => a.lastModified - b.lastModified);
+    }
+    const sortedFiles = sortedFolders.flatMap(([, files]) => files);
+    state.files = sortedFiles;
 
-    // Generate metadata-based grid layout
-    state.phase = 'done';
+    state.thumbnails = initThumbnails(sortedFiles);
+
+    // Generate metadata-based grid layout (already sorted)
     setProgress(50);
-    const layoutPoints = generateMetadataBasedLayout(files);
+    const layoutPoints = generateMetadataBasedLayout(sortedFiles);
     state.rawPoints = layoutPoints.map(p => [p[0], p[1]]);
 
     // No semantic clustering in viewer mode - use folder-based colors if needed
@@ -1083,12 +1157,13 @@ async function processFiles(files: PhotoFile[]) {
 
     resizeCanvas();
     state.points = await spreadPointsAsync(state.rawPoints);
+    state.phase = 'done';  // Set after async work completes
     fitCamera();
     scheduleRender();
     setProgress(100);
 
-    setStatus(`${files.length} media files — viewer mode (arranged by folder & date)`);
-    if (dom.statsEl) dom.statsEl.textContent = `${files.length} files · viewer mode`;
+    setStatus(`${sortedFiles.length} media files — viewer mode (arranged by folder & date)`);
+    if (dom.statsEl) dom.statsEl.textContent = `${sortedFiles.length} files · viewer mode`;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.headerRecenterBtn.disabled = false;
@@ -1917,7 +1992,7 @@ document.addEventListener('keydown', (e) => {
 
   // n/p keys for sequential next/previous (looping through all media)
   const key = e.key.toLowerCase();
-  if ((key === 'n' || key === 'p') && state.phase === 'done' && state.files.length > 0) {
+  if ((key === 'n' || key === 'p') && state.phase === 'done' && state.files.length > 0 && document.activeElement?.tagName !== 'INPUT') {
     e.preventDefault();
 
     // Determine current index
