@@ -37,7 +37,33 @@ jobs:
         run: npm run build
 
       - name: Deploy to Cloudflare Pages
-        run: npx wrangler pages deploy dist --project-name media-clusterer --branch ${{ github.head_ref || github.ref_name }}
+        id: deploy
+        run: npx wrangler pages deploy dist --project-name media-clusterer --branch "$DEPLOY_BRANCH"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: de11927c1b728c9897c960abbe336098
+          DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
+
+      - name: Update GitHub deployment status
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BRANCH: ${{ github.head_ref }}
+        run: |
+          BRANCH_URL="https://${PR_BRANCH}.media-clusterer.pages.dev"
+
+          # Set deployment status via GitHub API
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/deployments \
+            -f ref="$PR_BRANCH" \
+            -f environment="preview" \
+            -f description="Deployed to Cloudflare Pages" \
+            -f environment_url="$BRANCH_URL" \
+            -f auto_inactive=true \
+            -f required_contexts="[]"
+
+          # Comment on PR with deployment URL
+          gh pr comment "$PR_NUMBER" --body "🚀 **Deployed preview:** $BRANCH_URL" || true
