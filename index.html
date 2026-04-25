@@ -319,8 +319,9 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
+      width: 98vw;
+      height: 98dvh;
       max-width: 98vw;
-      width: fit-content;
       max-height: 98dvh;
       display: flex;
       flex-direction: column;
@@ -329,8 +330,8 @@
     }
 
     #modal-img {
-      max-width: 100%;
-      max-height: calc(98dvh - 60px);
+      width: 100%;
+      height: calc(98dvh - 60px);
       object-fit: contain;
       background: #000;
       border-radius: 12px 12px 0 0;
@@ -521,7 +522,7 @@
     <button id="modal-nav-down" class="modal-nav-btn" title="Down">▼</button>
     <button id="modal-close" title="Close">✕</button>
     <img id="modal-img" alt="Full view">
-    <video id="modal-video" controls loop style="max-width: 100%; max-height: calc(98dvh - 60px); display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
+    <video id="modal-video" controls loop style="width: 100%; height: calc(98dvh - 60px); object-fit: contain; display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
     <div id="modal-name"></div>
   </div>
 </div>
