@@ -684,6 +684,18 @@
     </div>
 
     <div class="setting-item">
+      <label>Embedding Model</label>
+      <select id="model-select" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; outline: none; margin-top: 8px;">
+        <option value="nomic-embed-vision-v1.5">Nomic Embed Vision 1.5 — General Context</option>
+        <option value="sapiens2-0.1b">Sapiens2 0.1B — Human-Centric (WebGPU only)</option>
+      </select>
+      <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
+        <strong>Nomic</strong> clusters by scene and objects. <strong>Sapiens2</strong> clusters by human pose and clothing — ideal for photo libraries of people. Requires WebGPU (Chrome 113+) and uses 1024×1024 inference.
+        Changing the model will require re-loading and re-embedding.
+      </div>
+    </div>
+
+    <div class="setting-item">
       <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
         <span>Random Sample Size</span>
         <input type="number" id="random-sample-size" value="100" style="width: 72px; padding: 4px 6px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 4px; text-align: center;">

@@ -27,6 +27,35 @@ export interface Camera {
 /** Supported projection methods */
 export type ProjectionMethod = 'UMAP' | 'TSNE' | 'PCA' | 'ISOMAP' | 'LLE' | 'MDS' | 'SAMMON' | 'TriMap';
 
+/** Embedding model identifiers */
+export type ModelType = 'nomic-embed-vision-v1.5' | 'sapiens2-0.1b';
+
+/** Per-model configuration */
+export interface ModelConfig {
+  id: string;
+  type: ModelType;
+  dimensions: number;
+  inputSize: number;
+  task: 'image-feature-extraction' | 'feature-extraction';
+}
+
+export const MODEL_CONFIGS: Record<ModelType, ModelConfig> = {
+  'nomic-embed-vision-v1.5': {
+    id: 'nomic-ai/nomic-embed-vision-v1.5',
+    type: 'nomic-embed-vision-v1.5',
+    dimensions: 768,
+    inputSize: 224,
+    task: 'image-feature-extraction',
+  },
+  'sapiens2-0.1b': {
+    id: 'facebook/sapiens2-pretrain-0.1b',
+    type: 'sapiens2-0.1b',
+    dimensions: 768,
+    inputSize: 1024,
+    task: 'feature-extraction',
+  },
+};
+
 /** Application settings */
 export interface Settings {
   density: number;      // 1.0 = default, smaller = tighter, larger = sparse
@@ -38,6 +67,7 @@ export interface Settings {
   batchSize: number;    // GPU inference batch size (higher = faster, more memory)
   randomSampleSize: number; // 0 = load all; >0 = randomly sample n files when folder has more than n
   viewerOnly: boolean;  // Skip AI models, arrange by folder/date instead
+  embeddingModel: ModelType;
 }
 
 /** Application state */
@@ -109,6 +139,7 @@ export interface DOMElements {
   bottomPanel: HTMLDivElement;
   headerRecenterBtn: HTMLButtonElement;
   demoBtn: HTMLButtonElement;
+  modelSelect: HTMLSelectElement;
 }
 
 /** IndexedDB cache entry */
