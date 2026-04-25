@@ -84,6 +84,7 @@ export interface DOMElements {
   modalPath: HTMLDivElement;
   modalFilename: HTMLDivElement;
   modalDatetime: HTMLDivElement;
+  modalMeta: HTMLSpanElement;
   searchWrap: HTMLDivElement;
   searchInput: HTMLInputElement;
   searchClearBtn: HTMLButtonElement;

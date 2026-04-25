@@ -81,6 +81,7 @@ const dom: DOMElements = {
   modalPath: document.getElementById('modal-path') as HTMLDivElement,
   modalFilename: document.getElementById('modal-filename') as HTMLDivElement,
   modalDatetime: document.getElementById('modal-datetime') as HTMLDivElement,
+  modalMeta: document.getElementById('modal-meta') as HTMLSpanElement,
   searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
@@ -1278,6 +1279,59 @@ async function navigateToFolder(targetPath: string) {
   await run(state.currentDirHandle, targetPath);
 }
 
+// Filter files by datetime range and reprocess
+function filterByDateTime(
+  granularity: 'year' | 'month' | 'day' | 'hour' | 'minute',
+  year: number,
+  month?: number,
+  day?: number,
+  hour?: number,
+  minute?: number
+) {
+  // Filter current files by datetime range
+  const filtered = state.files.filter(f => {
+    const d = new Date(f.lastModified);
+    if (d.getFullYear() !== year) return false;
+    if (month !== undefined && d.getMonth() !== month) return false;
+    if (day !== undefined && d.getDate() !== day) return false;
+    if (hour !== undefined && d.getHours() !== hour) return false;
+    if (minute !== undefined && d.getMinutes() !== minute) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    setStatus('No files found in this time range.');
+    return;
+  }
+
+  // Close modal and reprocess with filtered files
+  closeModal();
+
+  // Update display name for status
+  const rangeDesc =
+    granularity === 'year' ? year.toString() :
+    granularity === 'month' ? `${year}-${(month! + 1).toString().padStart(2, '0')}` :
+    granularity === 'day' ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}` :
+    granularity === 'hour' ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:00` :
+    `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:${minute!.toString().padStart(2, '0')}`;
+
+  // Clear current state and process filtered files
+  state.phase = 'idle';
+  state.files = [];
+  state.vectors = [];
+  state.points = [];
+  state.rawPoints = null;
+  state.clusters = null;
+  state.thumbnails = [];
+  state.searchResults = null;
+  state.searchQuery = '';
+  state.searchScores = null;
+  state.hnsw = undefined;
+
+  setStatus(`Found ${filtered.length} files from ${rangeDesc}. Processing...`);
+  processFiles(filtered);
+}
+
 // ── Interaction ──────────────────────────────────────────────────────────────
 const pointers = new Map<number, PointerState>();
 let lastPinchDist = 0;
@@ -1486,9 +1540,65 @@ const openFileModal = (index: number) => {
     dom.modalUp.style.visibility = 'hidden';
   }
 
-  // Format datetime in browser locale
+  // Create clickable datetime breadcrumbs
   const date = new Date(f.lastModified);
-  dom.modalDatetime.textContent = `${date.toLocaleString()}`;
+  while (dom.modalDatetime.firstChild) {
+    dom.modalDatetime.removeChild(dom.modalDatetime.firstChild);
+  }
+
+  // Year
+  const yearLink = document.createElement('span');
+  yearLink.className = 'modal-link';
+  yearLink.textContent = date.getFullYear().toString();
+  yearLink.onclick = () => filterByDateTime('year', date.getFullYear());
+  dom.modalDatetime.appendChild(yearLink);
+
+  // Month
+  const monthSep = document.createElement('span');
+  monthSep.className = 'modal-sep';
+  monthSep.textContent = '/';
+  dom.modalDatetime.appendChild(monthSep);
+  const monthLink = document.createElement('span');
+  monthLink.className = 'modal-link';
+  monthLink.textContent = (date.getMonth() + 1).toString().padStart(2, '0');
+  monthLink.onclick = () => filterByDateTime('month', date.getFullYear(), date.getMonth());
+  dom.modalDatetime.appendChild(monthLink);
+
+  // Day
+  const daySep = document.createElement('span');
+  daySep.className = 'modal-sep';
+  daySep.textContent = '/';
+  dom.modalDatetime.appendChild(daySep);
+  const dayLink = document.createElement('span');
+  dayLink.className = 'modal-link';
+  dayLink.textContent = date.getDate().toString().padStart(2, '0');
+  dayLink.onclick = () => filterByDateTime('day', date.getFullYear(), date.getMonth(), date.getDate());
+  dom.modalDatetime.appendChild(dayLink);
+
+  // Hour
+  const hourSep = document.createElement('span');
+  hourSep.className = 'modal-sep';
+  hourSep.textContent = ' ';
+  dom.modalDatetime.appendChild(hourSep);
+  const hourLink = document.createElement('span');
+  hourLink.className = 'modal-link';
+  hourLink.textContent = date.getHours().toString().padStart(2, '0');
+  hourLink.onclick = () => filterByDateTime('hour', date.getFullYear(), date.getMonth(), date.getDate(), date.getHours());
+  dom.modalDatetime.appendChild(hourLink);
+
+  // Minute
+  const minSep = document.createElement('span');
+  minSep.className = 'modal-sep';
+  minSep.textContent = ':';
+  dom.modalDatetime.appendChild(minSep);
+  const minLink = document.createElement('span');
+  minLink.className = 'modal-link';
+  minLink.textContent = date.getMinutes().toString().padStart(2, '0');
+  minLink.onclick = () => filterByDateTime('minute', date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes());
+  dom.modalDatetime.appendChild(minLink);
+
+  // Store date for updateSizeInfo closure
+  const fileDate = date;
 
   // Update size and resolution after media loads
   const updateSizeInfo = () => {
@@ -1503,7 +1613,7 @@ const openFileModal = (index: number) => {
       const sizeMB = (f.size / (1024 * 1024)).toFixed(f.size < 1024 * 1024 ? 2 : 1);
       const sizeKB = (f.size / 1024).toFixed(0);
       const sizeStr = f.size < 1024 * 1024 ? `${sizeKB} KB` : `${sizeMB} MB`;
-      dom.modalDatetime.textContent = `${date.toLocaleString()} · ${width}×${height} · ${sizeStr}`;
+      dom.modalMeta.textContent = `${width}×${height} · ${sizeStr}`;
     }
   };
 

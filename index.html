@@ -399,6 +399,20 @@
 
     .modal-datetime {
       color: var(--text-dim);
+      flex-shrink: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .modal-datetime .modal-link {
+      color: var(--text-dim);
+    }
+    .modal-datetime .modal-link:hover {
+      color: var(--primary);
+    }
+
+    .modal-meta {
+      color: var(--text-dim);
       flex-shrink: 0;
     }
 
@@ -603,6 +617,8 @@
       <span id="modal-filename" class="modal-filename"></span>
       <span class="modal-sep"> · </span>
       <span id="modal-datetime" class="modal-datetime"></span>
+      <span class="modal-sep"> · </span>
+      <span id="modal-meta" class="modal-meta"></span>
     </div>
   </div>
 </div>
