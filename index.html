@@ -331,7 +331,7 @@
 
     #modal-img {
       width: 100%;
-      height: calc(90dvh - 60px);
+      height: calc(90dvh - 72px);
       object-fit: contain;
       background: #000;
       border-radius: 12px 12px 0 0;
@@ -340,14 +340,103 @@
       border-radius: 12px 12px 0 0;
     }
 
-    #modal-name {
-      padding: 16px;
-      font-size: 13px;
-      color: var(--text-main);
-      text-align: center;
+    /* Modal footer with metadata */
+    #modal-footer {
       background: var(--surface);
       border-top: 1px solid var(--border);
+      border-radius: 0 0 12px 12px;
+      flex-shrink: 0;
+    }
+
+    .modal-path {
+      padding: 6px 16px 0;
+      font-size: 11px;
+      color: var(--text-dim);
+      text-align: center;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .modal-info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 16px 12px;
+      gap: 12px;
+    }
+
+    .modal-filename {
+      font-size: 13px;
+      color: var(--text-main);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 500;
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .modal-datetime {
+      font-size: 12px;
+      color: var(--text-dim);
+      font-family: system-ui, -apple-system, sans-serif;
+      white-space: nowrap;
+      flex-shrink: 0;
+      max-width: 50%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Mobile portrait: more compact */
+    @media (max-width: 600px) and (orientation: portrait) {
+      #modal-img, #modal-video {
+        height: calc(90dvh - 56px);
+      }
+
+      .modal-path {
+        padding: 4px 12px 0;
+        font-size: 10px;
+      }
+
+      .modal-info-row {
+        padding: 2px 12px 10px;
+        gap: 6px;
+      }
+
+      .modal-filename {
+        font-size: 11px;
+      }
+
+      .modal-datetime {
+        font-size: 10px;
+        max-width: 45%;
+      }
+    }
+
+    /* Landscape mobile: slightly more space */
+    @media (max-height: 500px) and (orientation: landscape) {
+      #modal-img, #modal-video {
+        height: calc(90dvh - 48px);
+      }
+
+      .modal-path {
+        display: none; /* Hide path in landscape to save vertical space */
+      }
+
+      .modal-info-row {
+        padding: 6px 16px 8px;
+      }
+
+      .modal-filename {
+        font-size: 12px;
+      }
+
+      .modal-datetime {
+        font-size: 11px;
+      }
     }
 
     #modal-close {
@@ -522,8 +611,14 @@
     <button id="modal-nav-down" class="modal-nav-btn" title="Down">▼</button>
     <button id="modal-close" title="Close">✕</button>
     <img id="modal-img" alt="Full view">
-    <video id="modal-video" controls loop style="width: 100%; height: calc(90dvh - 60px); object-fit: contain; display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
-    <div id="modal-name"></div>
+    <video id="modal-video" controls loop style="width: 100%; height: calc(90dvh - 72px); object-fit: contain; display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
+    <div id="modal-footer">
+      <div id="modal-path" class="modal-path"></div>
+      <div class="modal-info-row">
+        <div id="modal-filename" class="modal-filename"></div>
+        <div id="modal-datetime" class="modal-datetime"></div>
+      </div>
+    </div>
   </div>
 </div>
 

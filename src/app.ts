@@ -76,7 +76,10 @@ const dom: DOMElements = {
   modalNavDown: document.getElementById('modal-nav-down') as HTMLButtonElement,
   modalImg: document.getElementById('modal-img') as HTMLImageElement,
   modalVideo: document.getElementById('modal-video') as HTMLVideoElement,
-  modalName: document.getElementById('modal-name') as HTMLDivElement,
+  modalFooter: document.getElementById('modal-footer') as HTMLDivElement,
+  modalPath: document.getElementById('modal-path') as HTMLDivElement,
+  modalFilename: document.getElementById('modal-filename') as HTMLDivElement,
+  modalDatetime: document.getElementById('modal-datetime') as HTMLDivElement,
   searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
@@ -1398,7 +1401,7 @@ dom.searchClearBtn.addEventListener('click', () => {
 const openFileModal = (index: number) => {
   const f = state.files[index];
   const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-  
+
   if (VIDEO_EXTS.has(ext)) {
     dom.modalImg.style.display = 'none';
     dom.modalVideo.style.display = 'block';
@@ -1412,8 +1415,44 @@ const openFileModal = (index: number) => {
     dom.modalImg.style.display = 'block';
     dom.modalImg.src = f.objectURL || '';
   }
-  
-  dom.modalName.textContent = f.name.split('/').pop() || '';
+
+  // Populate modal footer with metadata
+  const pathParts = f.name.split('/');
+  const filename = pathParts.pop() || '';
+  const parentPath = pathParts.length > 0 ? pathParts.join(' / ') : '(root)';
+
+  dom.modalPath.textContent = parentPath;
+  dom.modalFilename.textContent = filename;
+
+  // Format datetime in browser locale
+  const date = new Date(f.lastModified);
+  dom.modalDatetime.textContent = `${date.toLocaleString()}`;
+
+  // Update size and resolution after media loads
+  const updateSizeInfo = () => {
+    const width = dom.modalImg.style.display !== 'none'
+      ? dom.modalImg.naturalWidth
+      : dom.modalVideo.videoWidth;
+    const height = dom.modalImg.style.display !== 'none'
+      ? dom.modalImg.naturalHeight
+      : dom.modalVideo.videoHeight;
+
+    if (width && height) {
+      const sizeMB = (f.size / (1024 * 1024)).toFixed(f.size < 1024 * 1024 ? 2 : 1);
+      const sizeKB = (f.size / 1024).toFixed(0);
+      const sizeStr = f.size < 1024 * 1024 ? `${sizeKB} KB` : `${sizeMB} MB`;
+      dom.modalDatetime.textContent = `${date.toLocaleString()} · ${width}×${height} · ${sizeStr}`;
+    }
+  };
+
+  // Try immediately (might be cached), otherwise wait for load
+  updateSizeInfo();
+  if (dom.modalImg.style.display !== 'none') {
+    dom.modalImg.onload = updateSizeInfo;
+  } else {
+    dom.modalVideo.onloadedmetadata = updateSizeInfo;
+  }
+
   dom.modal.classList.add('open');
   state.activeFileIndex = index;
   state.lastViewedIndex = index;

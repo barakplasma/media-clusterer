@@ -77,7 +77,10 @@ export interface DOMElements {
   modalNavDown: HTMLButtonElement;
   modalImg: HTMLImageElement;
   modalVideo: HTMLVideoElement;
-  modalName: HTMLDivElement;
+  modalFooter: HTMLDivElement;
+  modalPath: HTMLDivElement;
+  modalFilename: HTMLDivElement;
+  modalDatetime: HTMLDivElement;
   searchWrap: HTMLDivElement;
   searchInput: HTMLInputElement;
   searchClearBtn: HTMLButtonElement;
