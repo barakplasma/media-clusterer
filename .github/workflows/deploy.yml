@@ -67,8 +67,7 @@ jobs:
             -f environment="preview" \
             -f description="Deployed to Cloudflare Pages" \
             -f environment_url="$BRANCH_URL" \
-            -f auto_inactive=true \
-            -f required_contexts="[]"
+            -f auto_inactive=true
 
           # Comment on PR with deployment URL
           gh pr comment "$PR_NUMBER" --body "🚀 **Deployed preview:** $BRANCH_URL" || true
