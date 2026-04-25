@@ -1139,6 +1139,15 @@ async function processFiles(files: PhotoFile[]) {
     setStatus('No images found.');
     return;
   }
+
+  // Clean up old resources before processing new files (prevents blob URL errors)
+  for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
+  for (const f of state.files) {
+    if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
+  }
+  thumbDecoding.clear();
+  thumbnailLRU.clear();
+
   state.files = files;
 
   // VIEWER MODE: Skip all AI processing
@@ -1313,6 +1322,19 @@ async function filterByDateTime(
     return;
   }
 
+  // Apply random sample limit if configured and filtered results exceed it
+  let finalFiles = filtered;
+  const sampleLimit = state.settings.randomSampleSize;
+  if (sampleLimit > 0 && filtered.length > sampleLimit) {
+    // Reservoir sampling on filtered results
+    const sampled: PhotoFile[] = filtered.slice(0, sampleLimit);
+    for (let i = sampleLimit; i < filtered.length; i++) {
+      const j = Math.floor(Math.random() * (i + 1));
+      if (j < sampleLimit) sampled[j] = filtered[i];
+    }
+    finalFiles = sampled;
+  }
+
   // Update display name for status
   const rangeDesc =
     granularity === 'year' ? year.toString() :
@@ -1334,8 +1356,23 @@ async function filterByDateTime(
   state.searchScores = null;
   state.hnsw = undefined;
 
-  setStatus(`Found ${filtered.length} files from ${rangeDesc}. Processing...`);
-  processFiles(filtered);
+  // If extractor isn't loaded, ensure we're in viewer-only mode for filtering
+  const wasViewerOnly = state.settings.viewerOnly;
+  if (!extractor) {
+    state.settings.viewerOnly = true;
+  }
+
+  const sampleNote = finalFiles.length < filtered.length ? ` (sampled ${finalFiles.length} of ${filtered.length})` : '';
+  setStatus(`Found ${filtered.length} files from ${rangeDesc}.${sampleNote} Processing...`);
+
+  try {
+    await processFiles(finalFiles);
+  } finally {
+    // Restore original viewer-only setting if we temporarily forced it
+    if (!extractor && !wasViewerOnly) {
+      state.settings.viewerOnly = wasViewerOnly;
+    }
+  }
 }
 
 // ── Interaction ──────────────────────────────────────────────────────────────
