@@ -1,6 +1,6 @@
 {
   "name": "media-clusterer",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Local AI media clusterer with semantic search for photos and videos",
   "type": "module",
   "scripts": {
