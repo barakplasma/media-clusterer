@@ -1616,7 +1616,9 @@ const openFileModal = (index: number) => {
     dom.modalImg.style.display = 'none';
     dom.modalVideo.style.display = 'block';
     dom.modalVideo.loop = state.settings.loopVideos;
-    dom.modalVideo.src = f.objectURL || '';
+    // Ensure objectURL exists (created lazily during thumbnail decode)
+    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
+    dom.modalVideo.src = f.objectURL;
     dom.modalVideo.play().catch(() => {}); // Autoplay when opened
   } else {
     dom.modalVideo.style.display = 'none';
