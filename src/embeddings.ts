@@ -105,8 +105,58 @@ export function extractBatchedVectors(output: PipelineOutput, batchSize: number)
 }
 
 /**
- * Create cache key from file metadata
+ * Extract [CLS] token vector from pipeline output (shape [batch, seq_len, hidden]).
+ * Used for Sapiens2 and other models where index 0 is the global representation token.
  */
-export function makeCacheKey(file: { name: string; size: number; lastModified: number }): string {
-  return `${file.name}:${file.size}:${file.lastModified}`;
+export function extractCLSVector(output: PipelineOutput, dimensions: number): Float32Array {
+  let tensor: PipelineOutput | undefined = Array.isArray(output) ? output[0] : output;
+
+  if (tensor && typeof tensor === 'object' && !('dims' in tensor)) {
+    const obj = tensor as Record<string, unknown>;
+    tensor = (obj.last_hidden_state ?? obj.pooler_output ?? Object.values(obj)[0]) as PipelineOutput;
+  }
+
+  if (!tensor) throw new Error('Failed to extract tensor from pipeline output');
+
+  // CLS token is at sequence position 0; slice first `dimensions` elements from flat data
+  return l2normalize(tensor.data.slice(0, dimensions) as Float32Array);
+}
+
+/**
+ * Extract [CLS] token vectors from a batched pipeline output (shape [batch, seq_len, hidden]).
+ */
+export function extractBatchedCLSVectors(output: PipelineOutput, batchSize: number, dimensions: number): Float32Array[] {
+  let tensor: PipelineOutput | undefined = Array.isArray(output) ? output[0] : output;
+
+  if (tensor && typeof tensor === 'object' && !('dims' in tensor)) {
+    const obj = tensor as Record<string, unknown>;
+    tensor = (obj.last_hidden_state ?? obj.pooler_output ?? Object.values(obj)[0]) as PipelineOutput;
+  }
+
+  if (!tensor) throw new Error('Failed to extract tensor from batched pipeline output');
+
+  const dims = tensor.dims;
+  const data = tensor.data;
+  const hiddenSize = dims[dims.length - 1];
+  const seqLen = dims.length === 3 ? dims[1] : 1;
+  const results: Float32Array[] = [];
+
+  for (let b = 0; b < batchSize; b++) {
+    // CLS is at sequence index 0 for each batch item
+    const offset = b * seqLen * hiddenSize;
+    const cls = new Float32Array(dimensions);
+    for (let j = 0; j < dimensions; j++) {
+      cls[j] = data[offset + j];
+    }
+    results.push(l2normalize(cls));
+  }
+
+  return results;
+}
+
+/**
+ * Create cache key scoped to a specific model to prevent cross-model cache collisions
+ */
+export function makeCacheKey(modelId: string, file: { name: string; size: number; lastModified: number }): string {
+  return `${modelId}:${file.name}:${file.size}:${file.lastModified}`;
 }

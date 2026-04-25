@@ -8,7 +8,10 @@ import {
   l2normalize,
   extractVector,
   extractBatchedVectors,
+  extractCLSVector,
+  extractBatchedCLSVectors,
 } from './embeddings';
+import { MODEL_CONFIGS } from './types';
 import {
   openDB,
   cacheGet,
@@ -29,6 +32,7 @@ import type {
   ProgressEvent,
   Settings,
   ProjectionMethod,
+  ModelType,
   DirectoryHandle,
   FileSystemHandle,
   PointerState,
@@ -106,6 +110,7 @@ const dom: DOMElements = {
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
+  modelSelect: document.getElementById('model-select') as HTMLSelectElement,
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
@@ -127,6 +132,7 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
+  embeddingModel: 'nomic-embed-vision-v1.5',
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -157,6 +163,7 @@ const camera: Camera = { x: 0, y: 0, scale: 1 };
 let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
 let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
+let currentModelType: ModelType | null = null;      // Which model is currently loaded
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
@@ -931,12 +938,16 @@ async function runProjection(vectors: Float64Array[], method: ProjectionMethod, 
 
 // ── Model singleton ──────────────────────────────────────────────────────────
 async function loadModel() {
-  if (extractor) return;
+  const targetModel = state.settings.embeddingModel;
+  if (extractor && currentModelType === targetModel) return;
   state.phase = 'loading_model';
   setStatus('Loading model…');
   setProgress(0);
 
-  const MODEL_SIZE_BYTES = 380 * 1024 * 1024 + 134 * 1024 * 1024;
+  const config = MODEL_CONFIGS[targetModel];
+  const isSapiens = config.type === 'sapiens2-0.1b';
+  // Approximate ONNX weight sizes: Nomic ~380MB vision + 134MB text stub; Sapiens2 0.1B ~400MB
+  const MODEL_SIZE_BYTES = isSapiens ? 400 * 1024 * 1024 : 380 * 1024 * 1024;
   const loaded = new Map<string, number>();
 
   const progressCb = (e: ProgressEvent) => {
@@ -949,28 +960,52 @@ async function loadModel() {
     }
   };
 
-  const tryLoad = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
-    'image-feature-extraction',
-    'nomic-ai/nomic-embed-vision-v1.5',
-    { device, dtype: 'fp32', progress_callback: progressCb, pooling: 'mean', normalize: true }
-  ) as Promise<PipelineInstance>;
-
-  try {
-    extractor = await tryLoad('webgpu');
-    modelDevice = 'webgpu';
-  } catch (gpuErr) {
-    console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
-    setStatus('WebGPU unavailable — using CPU (slower)…');
-    loaded.clear();
+  if (isSapiens) {
+    // Sapiens2 requires WebGPU — running 1024×1024 ViT on WASM would OOM or take minutes
     try {
-      extractor = await tryLoad('wasm');
-      modelDevice = 'cpu';
-    } catch (wasmErr) {
-      setStatus('Failed to load model. Your browser may not support WebGPU or WASM.');
+      extractor = await (pipeline as Pipeline)(
+        config.task,
+        config.id,
+        { device: 'webgpu', dtype: 'fp32', progress_callback: progressCb }
+      ) as PipelineInstance;
+      modelDevice = 'webgpu';
+    } catch (err) {
+      const errName = (err as Error)?.name ?? '';
+      const errMsg = (err as Error)?.message ?? String(err);
+      if (errName === 'QuotaExceededError' || errMsg.includes('QuotaExceeded')) {
+        setStatus('Storage quota exceeded loading Sapiens2. Clear browser cache and try again.');
+      } else {
+        setStatus('Sapiens2 requires WebGPU (Chrome 113+). This browser does not support it.');
+      }
       dom.loadModelBtn.hidden = false;
-      throw wasmErr;
+      throw err;
+    }
+  } else {
+    const tryLoad = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
+      config.task,
+      config.id,
+      { device, dtype: 'fp32', progress_callback: progressCb, pooling: 'mean', normalize: true }
+    ) as Promise<PipelineInstance>;
+
+    try {
+      extractor = await tryLoad('webgpu');
+      modelDevice = 'webgpu';
+    } catch (gpuErr) {
+      console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
+      setStatus('WebGPU unavailable — using CPU (slower)…');
+      loaded.clear();
+      try {
+        extractor = await tryLoad('wasm');
+        modelDevice = 'cpu';
+      } catch (wasmErr) {
+        setStatus('Failed to load model. Your browser may not support WebGPU or WASM.');
+        dom.loadModelBtn.hidden = false;
+        throw wasmErr;
+      }
     }
   }
+
+  currentModelType = targetModel;
   updateDeviceBadge();
   setProgress(100);
 
@@ -1030,7 +1065,8 @@ async function embedAll(files: PhotoFile[]) {
   const batchSize = state.settings.batchSize;
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, Math.min(i + batchSize, files.length));
-    const keys = batch.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    const modelId = state.settings.embeddingModel;
+    const keys = batch.map(f => `${modelId}:${f.name}:${f.size}:${f.lastModified}` as CacheKey);
 
     // One IDB transaction for the whole batch
     const cached = await cacheGetBatch(keys);
@@ -1038,6 +1074,8 @@ async function embedAll(files: PhotoFile[]) {
     // Resolve inputs for cache misses (convert video thumbnails to RawImage in parallel)
     const missIndices: number[] = [];
     const missInputs: (File | RawImage)[] = [];
+    const modelConfig = MODEL_CONFIGS[state.settings.embeddingModel];
+    const isSapiens = modelConfig.type === 'sapiens2-0.1b';
 
     await Promise.all(batch.map(async (f, bi) => {
       if (cached[bi]) return; // cache hit — handled below
@@ -1058,13 +1096,18 @@ async function embedAll(files: PhotoFile[]) {
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(thumb, 0, 0);
-            missInputs.push(await RawImage.fromCanvas(canvas));
+            const raw = await RawImage.fromCanvas(canvas);
+            missInputs.push(isSapiens ? await raw.resize(modelConfig.inputSize, modelConfig.inputSize) : raw);
           } else {
             missInputs.push(f.file);
           }
         } else {
           missInputs.push(f.file);
         }
+      } else if (isSapiens) {
+        // Force exact 1024×1024 squashed resize — required for Sapiens2 positional embeddings
+        const img = await RawImage.read(f.file);
+        missInputs.push(await img.resize(modelConfig.inputSize, modelConfig.inputSize));
       } else {
         missInputs.push(f.file);
       }
@@ -1080,10 +1123,15 @@ async function embedAll(files: PhotoFile[]) {
     if (missInputs.length > 0) {
       if (!extractor) throw new Error('Extractor not loaded');
       try {
-        const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
+        const inferOptions = isSapiens ? {} : { pooling: 'mean' as const, normalize: true };
+        const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, inferOptions);
         const extracted = missInputs.length === 1
-          ? [extractVector(output)]
-          : extractBatchedVectors(output, missInputs.length);
+          ? isSapiens
+            ? [extractCLSVector(output, modelConfig.dimensions)]
+            : [extractVector(output)]
+          : isSapiens
+            ? extractBatchedCLSVectors(output, missInputs.length, modelConfig.dimensions)
+            : extractBatchedVectors(output, missInputs.length);
 
         for (let m = 0; m < missIndices.length; m++) {
           const bi = missIndices[m];
@@ -1092,9 +1140,13 @@ async function embedAll(files: PhotoFile[]) {
           writeQueue.push([keys[bi], vectors[idx]]);
         }
       } catch (err) {
-        console.warn('Batch inference failed, filling zeros:', (err as Error).message);
+        const errMsg = (err as Error).message ?? String(err);
+        if (isSapiens && (errMsg.includes('out of memory') || errMsg.includes('OOM') || errMsg.includes('WebGPU'))) {
+          setStatus('WebGPU out of memory with Sapiens2. Try reducing batch size or reloading.');
+        }
+        console.warn('Batch inference failed, filling zeros:', errMsg);
         for (const bi of missIndices) {
-          vectors[i + bi] = new Float64Array(768);
+          vectors[i + bi] = new Float64Array(modelConfig.dimensions);
         }
       }
     }
@@ -1804,6 +1856,7 @@ if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projection
 dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
+if (dom.modelSelect) dom.modelSelect.value = state.settings.embeddingModel;
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
@@ -1837,6 +1890,40 @@ dom.settingsClose.addEventListener('click', () => {
 
 dom.settingsModal.addEventListener('click', (e) => {
   if (e.target === dom.settingsModal) dom.settingsModal.classList.remove('open');
+});
+
+dom.modelSelect.addEventListener('change', () => {
+  const newModel = dom.modelSelect.value as ModelType;
+  if (newModel === state.settings.embeddingModel) return;
+
+  state.settings.embeddingModel = newModel;
+  saveSettings();
+
+  // Invalidate loaded model and any derived clustering state — the two embedding
+  // spaces are incompatible and cannot be mixed.
+  if (state.files.length > 0 || extractor) {
+    extractor = null;
+    currentModelType = null;
+    state.vectors = [];
+    state.points = [];
+    state.rawPoints = null;
+    state.clusters = null;
+    state.hnsw = undefined;
+    state.searchResults = null;
+    state.searchQuery = '';
+    state.searchScores = null;
+    if (state.phase === 'done' || state.phase === 'embedding' || state.phase === 'projecting') {
+      state.phase = 'idle';
+    }
+    dom.loadModelBtn.hidden = false;
+    dom.loadModelBtn.disabled = false;
+    dom.openBtn.disabled = true;
+    dom.openBtn.classList.remove('primary');
+    dom.demoBtn.disabled = true;
+    scheduleRender();
+    const label = newModel === 'sapiens2-0.1b' ? 'Sapiens2 0.1B (Human-Centric)' : 'Nomic Embed Vision (General)';
+    setStatus(`Switched to ${label}. Click "Load AI Models" to reload.`);
+  }
 });
 
 dom.enableSearchToggle.addEventListener('change', async () => {
@@ -2180,9 +2267,10 @@ dom.resumeBtn.addEventListener('click', async () => {
     } else {
       // AI mode: restore search index
       setStatus('Restoring search index…');
-      const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+      const modelId = state.settings.embeddingModel;
+      const keys = matched.map(f => `${modelId}:${f.name}:${f.size}:${f.lastModified}` as CacheKey);
       const cachedVectors = await cacheGetBatch(keys);
-      state.vectors = cachedVectors.map(v => v || new Float64Array(768));
+      state.vectors = cachedVectors.map(v => v || new Float64Array(MODEL_CONFIGS[state.settings.embeddingModel].dimensions));
       if (state.vectors.length > 0) {
         state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
       }
@@ -2262,7 +2350,7 @@ function buildDebugInfo(): string {
     `density:     ${state.settings.density}`,
     ``,
     `── models ──────────────────`,
-    `vision:      ${extractor ? `loaded (${modelDevice ?? '?'})` : 'none'}`,
+    `vision:      ${extractor ? `${currentModelType ?? '?'} (${modelDevice ?? '?'})` : 'none'}`,
     `text:        ${textExtractor ? 'loaded' : 'none'}`,
     ``,
     `── memory ──────────────────`,
