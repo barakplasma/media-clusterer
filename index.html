@@ -356,12 +356,30 @@
       overflow: hidden;
     }
 
+    .modal-link {
+      color: var(--primary);
+      cursor: pointer;
+      text-decoration: none;
+      flex-shrink: 0;
+      transition: opacity 0.15s;
+    }
+    .modal-link:hover {
+      opacity: 0.7;
+      text-decoration: underline;
+    }
+
     .modal-path {
       color: var(--text-dim);
       flex-shrink: 1;
       overflow: hidden;
       text-overflow: ellipsis;
       min-width: 0;
+    }
+    .modal-path .modal-link {
+      color: var(--text-dim);
+    }
+    .modal-path .modal-link:hover {
+      color: var(--primary);
     }
 
     .modal-sep {
@@ -578,6 +596,8 @@
     <img id="modal-img" alt="Full view">
     <video id="modal-video" controls loop style="width: 100%; height: calc(90dvh - 44px); object-fit: contain; display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
     <div id="modal-footer">
+      <span id="modal-up" class="modal-link" title="Up one level">↑</span>
+      <span class="modal-sep"> · </span>
       <span id="modal-path" class="modal-path"></span>
       <span class="modal-sep"> · </span>
       <span id="modal-filename" class="modal-filename"></span>

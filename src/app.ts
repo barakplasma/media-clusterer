@@ -77,6 +77,7 @@ const dom: DOMElements = {
   modalImg: document.getElementById('modal-img') as HTMLImageElement,
   modalVideo: document.getElementById('modal-video') as HTMLVideoElement,
   modalFooter: document.getElementById('modal-footer') as HTMLDivElement,
+  modalUp: document.getElementById('modal-up') as HTMLSpanElement,
   modalPath: document.getElementById('modal-path') as HTMLDivElement,
   modalFilename: document.getElementById('modal-filename') as HTMLDivElement,
   modalDatetime: document.getElementById('modal-datetime') as HTMLDivElement,
@@ -141,6 +142,8 @@ const state: AppState = {
   searchResults: null,
   searchQuery: '',
   searchScores: null,
+  currentDirHandle: null,
+  currentBasePath: '',
   settings,
   activeFileIndex: null,
   lastViewedIndex: null,
@@ -208,22 +211,31 @@ function scheduleRender() {
 }
 
 // ── File collection ──────────────────────────────────────────────────────────
-async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0): Promise<PhotoFile[]> {
+async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0, basePath: string = ''): Promise<PhotoFile[]> {
   // Phase 1: walk the tree and collect lightweight file references.
   // When sampleSize > 0, use reservoir sampling so memory stays bounded at O(sampleSize).
   type Ref = { name: string; handle: FileSystemHandle };
   const refs: Ref[] = [];
   let seen = 0;
 
+  // Navigate to base path if specified
+  let currentHandle = dirHandle;
+  if (basePath) {
+    const pathParts = basePath.split('/').filter(p => p);
+    for (const part of pathParts) {
+      currentHandle = await currentHandle.getDirectoryHandle(part);
+    }
+  }
+
   async function walk(handle: DirectoryHandle, prefix: string) {
-    for await (const [name, entry] of handle.entries()) {
+    for await (const [name, entry] of handle as any) {
       if (name.startsWith('.')) continue;
       if (entry.kind === 'directory') {
-        await walk(entry, `${prefix}${name}/`);
+        await walk(entry as DirectoryHandle, `${prefix}${name}/`);
       } else {
         const ext = name.split('.').pop()?.toLowerCase() ?? '';
         if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
-          const ref: Ref = { name: `${prefix}${name}`, handle: entry };
+          const ref: Ref = { name: `${basePath}${prefix}${name}`, handle: entry as FileSystemHandle };
           if (sampleSize <= 0) {
             refs.push(ref);
           } else if (refs.length < sampleSize) {
@@ -238,7 +250,7 @@ async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0)
       }
     }
   }
-  await walk(dirHandle, '');
+  await walk(currentHandle, '');
 
   // Phase 2: fetch File objects only for the selected refs.
   const files: PhotoFile[] = [];
@@ -1238,19 +1250,32 @@ async function processFiles(files: PhotoFile[]) {
   }
 }
 
-async function run(dirHandle: DirectoryHandle) {
+async function run(dirHandle: DirectoryHandle, basePath: string = '') {
   dom.openBtn.disabled = true;
   setProgress(0);
 
   try {
+    state.currentDirHandle = dirHandle;
+    state.currentBasePath = basePath;
     setStatus('Scanning folder…');
-    const files = await collectImages(dirHandle, state.settings.randomSampleSize);
+    const files = await collectImages(dirHandle, state.settings.randomSampleSize, basePath);
     await processFiles(files);
   } catch (err) {
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
     dom.openBtn.disabled = false;
   }
+}
+
+// Navigate to a subfolder (reuses current directory handle)
+async function navigateToFolder(targetPath: string) {
+  if (!state.currentDirHandle) return;
+
+  // Close modal first
+  closeModal();
+
+  // Re-run with new base path
+  await run(state.currentDirHandle, targetPath);
 }
 
 // ── Interaction ──────────────────────────────────────────────────────────────
@@ -1419,10 +1444,47 @@ const openFileModal = (index: number) => {
   // Populate modal footer with metadata
   const pathParts = f.name.split('/');
   const filename = pathParts.pop() || '';
-  const parentPath = pathParts.length > 0 ? pathParts.join(' / ') : '(root)';
 
-  dom.modalPath.textContent = parentPath;
   dom.modalFilename.textContent = filename;
+
+  // Clear and create clickable breadcrumb navigation
+  while (dom.modalPath.firstChild) {
+    dom.modalPath.removeChild(dom.modalPath.firstChild);
+  }
+
+  if (pathParts.length === 0) {
+    const rootSpan = document.createElement('span');
+    rootSpan.className = 'modal-link';
+    rootSpan.textContent = '(root)';
+    rootSpan.onclick = () => navigateToFolder('');
+    dom.modalPath.appendChild(rootSpan);
+  } else {
+    pathParts.forEach((part, i) => {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'modal-sep';
+        sep.textContent = ' / ';
+        dom.modalPath.appendChild(sep);
+      }
+      const link = document.createElement('span');
+      link.className = 'modal-link';
+      link.textContent = part;
+      const targetPath = pathParts.slice(0, i + 1).join('/');
+      link.onclick = () => navigateToFolder(targetPath);
+      dom.modalPath.appendChild(link);
+    });
+  }
+
+  // Up one level button
+  if (pathParts.length > 0) {
+    dom.modalUp.style.visibility = 'visible';
+    dom.modalUp.onclick = () => {
+      const upPath = pathParts.slice(0, -1).join('/');
+      navigateToFolder(upPath);
+    };
+  } else {
+    dom.modalUp.style.visibility = 'hidden';
+  }
 
   // Format datetime in browser locale
   const date = new Date(f.lastModified);

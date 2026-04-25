@@ -57,6 +57,8 @@ export interface AppState {
   hnsw?: any;
   activeFileIndex: number | null;
   lastViewedIndex: number | null;
+  currentDirHandle: FileSystemDirectoryHandle | null;
+  currentBasePath: string; // Track current folder path for navigation
 }
 
 /** DOM element references */
@@ -78,6 +80,7 @@ export interface DOMElements {
   modalImg: HTMLImageElement;
   modalVideo: HTMLVideoElement;
   modalFooter: HTMLDivElement;
+  modalUp: HTMLSpanElement;
   modalPath: HTMLDivElement;
   modalFilename: HTMLDivElement;
   modalDatetime: HTMLDivElement;
@@ -167,18 +170,10 @@ export interface ProgressEvent {
 }
 
 /** Directory handle for File System Access API */
-export interface DirectoryHandle {
-  kind: 'directory';
-  name: string;
-  entries(): AsyncIterableIterator<[string, FileSystemHandle | DirectoryHandle]>;
-  [Symbol.asyncIterator](): AsyncIterator<[string, FileSystemHandle | DirectoryHandle]>;
-}
+export type DirectoryHandle = FileSystemDirectoryHandle;
 
-export interface FileSystemHandle {
-  kind: 'file';
-  name: string;
-  getFile(): Promise<File>;
-}
+/** File handle for File System Access API */
+export type FileSystemHandle = FileSystemFileHandle;
 
 /** Pointer event state */
 export interface PointerState {
