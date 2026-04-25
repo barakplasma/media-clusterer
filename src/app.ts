@@ -1270,6 +1270,9 @@ async function run(dirHandle: DirectoryHandle, basePath: string = '') {
     setStatus('Scanning folder…');
     const files = await collectImages(dirHandle, state.settings.randomSampleSize, basePath);
     await processFiles(files);
+
+    // Update URL to show current folder (clears any filter state)
+    updateURL({ type: 'folder', path: basePath });
   } catch (err) {
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
@@ -1286,6 +1289,9 @@ async function navigateToFolder(targetPath: string) {
 
   // Re-run with new base path
   await run(state.currentDirHandle, targetPath);
+
+  // Update URL for bookmarking/back-forward
+  updateURL({ type: 'folder', path: targetPath });
 }
 
 // Filter files by datetime range - rescans original folder
@@ -1373,7 +1379,89 @@ async function filterByDateTime(
       state.settings.viewerOnly = wasViewerOnly;
     }
   }
+
+  // Update URL for bookmarking/back-forward
+  updateURL({ type: 'datetime', granularity, year, month, day, hour, minute });
 }
+
+// ── URL State Management ───────────────────────────────────────────────────────
+// URL format: #folder:path/to/folder or #dt:2025-01-15T14:30
+
+type URLState = { type: 'folder'; path: string } | { type: 'datetime'; granularity: string; year: number; month?: number; day?: number; hour?: number; minute?: number } | null;
+
+function parseURLHash(hash: string): URLState {
+  if (!hash || hash === '#') return null;
+
+  const content = hash.slice(1); // Remove #
+
+  if (content.startsWith('folder:')) {
+    return { type: 'folder', path: content.slice(7) };
+  }
+
+  if (content.startsWith('dt:')) {
+    const dtStr = content.slice(3);
+    // Parse datetime: 2025-01-15T14:30
+    const parts = dtStr.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}))?(?::(\d{2}))?$/);
+    if (parts) {
+      const [, year, month, day, hour, minute] = parts;
+      return {
+        type: 'datetime',
+        granularity: minute ? 'minute' : hour ? 'hour' : 'day',
+        year: parseInt(year),
+        month: parseInt(month) - 1,
+        day: parseInt(day),
+        hour: hour ? parseInt(hour) : undefined,
+        minute: minute ? parseInt(minute) : undefined
+      };
+    }
+  }
+
+  return null;
+}
+
+function updateURL(state: URLState) {
+  if (!state) {
+    history.replaceState(null, '', '#');
+    return;
+  }
+
+  let hash = '';
+  if (state.type === 'folder') {
+    hash = `#folder:${state.path}`;
+  } else if (state.type === 'datetime') {
+    const { year, month, day, hour, minute } = state;
+    const datePart = `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}`;
+    const timePart = hour !== undefined ? `T${hour.toString().padStart(2, '0')}${minute !== undefined ? ':' + minute.toString().padStart(2, '0') : ''}` : '';
+    hash = `#dt:${datePart}${timePart}`;
+  }
+
+  history.pushState(state, '', hash);
+}
+
+// Handle back/forward navigation
+window.addEventListener('popstate', (e) => {
+  const urlState = parseURLHash(window.location.hash);
+  if (!urlState) {
+    // No state - reset to original folder
+    if (state.currentBasePath) {
+      navigateToFolder('');
+    }
+    return;
+  }
+
+  if (urlState.type === 'folder') {
+    navigateToFolder(urlState.path);
+  } else if (urlState.type === 'datetime') {
+    filterByDateTime(
+      urlState.granularity as 'year' | 'month' | 'day' | 'hour' | 'minute',
+      urlState.year,
+      urlState.month,
+      urlState.day,
+      urlState.hour,
+      urlState.minute
+    );
+  }
+});
 
 // ── Interaction ──────────────────────────────────────────────────────────────
 const pointers = new Map<number, PointerState>();
@@ -2266,7 +2354,7 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // n/p keys for sequential next/previous (looping through all media)
+  // n/p keys for sequential next/previous (in datetime order)
   const key = e.key.toLowerCase();
   if ((key === 'n' || key === 'p') && state.phase === 'done' && state.files.length > 0 && document.activeElement?.tagName !== 'INPUT') {
     e.preventDefault();
@@ -2286,11 +2374,20 @@ document.addEventListener('keydown', (e) => {
     }
 
     if (currentIndex !== null) {
-      const nextIndex = key === 'n'
-        ? (currentIndex + 1) % state.files.length  // Next, wrapping to 0
-        : (currentIndex - 1 + state.files.length) % state.files.length;  // Previous, wrapping to end
+      // Get indices sorted by datetime (oldest first)
+      const sortedIndices = Array.from({ length: state.files.length }, (_, i) => i)
+        .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
 
-      openFileModal(nextIndex);
+      // Find current position in datetime order
+      const currentPos = sortedIndices.indexOf(currentIndex);
+      if (currentPos !== -1) {
+        // Move to next/previous in datetime order
+        const nextPos = key === 'n'
+	  ? (currentPos + 1) % sortedIndices.length
+	  : (currentPos - 1 + sortedIndices.length) % sortedIndices.length;
+	const nextIndex = sortedIndices[nextPos];
+	openFileModal(nextIndex);
+      }
     }
   }
 });
