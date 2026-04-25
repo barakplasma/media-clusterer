@@ -13,7 +13,6 @@ env:
 
 permissions:
   contents: read
-  deployments: write
   pull-requests: write
 
 jobs:
@@ -49,7 +48,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: de11927c1b728c9897c960abbe336098
           DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
-      - name: Update GitHub deployment status
+      - name: Comment on PR with deployment URL
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,17 +56,4 @@ jobs:
           PR_BRANCH: ${{ github.head_ref }}
         run: |
           BRANCH_URL="https://${PR_BRANCH}.media-clusterer.pages.dev"
-
-          # Set deployment status via GitHub API
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/deployments \
-            -f ref="$PR_BRANCH" \
-            -f environment="preview" \
-            -f description="Deployed to Cloudflare Pages" \
-            -f environment_url="$BRANCH_URL" \
-            -f auto_inactive=true
-
-          # Comment on PR with deployment URL
           gh pr comment "$PR_NUMBER" --body "🚀 **Deployed preview:** $BRANCH_URL" || true
