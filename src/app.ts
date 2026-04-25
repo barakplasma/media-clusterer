@@ -1279,8 +1279,8 @@ async function navigateToFolder(targetPath: string) {
   await run(state.currentDirHandle, targetPath);
 }
 
-// Filter files by datetime range and reprocess
-function filterByDateTime(
+// Filter files by datetime range - rescans original folder
+async function filterByDateTime(
   granularity: 'year' | 'month' | 'day' | 'hour' | 'minute',
   year: number,
   month?: number,
@@ -1288,8 +1288,17 @@ function filterByDateTime(
   hour?: number,
   minute?: number
 ) {
-  // Filter current files by datetime range
-  const filtered = state.files.filter(f => {
+  if (!state.currentDirHandle) return;
+
+  // Close modal first
+  closeModal();
+
+  // Re-scan the original folder (no random sample, get all files)
+  setStatus(`Scanning folder for ${granularity}…`);
+  const allFiles = await collectImages(state.currentDirHandle, 0, state.currentBasePath);
+
+  // Filter by datetime range
+  const filtered = allFiles.filter(f => {
     const d = new Date(f.lastModified);
     if (d.getFullYear() !== year) return false;
     if (month !== undefined && d.getMonth() !== month) return false;
@@ -1303,9 +1312,6 @@ function filterByDateTime(
     setStatus('No files found in this time range.');
     return;
   }
-
-  // Close modal and reprocess with filtered files
-  closeModal();
 
   // Update display name for status
   const rangeDesc =
