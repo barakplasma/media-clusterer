@@ -11,6 +11,10 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   validate-and-deploy:
     runs-on: ubuntu-latest
@@ -37,7 +41,38 @@ jobs:
         run: npm run build
 
       - name: Deploy to Cloudflare Pages
-        run: npx wrangler pages deploy dist --project-name media-clusterer --branch ${{ github.head_ref || github.ref_name }}
+        id: deploy
+        run: npx wrangler pages deploy dist --project-name media-clusterer --branch "$DEPLOY_BRANCH"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: de11927c1b728c9897c960abbe336098
+          DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
+
+      - name: Comment on PR with deployment URL
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BRANCH: ${{ github.head_ref }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          BRANCH_URL="https://${PR_BRANCH}.media-clusterer.pages.dev"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+
+          # Get commit message safely via gh api (avoids injection from untrusted input)
+          COMMIT_MSG=$(gh api repos/{owner}/{repo}/git/commits/$COMMIT_SHA --jq '.message')
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -n1)
+
+          COMMENT_BODY="🚀 **Deployed preview:** $BRANCH_URL
+
+          **Commit:** \`$SHORT_SHA\` - $FIRST_LINE"
+
+          # Find existing deployment comment by bot and update it, or create new one
+          COMMENTS=$(gh api repos/{owner}/{repo}/pulls/$PR_NUMBER/comments --jq '.[] | select(.user.type == "Bot") | select(.body | contains("Deployed preview")) | .id')
+          if [ -n "$COMMENTS" ]; then
+            # Edit the first matching comment
+            COMMENT_ID=$(echo "$COMMENTS" | head -n1)
+            gh api --method PATCH repos/{owner}/{repo}/pulls/comments/$COMMENT_ID -f body="$COMMENT_BODY"
+          else
+            gh pr comment "$PR_NUMBER" --body "$COMMENT_BODY"
+          fi

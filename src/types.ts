@@ -37,6 +37,7 @@ export interface Settings {
   projectionMethod: ProjectionMethod;
   batchSize: number;    // GPU inference batch size (higher = faster, more memory)
   randomSampleSize: number; // 0 = load all; >0 = randomly sample n files when folder has more than n
+  viewerOnly: boolean;  // Skip AI models, arrange by folder/date instead
 }
 
 /** Application state */
@@ -56,6 +57,8 @@ export interface AppState {
   hnsw?: any;
   activeFileIndex: number | null;
   lastViewedIndex: number | null;
+  currentDirHandle: FileSystemDirectoryHandle | null;
+  currentBasePath: string; // Track current folder path for navigation
 }
 
 /** DOM element references */
@@ -76,7 +79,12 @@ export interface DOMElements {
   modalNavDown: HTMLButtonElement;
   modalImg: HTMLImageElement;
   modalVideo: HTMLVideoElement;
-  modalName: HTMLDivElement;
+  modalFooter: HTMLDivElement;
+  modalUp: HTMLSpanElement;
+  modalPath: HTMLDivElement;
+  modalFilename: HTMLDivElement;
+  modalDatetime: HTMLDivElement;
+  modalMeta: HTMLSpanElement;
   searchWrap: HTMLDivElement;
   searchInput: HTMLInputElement;
   searchClearBtn: HTMLButtonElement;
@@ -94,6 +102,7 @@ export interface DOMElements {
   drawBudgetSlider: HTMLInputElement;
   enableSearchToggle: HTMLInputElement;
   projectionSelect: HTMLSelectElement;
+  viewerOnlyToggle: HTMLInputElement;
   batchSizeInput: HTMLInputElement;
   batchSizeAutoBtn: HTMLButtonElement;
   randomSampleSizeInput: HTMLInputElement;
@@ -162,18 +171,10 @@ export interface ProgressEvent {
 }
 
 /** Directory handle for File System Access API */
-export interface DirectoryHandle {
-  kind: 'directory';
-  name: string;
-  entries(): AsyncIterableIterator<[string, FileSystemHandle | DirectoryHandle]>;
-  [Symbol.asyncIterator](): AsyncIterator<[string, FileSystemHandle | DirectoryHandle]>;
-}
+export type DirectoryHandle = FileSystemDirectoryHandle;
 
-export interface FileSystemHandle {
-  kind: 'file';
-  name: string;
-  getFile(): Promise<File>;
-}
+/** File handle for File System Access API */
+export type FileSystemHandle = FileSystemFileHandle;
 
 /** Pointer event state */
 export interface PointerState {

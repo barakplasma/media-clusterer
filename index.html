@@ -319,9 +319,10 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
-      max-width: 98vw;
-      width: fit-content;
-      max-height: 98dvh;
+      width: 90vw;
+      height: 90dvh;
+      max-width: 90vw;
+      max-height: 90dvh;
       display: flex;
       flex-direction: column;
       position: relative;
@@ -329,8 +330,8 @@
     }
 
     #modal-img {
-      max-width: 100%;
-      max-height: calc(98dvh - 60px);
+      width: 100%;
+      height: calc(90dvh - 44px);
       object-fit: contain;
       background: #000;
       border-radius: 12px 12px 0 0;
@@ -339,14 +340,100 @@
       border-radius: 12px 12px 0 0;
     }
 
-    #modal-name {
-      padding: 16px;
-      font-size: 13px;
-      color: var(--text-main);
-      text-align: center;
+    /* Modal footer - single row */
+    #modal-footer {
       background: var(--surface);
       border-top: 1px solid var(--border);
+      border-radius: 0 0 12px 12px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      padding: 10px 16px;
+      gap: 0;
+      font-size: 12px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .modal-link {
+      color: var(--primary);
+      cursor: pointer;
+      text-decoration: none;
+      flex-shrink: 0;
+      transition: opacity 0.15s;
+    }
+    .modal-link:hover {
+      opacity: 0.7;
+      text-decoration: underline;
+    }
+
+    .modal-path {
+      color: var(--text-dim);
+      flex-shrink: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .modal-path .modal-link {
+      color: var(--text-dim);
+    }
+    .modal-path .modal-link:hover {
+      color: var(--primary);
+    }
+
+    .modal-sep {
+      color: var(--text-dim);
+      flex-shrink: 0;
+      opacity: 0.5;
+    }
+
+    .modal-filename {
+      color: var(--text-main);
+      font-weight: 500;
+      flex-shrink: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+
+    .modal-datetime {
+      color: var(--text-dim);
+      flex-shrink: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .modal-datetime .modal-link {
+      color: var(--text-dim);
+    }
+    .modal-datetime .modal-link:hover {
+      color: var(--primary);
+    }
+
+    .modal-meta {
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+
+    /* Mobile: smaller padding */
+    @media (max-width: 600px) {
+      #modal-img, #modal-video {
+        height: calc(90dvh - 38px);
+      }
+
+      #modal-footer {
+        padding: 8px 12px;
+        font-size: 11px;
+      }
+
+      .modal-path {
+        max-width: 25%;
+      }
+
+      .modal-filename {
+        max-width: 35%;
+      }
     }
 
     #modal-close {
@@ -521,8 +608,18 @@
     <button id="modal-nav-down" class="modal-nav-btn" title="Down">▼</button>
     <button id="modal-close" title="Close">✕</button>
     <img id="modal-img" alt="Full view">
-    <video id="modal-video" controls loop style="max-width: 100%; max-height: calc(98dvh - 60px); display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
-    <div id="modal-name"></div>
+    <video id="modal-video" controls loop style="width: 100%; height: calc(90dvh - 44px); object-fit: contain; display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
+    <div id="modal-footer">
+      <span id="modal-up" class="modal-link" title="Up one level">↑</span>
+      <span class="modal-sep"> · </span>
+      <span id="modal-path" class="modal-path"></span>
+      <span class="modal-sep"> · </span>
+      <span id="modal-filename" class="modal-filename"></span>
+      <span class="modal-sep"> · </span>
+      <span id="modal-datetime" class="modal-datetime"></span>
+      <span class="modal-sep"> · </span>
+      <span id="modal-meta" class="modal-meta"></span>
+    </div>
   </div>
 </div>
 
@@ -576,7 +673,16 @@
   <div id="settings-content" class="modal-box">
     <button id="settings-close" class="close-x">✕</button>
     <h2 style="color: var(--primary); margin-bottom: 24px; font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 12px;">⚙️ Settings</h2>
-    
+
+    <div class="setting-item" style="padding: 12px; background: rgba(88, 166, 255, 0.1); border: 1px solid var(--primary); border-radius: 8px;">
+      <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;">
+        <input type="checkbox" id="viewer-only-toggle"> <strong>Viewer Only Mode (No AI)</strong>
+      </label>
+      <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
+        Skip AI model loading. Photos arranged in a grid by folder and date. Much faster, but no semantic search or smart clustering.
+      </div>
+    </div>
+
     <div class="setting-item">
       <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
         <span>Random Sample Size</span>

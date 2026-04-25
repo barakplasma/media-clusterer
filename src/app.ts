@@ -50,6 +50,8 @@ const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const BATCH_SIZE = IS_MOBILE ? 4 : 16; // fallback before settings load
 const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
+const MAX_THUMBNAILS_CACHE = 2000; // Max decoded thumbnails to keep in memory (LRU)
+const MAX_FULL_IMAGES = 100; // Max full-res images to keep in memory (LRU)
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
 
 // ── Demo Images (Unsplash API, public authentication) ──────────────────────────
@@ -74,7 +76,12 @@ const dom: DOMElements = {
   modalNavDown: document.getElementById('modal-nav-down') as HTMLButtonElement,
   modalImg: document.getElementById('modal-img') as HTMLImageElement,
   modalVideo: document.getElementById('modal-video') as HTMLVideoElement,
-  modalName: document.getElementById('modal-name') as HTMLDivElement,
+  modalFooter: document.getElementById('modal-footer') as HTMLDivElement,
+  modalUp: document.getElementById('modal-up') as HTMLSpanElement,
+  modalPath: document.getElementById('modal-path') as HTMLDivElement,
+  modalFilename: document.getElementById('modal-filename') as HTMLDivElement,
+  modalDatetime: document.getElementById('modal-datetime') as HTMLDivElement,
+  modalMeta: document.getElementById('modal-meta') as HTMLSpanElement,
   searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
@@ -92,6 +99,7 @@ const dom: DOMElements = {
   drawBudgetSlider: document.getElementById('draw-budget-slider') as HTMLInputElement,
   enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
+  viewerOnlyToggle: document.getElementById('viewer-only-toggle') as HTMLInputElement,
   batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
   batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
   randomSampleSizeInput: document.getElementById('random-sample-size') as HTMLInputElement,
@@ -118,6 +126,7 @@ const DEFAULT_SETTINGS: Settings = {
   projectionMethod: 'TSNE',
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
+  viewerOnly: false,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -134,6 +143,8 @@ const state: AppState = {
   searchResults: null,
   searchQuery: '',
   searchScores: null,
+  currentDirHandle: null,
+  currentBasePath: '',
   settings,
   activeFileIndex: null,
   lastViewedIndex: null,
@@ -158,7 +169,11 @@ const storageBadgeEl = document.getElementById('storage-badge');
 
 function updateDeviceBadge() {
   if (!deviceBadgeEl) return;
-  if (modelDevice === 'webgpu') {
+
+  if (state.settings.viewerOnly) {
+    deviceBadgeEl.textContent = 'Viewer';
+    deviceBadgeEl.style.color = '#4ade80'; // Green for viewer mode
+  } else if (modelDevice === 'webgpu') {
     deviceBadgeEl.textContent = 'WebGPU';
     deviceBadgeEl.style.color = '#4ade80';
   } else if (modelDevice === 'cpu') {
@@ -197,22 +212,31 @@ function scheduleRender() {
 }
 
 // ── File collection ──────────────────────────────────────────────────────────
-async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0): Promise<PhotoFile[]> {
+async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0, basePath: string = ''): Promise<PhotoFile[]> {
   // Phase 1: walk the tree and collect lightweight file references.
   // When sampleSize > 0, use reservoir sampling so memory stays bounded at O(sampleSize).
   type Ref = { name: string; handle: FileSystemHandle };
   const refs: Ref[] = [];
   let seen = 0;
 
+  // Navigate to base path if specified
+  let currentHandle = dirHandle;
+  if (basePath) {
+    const pathParts = basePath.split('/').filter(p => p);
+    for (const part of pathParts) {
+      currentHandle = await currentHandle.getDirectoryHandle(part);
+    }
+  }
+
   async function walk(handle: DirectoryHandle, prefix: string) {
-    for await (const [name, entry] of handle.entries()) {
+    for await (const [name, entry] of handle as any) {
       if (name.startsWith('.')) continue;
       if (entry.kind === 'directory') {
-        await walk(entry, `${prefix}${name}/`);
+        await walk(entry as DirectoryHandle, `${prefix}${name}/`);
       } else {
         const ext = name.split('.').pop()?.toLowerCase() ?? '';
         if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
-          const ref: Ref = { name: `${prefix}${name}`, handle: entry };
+          const ref: Ref = { name: `${basePath}${prefix}${name}`, handle: entry as FileSystemHandle };
           if (sampleSize <= 0) {
             refs.push(ref);
           } else if (refs.length < sampleSize) {
@@ -227,7 +251,7 @@ async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0)
       }
     }
   }
-  await walk(dirHandle, '');
+  await walk(currentHandle, '');
 
   // Phase 2: fetch File objects only for the selected refs.
   const files: PhotoFile[] = [];
@@ -327,10 +351,7 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
 
 // ── Thumbnail preloader ──────────────────────────────────────────────────────
 function initThumbnails(files: PhotoFile[]): (ImageBitmap | null)[] {
-  // Thumbnails are decoded lazily on first render — no upfront work here
-  for (const f of files) {
-    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
-  }
+  // ObjectURLs are now created lazily on first use to avoid OOM with large folders
   return new Array<ImageBitmap | null>(files.length).fill(null);
 }
 
@@ -338,11 +359,31 @@ function lazyDecodeThumbnail(idx: number) {
   if (thumbDecoding.has(idx) || state.thumbnails[idx]) return;
   thumbDecoding.add(idx);
   const f = state.files[idx];
+
+  // Create objectURL lazily if needed (for large folders, don't create all upfront)
+  if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
+
   const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
 
   const done = (bm: ImageBitmap | null) => {
     state.thumbnails[idx] = bm;
     thumbDecoding.delete(idx);
+
+    // Update LRU: remove if present, add to end (most recently used)
+    thumbnailLRU.delete(idx);
+    thumbnailLRU.add(idx);
+
+    // Evict least recently used thumbnails if over cache limit
+    while (thumbnailLRU.size > MAX_THUMBNAILS_CACHE) {
+      const lruIdx = thumbnailLRU.values().next().value; // Get first (oldest)
+      if (lruIdx !== undefined) {
+        thumbnailLRU.delete(lruIdx);
+        const oldBm = state.thumbnails[lruIdx];
+        if (oldBm?.close) oldBm.close();
+        state.thumbnails[lruIdx] = null;
+      }
+    }
+
     scheduleRender();
   };
 
@@ -460,7 +501,9 @@ async function kmeansAsync(points: number[][], k: number, maxIter = 60): Promise
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 const fullImages = new Map<number, HTMLImageElement>(); // index → HTMLImageElement
+const fullImageLRU = new Set<number>();                // LRU tracking for full-res images
 const thumbDecoding = new Set<number>();               // indices currently being decoded
+const thumbnailLRU = new Set<number>();                // indices in LRU order (most recently used at end)
 
 function resizeCanvas() {
   const wrap = dom.canvas.parentElement;
@@ -519,6 +562,78 @@ async function spreadPointsAsync(projectedPoints: number[][]): Promise<Point[]> 
   return pts as Point[];
 }
 
+/**
+ * Generate grid-based 2D coordinates from folder structure and datetime.
+ * Creates a "folder clusters" layout:
+ * - Folders arranged in a horizontal grid
+ * - Within each folder, photos arranged by date (vertical time flow)
+ * - Almost grid-like for predictable navigation
+ */
+function generateMetadataBasedLayout(files: PhotoFile[]): Point[] {
+  if (files.length === 0) return [];
+
+  // Group files by folder path
+  const folderGroups = new Map<string, Array<{ index: number; lastModified: number }>>();
+  for (let i = 0; i < files.length; i++) {
+    const pathParts = files[i].name.split('/');
+    const folder = pathParts.slice(0, -1).join('/') || '(root)';
+    if (!folderGroups.has(folder)) {
+      folderGroups.set(folder, []);
+    }
+    folderGroups.get(folder)!.push({ index: i, lastModified: files[i].lastModified });
+  }
+
+  // Sort each group by date and collect folders in sorted order
+  const sortedFolders: Array<{ folder: string; files: Array<{ index: number; lastModified: number }> }> = [];
+  for (const [folder, fileGroup] of folderGroups) {
+    fileGroup.sort((a, b) => a.lastModified - b.lastModified);
+    sortedFolders.push({ folder, files: fileGroup });
+  }
+  sortedFolders.sort((a, b) => a.folder.localeCompare(b.folder));
+
+  // Calculate grid dimensions - first find max files per column across all folders
+  const numFolders = sortedFolders.length;
+  const foldersPerRow = Math.ceil(Math.sqrt(numFolders * 1.5)); // Slightly wider grid
+  let maxFilesPerCol = 0;
+  for (const { files: folderFiles } of sortedFolders) {
+    const filesPerCol = Math.ceil(Math.sqrt(folderFiles.length));
+    if (filesPerCol > maxFilesPerCol) maxFilesPerCol = filesPerCol;
+  }
+  const folderGridWidth = foldersPerRow * THUMB_WORLD * (maxFilesPerCol + 1); // Space based on largest folder
+  const fileGridSize = THUMB_WORLD * 1.5; // Space between files in a folder
+
+  const points: Point[] = new Array(files.length) as Point[];
+
+  for (let folderIdx = 0; folderIdx < sortedFolders.length; folderIdx++) {
+    const { files: folderFiles } = sortedFolders[folderIdx];
+
+    // Folder position in the grid
+    const folderCol = folderIdx % foldersPerRow;
+    const folderRow = Math.floor(folderIdx / foldersPerRow);
+    const folderOffsetX = folderCol * folderGridWidth;
+    const folderOffsetY = folderRow * folderGridWidth;
+
+    // Files within this folder - also in a grid
+    const numFiles = folderFiles.length;
+    const filesPerCol = Math.ceil(Math.sqrt(numFiles));
+
+    for (let i = 0; i < folderFiles.length; i++) {
+      const { index } = folderFiles[i];
+
+      // Position within folder grid (time flows downward)
+      const fileCol = i % filesPerCol;
+      const fileRow = Math.floor(i / filesPerCol);
+
+      const x = folderOffsetX + fileCol * fileGridSize;
+      const y = folderOffsetY + fileRow * fileGridSize;
+
+      points[index] = [x, y];
+    }
+  }
+
+  return points;
+}
+
 function fitCamera() {
   const pts = state.points;
   if (!pts.length) return;
@@ -539,7 +654,9 @@ function resetAll() {
   for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
   for (const img of fullImages.values()) img.src = '';
   fullImages.clear();
+  fullImageLRU.clear();
   thumbDecoding.clear();
+  thumbnailLRU.clear();
   for (const f of state.files) {
     if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
   }
@@ -553,7 +670,9 @@ function resetAll() {
   state.lastViewedIndex = null;
   localStorage.removeItem('po_fileKeys');
   localStorage.removeItem('po_umapPoints');
+  localStorage.removeItem('po_projectedPoints');
   localStorage.removeItem('po_clusters');
+  localStorage.removeItem('po_viewerMode');
   camera.x = 0; camera.y = 0; camera.scale = 1;
   const ctx = dom.canvas.getContext('2d');
   if (ctx) ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
@@ -669,15 +788,35 @@ function render() {
       drawnFull.add(i);
       let fullImg = fullImages.get(i);
       if (!fullImg) {
+        // Evict LRU full images if over limit
+        while (fullImageLRU.size >= MAX_FULL_IMAGES) {
+          const lruIdx = fullImageLRU.values().next().value;
+          if (lruIdx !== undefined) {
+            fullImageLRU.delete(lruIdx);
+            const oldImg = fullImages.get(lruIdx);
+            if (oldImg) oldImg.src = '';
+            fullImages.delete(lruIdx);
+          }
+        }
+
+        // Ensure objectURL exists
+        const f = state.files[i];
+        if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
+
         fullImg = new Image();
         fullImg.onload = () => {
           if (fullImg) {
             fullImg.decode().then(() => scheduleRender()).catch(() => scheduleRender());
           }
         };
-        fullImg.src = state.files[i].objectURL || '';
+        fullImg.src = f.objectURL;
         fullImages.set(i, fullImg);
       }
+
+      // Update LRU for full image access
+      fullImageLRU.delete(i);
+      fullImageLRU.add(i);
+
       if (fullImg.complete && fullImg.naturalWidth > 0) {
         const ratio = fullImg.naturalWidth / fullImg.naturalHeight;
         const dw = ratio >= 1 ? drawSize : drawSize * ratio;
@@ -696,6 +835,10 @@ function render() {
       const thumb = thumbs[i];
       if (!thumb) lazyDecodeThumbnail(i);
       if (thumb && thumb.width > 0) {
+        // Update LRU when thumbnail is actually used for rendering
+        thumbnailLRU.delete(i);
+        thumbnailLRU.add(i);
+
         const ratio = thumb.width / thumb.height;
         const dw = ratio >= 1 ? drawSize : drawSize * ratio;
         const dh = ratio >= 1 ? drawSize / ratio : drawSize;
@@ -723,12 +866,19 @@ function render() {
   }
 
   if (useFull && drawnFull) {
+    // Evict full images that weren't drawn this frame
     for (const [idx, img] of fullImages) {
-      if (!drawnFull.has(idx)) { img.src = ''; fullImages.delete(idx); }
+      if (!drawnFull.has(idx)) {
+        img.src = '';
+        fullImages.delete(idx);
+        fullImageLRU.delete(idx);
+      }
     }
   } else {
+    // Full-res disabled, clear all
     for (const img of fullImages.values()) img.src = '';
     fullImages.clear();
+    fullImageLRU.clear();
   }
 }
 
@@ -989,7 +1139,77 @@ async function processFiles(files: PhotoFile[]) {
     setStatus('No images found.');
     return;
   }
+
+  // Clean up old resources before processing new files (prevents blob URL errors)
+  for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
+  for (const f of state.files) {
+    if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
+  }
+  thumbDecoding.clear();
+  thumbnailLRU.clear();
+
   state.files = files;
+
+  // VIEWER MODE: Skip all AI processing
+  if (state.settings.viewerOnly) {
+    setStatus(`Viewer mode: ${files.length} files (no AI)`);
+    setProgress(10);
+
+    // Sort files by folder then date to match visual grid layout
+    // This ensures n/p navigation follows the visual order
+    const folderGroups = new Map<string, PhotoFile[]>();
+    for (const f of files) {
+      const pathParts = f.name.split('/');
+      const folder = pathParts.slice(0, -1).join('/') || '(root)';
+      if (!folderGroups.has(folder)) folderGroups.set(folder, []);
+      folderGroups.get(folder)!.push(f);
+    }
+    const sortedFolders = Array.from(folderGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [, folderFiles] of sortedFolders) {
+      folderFiles.sort((a, b) => a.lastModified - b.lastModified);
+    }
+    const sortedFiles = sortedFolders.flatMap(([, files]) => files);
+    state.files = sortedFiles;
+
+    state.thumbnails = initThumbnails(sortedFiles);
+
+    // Generate metadata-based grid layout (already sorted)
+    setProgress(50);
+    const layoutPoints = generateMetadataBasedLayout(sortedFiles);
+    state.rawPoints = layoutPoints.map(p => [p[0], p[1]]);
+
+    // No semantic clustering in viewer mode - use folder-based colors if needed
+    state.clusters = null;
+    state.vectors = [];
+
+    resizeCanvas();
+    state.points = await spreadPointsAsync(state.rawPoints);
+    state.phase = 'done';  // Set after async work completes
+    fitCamera();
+    scheduleRender();
+    setProgress(100);
+
+    setStatus(`${sortedFiles.length} media files — viewer mode (arranged by folder & date)`);
+    if (dom.statsEl) dom.statsEl.textContent = `${sortedFiles.length} files · viewer mode`;
+    dom.recenterBtn.disabled = false;
+    dom.resetBtn.disabled = false;
+    dom.headerRecenterBtn.disabled = false;
+    dom.searchInput.disabled = true;  // No search in viewer mode
+
+    // Save session state for resume (viewer mode)
+    const fileKeys = sortedFiles.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    try {
+      localStorage.setItem('po_fileKeys', JSON.stringify(fileKeys));
+      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
+      localStorage.setItem('po_clusters', JSON.stringify([])); // No semantic clusters in viewer mode
+      localStorage.setItem('po_viewerMode', 'true'); // Flag for resume handler
+    } catch (_) { /* quota exceeded */ }
+
+    dom.openBtn.disabled = false;
+    return;
+  }
+
+  // AI MODE: Full embedding and projection pipeline
   setStatus(`Found ${files.length} media files. Loading thumbnails…`);
 
   try {
@@ -997,7 +1217,7 @@ async function processFiles(files: PhotoFile[]) {
 
     const vectors = await embedAll(files);
     state.vectors = vectors;
-    
+
     setStatus('Building search index…');
     state.hnsw = new druid.HNSW(vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
 
@@ -1028,7 +1248,7 @@ async function processFiles(files: PhotoFile[]) {
     state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
     try {
       localStorage.setItem('po_fileKeys', JSON.stringify(state.fileKeys));
-      localStorage.setItem('po_umapPoints', JSON.stringify(state.points));
+      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
       localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
     } catch (_) { /* quota exceeded */ }
 
@@ -1040,20 +1260,208 @@ async function processFiles(files: PhotoFile[]) {
   }
 }
 
-async function run(dirHandle: DirectoryHandle) {
+async function run(dirHandle: DirectoryHandle, basePath: string = '') {
   dom.openBtn.disabled = true;
   setProgress(0);
 
   try {
+    state.currentDirHandle = dirHandle;
+    state.currentBasePath = basePath;
     setStatus('Scanning folder…');
-    const files = await collectImages(dirHandle, state.settings.randomSampleSize);
+    const files = await collectImages(dirHandle, state.settings.randomSampleSize, basePath);
     await processFiles(files);
+
+    // Update URL to show current folder (clears any filter state)
+    updateURL({ type: 'folder', path: basePath });
   } catch (err) {
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
     dom.openBtn.disabled = false;
   }
 }
+
+// Navigate to a subfolder (reuses current directory handle)
+async function navigateToFolder(targetPath: string) {
+  if (!state.currentDirHandle) return;
+
+  // Close modal first
+  closeModal();
+
+  // Re-run with new base path
+  await run(state.currentDirHandle, targetPath);
+
+  // Update URL for bookmarking/back-forward
+  updateURL({ type: 'folder', path: targetPath });
+}
+
+// Filter files by datetime range - rescans original folder
+async function filterByDateTime(
+  granularity: 'year' | 'month' | 'day' | 'hour' | 'minute',
+  year: number,
+  month?: number,
+  day?: number,
+  hour?: number,
+  minute?: number
+) {
+  if (!state.currentDirHandle) return;
+
+  // Close modal first
+  closeModal();
+
+  // Re-scan the original folder (no random sample, get all files)
+  setStatus(`Scanning folder for ${granularity}…`);
+  const allFiles = await collectImages(state.currentDirHandle, 0, state.currentBasePath);
+
+  // Filter by datetime range
+  const filtered = allFiles.filter(f => {
+    const d = new Date(f.lastModified);
+    if (d.getFullYear() !== year) return false;
+    if (month !== undefined && d.getMonth() !== month) return false;
+    if (day !== undefined && d.getDate() !== day) return false;
+    if (hour !== undefined && d.getHours() !== hour) return false;
+    if (minute !== undefined && d.getMinutes() !== minute) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    setStatus('No files found in this time range.');
+    return;
+  }
+
+  // Apply random sample limit if configured and filtered results exceed it
+  let finalFiles = filtered;
+  const sampleLimit = state.settings.randomSampleSize;
+  if (sampleLimit > 0 && filtered.length > sampleLimit) {
+    // Reservoir sampling on filtered results
+    const sampled: PhotoFile[] = filtered.slice(0, sampleLimit);
+    for (let i = sampleLimit; i < filtered.length; i++) {
+      const j = Math.floor(Math.random() * (i + 1));
+      if (j < sampleLimit) sampled[j] = filtered[i];
+    }
+    finalFiles = sampled;
+  }
+
+  // Update display name for status
+  const rangeDesc =
+    granularity === 'year' ? year.toString() :
+    granularity === 'month' ? `${year}-${(month! + 1).toString().padStart(2, '0')}` :
+    granularity === 'day' ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}` :
+    granularity === 'hour' ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:00` :
+    `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:${minute!.toString().padStart(2, '0')}`;
+
+  // Clear current state and process filtered files
+  state.phase = 'idle';
+  state.files = [];
+  state.vectors = [];
+  state.points = [];
+  state.rawPoints = null;
+  state.clusters = null;
+  state.thumbnails = [];
+  state.searchResults = null;
+  state.searchQuery = '';
+  state.searchScores = null;
+  state.hnsw = undefined;
+
+  // If extractor isn't loaded, ensure we're in viewer-only mode for filtering
+  const wasViewerOnly = state.settings.viewerOnly;
+  if (!extractor) {
+    state.settings.viewerOnly = true;
+  }
+
+  const sampleNote = finalFiles.length < filtered.length ? ` (sampled ${finalFiles.length} of ${filtered.length})` : '';
+  setStatus(`Found ${filtered.length} files from ${rangeDesc}.${sampleNote} Processing...`);
+
+  try {
+    await processFiles(finalFiles);
+  } finally {
+    // Restore original viewer-only setting if we temporarily forced it
+    if (!extractor && !wasViewerOnly) {
+      state.settings.viewerOnly = wasViewerOnly;
+    }
+  }
+
+  // Update URL for bookmarking/back-forward
+  updateURL({ type: 'datetime', granularity, year, month, day, hour, minute });
+}
+
+// ── URL State Management ───────────────────────────────────────────────────────
+// URL format: #folder:path/to/folder or #dt:2025-01-15T14:30
+
+type URLState = { type: 'folder'; path: string } | { type: 'datetime'; granularity: string; year: number; month?: number; day?: number; hour?: number; minute?: number } | null;
+
+function parseURLHash(hash: string): URLState {
+  if (!hash || hash === '#') return null;
+
+  const content = hash.slice(1); // Remove #
+
+  if (content.startsWith('folder:')) {
+    return { type: 'folder', path: content.slice(7) };
+  }
+
+  if (content.startsWith('dt:')) {
+    const dtStr = content.slice(3);
+    // Parse datetime: 2025-01-15T14:30
+    const parts = dtStr.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}))?(?::(\d{2}))?$/);
+    if (parts) {
+      const [, year, month, day, hour, minute] = parts;
+      return {
+        type: 'datetime',
+        granularity: minute ? 'minute' : hour ? 'hour' : 'day',
+        year: parseInt(year),
+        month: parseInt(month) - 1,
+        day: parseInt(day),
+        hour: hour ? parseInt(hour) : undefined,
+        minute: minute ? parseInt(minute) : undefined
+      };
+    }
+  }
+
+  return null;
+}
+
+function updateURL(state: URLState) {
+  if (!state) {
+    history.replaceState(null, '', '#');
+    return;
+  }
+
+  let hash = '';
+  if (state.type === 'folder') {
+    hash = `#folder:${state.path}`;
+  } else if (state.type === 'datetime') {
+    const { year, month, day, hour, minute } = state;
+    const datePart = `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}`;
+    const timePart = hour !== undefined ? `T${hour.toString().padStart(2, '0')}${minute !== undefined ? ':' + minute.toString().padStart(2, '0') : ''}` : '';
+    hash = `#dt:${datePart}${timePart}`;
+  }
+
+  history.pushState(state, '', hash);
+}
+
+// Handle back/forward navigation
+window.addEventListener('popstate', (e) => {
+  const urlState = parseURLHash(window.location.hash);
+  if (!urlState) {
+    // No state - reset to original folder
+    if (state.currentBasePath) {
+      navigateToFolder('');
+    }
+    return;
+  }
+
+  if (urlState.type === 'folder') {
+    navigateToFolder(urlState.path);
+  } else if (urlState.type === 'datetime') {
+    filterByDateTime(
+      urlState.granularity as 'year' | 'month' | 'day' | 'hour' | 'minute',
+      urlState.year,
+      urlState.month,
+      urlState.day,
+      urlState.hour,
+      urlState.minute
+    );
+  }
+});
 
 // ── Interaction ──────────────────────────────────────────────────────────────
 const pointers = new Map<number, PointerState>();
@@ -1203,7 +1611,7 @@ dom.searchClearBtn.addEventListener('click', () => {
 const openFileModal = (index: number) => {
   const f = state.files[index];
   const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-  
+
   if (VIDEO_EXTS.has(ext)) {
     dom.modalImg.style.display = 'none';
     dom.modalVideo.style.display = 'block';
@@ -1217,8 +1625,137 @@ const openFileModal = (index: number) => {
     dom.modalImg.style.display = 'block';
     dom.modalImg.src = f.objectURL || '';
   }
-  
-  dom.modalName.textContent = f.name.split('/').pop() || '';
+
+  // Populate modal footer with metadata
+  const pathParts = f.name.split('/');
+  const filename = pathParts.pop() || '';
+
+  dom.modalFilename.textContent = filename;
+
+  // Clear and create clickable breadcrumb navigation
+  while (dom.modalPath.firstChild) {
+    dom.modalPath.removeChild(dom.modalPath.firstChild);
+  }
+
+  if (pathParts.length === 0) {
+    const rootSpan = document.createElement('span');
+    rootSpan.className = 'modal-link';
+    rootSpan.textContent = '(root)';
+    rootSpan.onclick = () => navigateToFolder('');
+    dom.modalPath.appendChild(rootSpan);
+  } else {
+    pathParts.forEach((part, i) => {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'modal-sep';
+        sep.textContent = ' / ';
+        dom.modalPath.appendChild(sep);
+      }
+      const link = document.createElement('span');
+      link.className = 'modal-link';
+      link.textContent = part;
+      const targetPath = pathParts.slice(0, i + 1).join('/');
+      link.onclick = () => navigateToFolder(targetPath);
+      dom.modalPath.appendChild(link);
+    });
+  }
+
+  // Up one level button
+  if (pathParts.length > 0) {
+    dom.modalUp.style.visibility = 'visible';
+    dom.modalUp.onclick = () => {
+      const upPath = pathParts.slice(0, -1).join('/');
+      navigateToFolder(upPath);
+    };
+  } else {
+    dom.modalUp.style.visibility = 'hidden';
+  }
+
+  // Create clickable datetime breadcrumbs
+  const date = new Date(f.lastModified);
+  while (dom.modalDatetime.firstChild) {
+    dom.modalDatetime.removeChild(dom.modalDatetime.firstChild);
+  }
+
+  // Year
+  const yearLink = document.createElement('span');
+  yearLink.className = 'modal-link';
+  yearLink.textContent = date.getFullYear().toString();
+  yearLink.onclick = () => filterByDateTime('year', date.getFullYear());
+  dom.modalDatetime.appendChild(yearLink);
+
+  // Month
+  const monthSep = document.createElement('span');
+  monthSep.className = 'modal-sep';
+  monthSep.textContent = '/';
+  dom.modalDatetime.appendChild(monthSep);
+  const monthLink = document.createElement('span');
+  monthLink.className = 'modal-link';
+  monthLink.textContent = (date.getMonth() + 1).toString().padStart(2, '0');
+  monthLink.onclick = () => filterByDateTime('month', date.getFullYear(), date.getMonth());
+  dom.modalDatetime.appendChild(monthLink);
+
+  // Day
+  const daySep = document.createElement('span');
+  daySep.className = 'modal-sep';
+  daySep.textContent = '/';
+  dom.modalDatetime.appendChild(daySep);
+  const dayLink = document.createElement('span');
+  dayLink.className = 'modal-link';
+  dayLink.textContent = date.getDate().toString().padStart(2, '0');
+  dayLink.onclick = () => filterByDateTime('day', date.getFullYear(), date.getMonth(), date.getDate());
+  dom.modalDatetime.appendChild(dayLink);
+
+  // Hour
+  const hourSep = document.createElement('span');
+  hourSep.className = 'modal-sep';
+  hourSep.textContent = ' ';
+  dom.modalDatetime.appendChild(hourSep);
+  const hourLink = document.createElement('span');
+  hourLink.className = 'modal-link';
+  hourLink.textContent = date.getHours().toString().padStart(2, '0');
+  hourLink.onclick = () => filterByDateTime('hour', date.getFullYear(), date.getMonth(), date.getDate(), date.getHours());
+  dom.modalDatetime.appendChild(hourLink);
+
+  // Minute
+  const minSep = document.createElement('span');
+  minSep.className = 'modal-sep';
+  minSep.textContent = ':';
+  dom.modalDatetime.appendChild(minSep);
+  const minLink = document.createElement('span');
+  minLink.className = 'modal-link';
+  minLink.textContent = date.getMinutes().toString().padStart(2, '0');
+  minLink.onclick = () => filterByDateTime('minute', date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes());
+  dom.modalDatetime.appendChild(minLink);
+
+  // Store date for updateSizeInfo closure
+  const fileDate = date;
+
+  // Update size and resolution after media loads
+  const updateSizeInfo = () => {
+    const width = dom.modalImg.style.display !== 'none'
+      ? dom.modalImg.naturalWidth
+      : dom.modalVideo.videoWidth;
+    const height = dom.modalImg.style.display !== 'none'
+      ? dom.modalImg.naturalHeight
+      : dom.modalVideo.videoHeight;
+
+    if (width && height) {
+      const sizeMB = (f.size / (1024 * 1024)).toFixed(f.size < 1024 * 1024 ? 2 : 1);
+      const sizeKB = (f.size / 1024).toFixed(0);
+      const sizeStr = f.size < 1024 * 1024 ? `${sizeKB} KB` : `${sizeMB} MB`;
+      dom.modalMeta.textContent = `${width}×${height} · ${sizeStr}`;
+    }
+  };
+
+  // Try immediately (might be cached), otherwise wait for load
+  updateSizeInfo();
+  if (dom.modalImg.style.display !== 'none') {
+    dom.modalImg.onload = updateSizeInfo;
+  } else {
+    dom.modalVideo.onloadedmetadata = updateSizeInfo;
+  }
+
   dom.modal.classList.add('open');
   state.activeFileIndex = index;
   state.lastViewedIndex = index;
@@ -1264,9 +1801,18 @@ dom.enableSearchToggle.checked = state.settings.enableTextSearch;
 if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
 dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
+dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
+  // In viewer mode, always disable search
+  if (state.settings.viewerOnly) {
+    dom.bottomPanel.style.display = 'none';
+    dom.headerRecenterBtn.parentElement!.style.display = 'flex';
+    dom.searchInput.disabled = true;
+    return;
+  }
+
   if (state.settings.enableTextSearch) {
     dom.bottomPanel.style.display = 'flex';
     dom.headerRecenterBtn.parentElement!.style.display = 'none';
@@ -1292,6 +1838,13 @@ dom.settingsModal.addEventListener('click', (e) => {
 });
 
 dom.enableSearchToggle.addEventListener('change', async () => {
+  // Prevent enabling search in viewer mode
+  if (state.settings.viewerOnly && dom.enableSearchToggle.checked) {
+    dom.enableSearchToggle.checked = false;
+    setStatus('Text search is not available in viewer mode.');
+    return;
+  }
+
   state.settings.enableTextSearch = dom.enableSearchToggle.checked;
   saveSettings();
   updateSearchUI();
@@ -1384,6 +1937,31 @@ dom.randomSampleSizeInput.addEventListener('input', () => {
 dom.loopToggle.addEventListener('change', () => {
   state.settings.loopVideos = dom.loopToggle.checked;
   saveSettings();
+});
+
+dom.viewerOnlyToggle.addEventListener('change', async () => {
+  state.settings.viewerOnly = dom.viewerOnlyToggle.checked;
+  saveSettings();
+  updateSearchUI();
+  updateDeviceBadge();
+
+  // If enabling viewer mode and we're idle, update UI immediately
+  if (state.settings.viewerOnly && state.phase === 'idle') {
+    dom.loadModelBtn.hidden = true;
+    dom.openBtn.disabled = false;
+    dom.openBtn.classList.add('primary');
+    dom.demoBtn.disabled = false;
+    setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+  } else if (!state.settings.viewerOnly && state.phase === 'idle') {
+    // Switching back to AI mode
+    dom.loadModelBtn.hidden = false;
+    setStatus('AI mode enabled — click "Load AI Models" to begin.');
+  }
+
+  // If changing mode with loaded data, need to reset and reprocess
+  if (state.phase === 'done' && state.files.length > 0) {
+    setStatus('Mode changed. Reset to apply changes, or open a new folder.');
+  }
 });
 
 dom.themeSelect.addEventListener('change', () => {
@@ -1585,17 +2163,28 @@ dom.resumeBtn.addEventListener('click', async () => {
       await processFiles(files); return;
     }
 
+    const wasViewerMode = localStorage.getItem('po_viewerMode') === 'true';
+
     state.files = matched;
     state.rawPoints = savedPoints;
     state.points = savedPoints.slice(0, matched.length);
-    state.clusters = new Int32Array(savedClusters.slice(0, matched.length));
+    state.clusters = savedClusters ? new Int32Array(savedClusters.slice(0, matched.length)) : null;
 
-    setStatus('Restoring search index…');
-    const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
-    const cachedVectors = await cacheGetBatch(keys);
-    state.vectors = cachedVectors.map(v => v || new Float64Array(768));
-    if (state.vectors.length > 0) {
-      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
+    if (wasViewerMode) {
+      // Viewer mode: no vectors/HNSW needed
+      state.vectors = [];
+      state.hnsw = undefined;
+      dom.searchInput.disabled = true;
+    } else {
+      // AI mode: restore search index
+      setStatus('Restoring search index…');
+      const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+      const cachedVectors = await cacheGetBatch(keys);
+      state.vectors = cachedVectors.map(v => v || new Float64Array(768));
+      if (state.vectors.length > 0) {
+        state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
+      }
+      dom.searchInput.disabled = false;
     }
 
     state.thumbnails = initThumbnails(matched);
@@ -1604,29 +2193,39 @@ dom.resumeBtn.addEventListener('click', async () => {
     fitCamera();
     scheduleRender();
     setProgress(100);
-    const finalMsg = `${matched.length} media files · restored`;
+    const modeSuffix = wasViewerMode ? 'viewer mode' : 'restored';
+    const finalMsg = `${matched.length} media files · ${modeSuffix}`;
     setStatus(`${matched.length} media files — resumed from session`);
     if (dom.statsEl) dom.statsEl.textContent = finalMsg;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.headerRecenterBtn.disabled = false;
-    dom.searchInput.disabled = false;
   } catch (err) {
     if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);
   }
 });
 
-// Auto-start model loading
-dom.loadModelBtn.disabled = true;
-(async () => {
-  try {
-    await loadModel();
-  } catch (err) {
-    dom.loadModelBtn.hidden = false;
-    dom.loadModelBtn.disabled = false;
-    setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
-  }
-})();
+// Auto-start model loading (only if not in viewer mode)
+if (!state.settings.viewerOnly) {
+  dom.loadModelBtn.disabled = true;
+  (async () => {
+    try {
+      await loadModel();
+    } catch (err) {
+      dom.loadModelBtn.hidden = false;
+      dom.loadModelBtn.disabled = false;
+      setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
+    }
+  })();
+} else {
+  // Viewer mode: update UI to reflect no AI needed
+  dom.loadModelBtn.hidden = true;
+  dom.openBtn.disabled = false;
+  dom.openBtn.classList.add('primary');
+  dom.demoBtn.disabled = false;
+  setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+  updateDeviceBadge();
+}
 
 // ── Debug overlay (press ` to toggle) ────────────────────────────────────────
 const debugOverlay = document.getElementById('debug-overlay') as HTMLDivElement;
@@ -1646,6 +2245,7 @@ function buildDebugInfo(): string {
     `── state ───────────────────`,
     `phase:       ${state.phase}`,
     `files:       ${state.files.length}`,
+    `viewerOnly:  ${state.settings.viewerOnly ? 'YES' : 'no'}`,
     `vectors:     ${state.vectors.length}`,
     `points:      ${state.points.length}`,
     `hnsw:        ${state.hnsw ? 'built' : 'none'}`,
@@ -1751,6 +2351,43 @@ document.addEventListener('keydown', (e) => {
     } else if (state.phase === 'done' && document.activeElement?.tagName !== 'INPUT') {
       e.preventDefault();
       navigateCanvas(dir);
+    }
+  }
+
+  // n/p keys for sequential next/previous (in datetime order)
+  const key = e.key.toLowerCase();
+  if ((key === 'n' || key === 'p') && state.phase === 'done' && state.files.length > 0 && document.activeElement?.tagName !== 'INPUT') {
+    e.preventDefault();
+
+    // Determine current index
+    let currentIndex = state.activeFileIndex ?? state.lastViewedIndex;
+    if (currentIndex === null) {
+      // Find index closest to camera center
+      const pts = state.points;
+      let minD = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const dx = pts[i][0] - camera.x;
+        const dy = pts[i][1] - camera.y;
+        const d = dx * dx + dy * dy;
+        if (d < minD) { minD = d; currentIndex = i; }
+      }
+    }
+
+    if (currentIndex !== null) {
+      // Get indices sorted by datetime (oldest first)
+      const sortedIndices = Array.from({ length: state.files.length }, (_, i) => i)
+        .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
+
+      // Find current position in datetime order
+      const currentPos = sortedIndices.indexOf(currentIndex);
+      if (currentPos !== -1) {
+        // Move to next/previous in datetime order
+        const nextPos = key === 'n'
+	  ? (currentPos + 1) % sortedIndices.length
+	  : (currentPos - 1 + sortedIndices.length) % sortedIndices.length;
+	const nextIndex = sortedIndices[nextPos];
+	openFileModal(nextIndex);
+      }
     }
   }
 });
