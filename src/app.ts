@@ -654,7 +654,9 @@ function resetAll() {
   state.lastViewedIndex = null;
   localStorage.removeItem('po_fileKeys');
   localStorage.removeItem('po_umapPoints');
+  localStorage.removeItem('po_projectedPoints');
   localStorage.removeItem('po_clusters');
+  localStorage.removeItem('po_viewerMode');
   camera.x = 0; camera.y = 0; camera.scale = 1;
   const ctx = dom.canvas.getContext('2d');
   if (ctx) ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
@@ -1169,6 +1171,15 @@ async function processFiles(files: PhotoFile[]) {
     dom.headerRecenterBtn.disabled = false;
     dom.searchInput.disabled = true;  // No search in viewer mode
 
+    // Save session state for resume (viewer mode)
+    const fileKeys = sortedFiles.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    try {
+      localStorage.setItem('po_fileKeys', JSON.stringify(fileKeys));
+      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
+      localStorage.setItem('po_clusters', JSON.stringify([])); // No semantic clusters in viewer mode
+      localStorage.setItem('po_viewerMode', 'true'); // Flag for resume handler
+    } catch (_) { /* quota exceeded */ }
+
     dom.openBtn.disabled = false;
     return;
   }
@@ -1212,7 +1223,7 @@ async function processFiles(files: PhotoFile[]) {
     state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
     try {
       localStorage.setItem('po_fileKeys', JSON.stringify(state.fileKeys));
-      localStorage.setItem('po_umapPoints', JSON.stringify(state.points));
+      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
       localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
     } catch (_) { /* quota exceeded */ }
 
@@ -1810,17 +1821,28 @@ dom.resumeBtn.addEventListener('click', async () => {
       await processFiles(files); return;
     }
 
+    const wasViewerMode = localStorage.getItem('po_viewerMode') === 'true';
+
     state.files = matched;
     state.rawPoints = savedPoints;
     state.points = savedPoints.slice(0, matched.length);
-    state.clusters = new Int32Array(savedClusters.slice(0, matched.length));
+    state.clusters = savedClusters ? new Int32Array(savedClusters.slice(0, matched.length)) : null;
 
-    setStatus('Restoring search index…');
-    const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
-    const cachedVectors = await cacheGetBatch(keys);
-    state.vectors = cachedVectors.map(v => v || new Float64Array(768));
-    if (state.vectors.length > 0) {
-      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
+    if (wasViewerMode) {
+      // Viewer mode: no vectors/HNSW needed
+      state.vectors = [];
+      state.hnsw = undefined;
+      dom.searchInput.disabled = true;
+    } else {
+      // AI mode: restore search index
+      setStatus('Restoring search index…');
+      const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+      const cachedVectors = await cacheGetBatch(keys);
+      state.vectors = cachedVectors.map(v => v || new Float64Array(768));
+      if (state.vectors.length > 0) {
+        state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
+      }
+      dom.searchInput.disabled = false;
     }
 
     state.thumbnails = initThumbnails(matched);
@@ -1829,13 +1851,13 @@ dom.resumeBtn.addEventListener('click', async () => {
     fitCamera();
     scheduleRender();
     setProgress(100);
-    const finalMsg = `${matched.length} media files · restored`;
+    const modeSuffix = wasViewerMode ? 'viewer mode' : 'restored';
+    const finalMsg = `${matched.length} media files · ${modeSuffix}`;
     setStatus(`${matched.length} media files — resumed from session`);
     if (dom.statsEl) dom.statsEl.textContent = finalMsg;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.headerRecenterBtn.disabled = false;
-    dom.searchInput.disabled = false;
   } catch (err) {
     if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);
   }
