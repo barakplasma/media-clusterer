@@ -155,8 +155,8 @@ export function extractBatchedCLSVectors(output: PipelineOutput, batchSize: numb
 }
 
 /**
- * Create cache key from file metadata
+ * Create cache key scoped to a specific model to prevent cross-model cache collisions
  */
-export function makeCacheKey(file: { name: string; size: number; lastModified: number }): string {
-  return `${file.name}:${file.size}:${file.lastModified}`;
+export function makeCacheKey(modelId: string, file: { name: string; size: number; lastModified: number }): string {
+  return `${modelId}:${file.name}:${file.size}:${file.lastModified}`;
 }

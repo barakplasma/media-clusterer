@@ -143,7 +143,7 @@ export interface DOMElements {
 }
 
 /** IndexedDB cache entry */
-export type CacheKey = `${string}:${number}:${number}`;
+export type CacheKey = `${string}:${string}:${number}:${number}`;
 
 /** Projection algorithm interface */
 export interface IProjection {

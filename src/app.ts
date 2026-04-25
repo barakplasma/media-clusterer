@@ -1065,7 +1065,8 @@ async function embedAll(files: PhotoFile[]) {
   const batchSize = state.settings.batchSize;
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, Math.min(i + batchSize, files.length));
-    const keys = batch.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    const modelId = state.settings.embeddingModel;
+    const keys = batch.map(f => `${modelId}:${f.name}:${f.size}:${f.lastModified}` as CacheKey);
 
     // One IDB transaction for the whole batch
     const cached = await cacheGetBatch(keys);
@@ -1900,7 +1901,7 @@ dom.modelSelect.addEventListener('change', () => {
 
   // Invalidate loaded model and any derived clustering state — the two embedding
   // spaces are incompatible and cannot be mixed.
-  if (extractor) {
+  if (state.files.length > 0 || extractor) {
     extractor = null;
     currentModelType = null;
     state.vectors = [];
@@ -2266,7 +2267,8 @@ dom.resumeBtn.addEventListener('click', async () => {
     } else {
       // AI mode: restore search index
       setStatus('Restoring search index…');
-      const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+      const modelId = state.settings.embeddingModel;
+      const keys = matched.map(f => `${modelId}:${f.name}:${f.size}:${f.lastModified}` as CacheKey);
       const cachedVectors = await cacheGetBatch(keys);
       state.vectors = cachedVectors.map(v => v || new Float64Array(MODEL_CONFIGS[state.settings.embeddingModel].dimensions));
       if (state.vectors.length > 0) {
