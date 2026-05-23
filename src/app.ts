@@ -1066,7 +1066,27 @@ async function embedAll(files: PhotoFile[]) {
           missInputs.push(f.file);
         }
       } else {
-        missInputs.push(f.file);
+        // Pre-resize to 256px wide before GPU upload; full-res photos (e.g. 4K = ~48 MB
+        // raw pixels) uploaded directly to WebGPU cause OOM at 200+ images.
+        // createImageBitmap with resizeWidth decodes + resizes atomically in the browser,
+        // so the full-res intermediate never lands in JS-accessible memory.
+        try {
+          const bmp = await createImageBitmap(f.file, { resizeWidth: 256, resizeQuality: 'medium' });
+          const cvs = document.createElement('canvas');
+          cvs.width = bmp.width;
+          cvs.height = bmp.height;
+          const ctx2d = cvs.getContext('2d');
+          if (ctx2d) {
+            ctx2d.drawImage(bmp, 0, 0);
+            bmp.close();
+            missInputs.push(await RawImage.fromCanvas(cvs));
+          } else {
+            bmp.close();
+            missInputs.push(f.file);
+          }
+        } catch {
+          missInputs.push(f.file);
+        }
       }
       missIndices.push(bi);
     }));
@@ -1921,10 +1941,7 @@ if (hasMemoryAPI && !savedSettings) {
 }
 
 dom.batchSizeAutoBtn.addEventListener('click', () => {
-  const avgFileSize = state.files.length > 0
-    ? state.files.reduce((s, f) => s + f.size, 0) / state.files.length
-    : 2 * 1024 * 1024;
-  const optimal = computeOptimalBatchSize(avgFileSize);
+  const optimal = computeOptimalBatchSize();
   state.settings.batchSize = optimal;
   dom.batchSizeInput.value = optimal.toString();
   saveSettings();
