@@ -4,6 +4,7 @@
 
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
+import pLimit from 'p-limit';
 import {
   l2normalize,
   extractVector,
@@ -320,11 +321,21 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
     video.muted = true;
     video.playsInline = true;
     const url = URL.createObjectURL(file);
-    
-    video.onloadedmetadata = () => {
-      video.currentTime = Math.min(1.0, video.duration / 2); // Get a frame from near the start
+
+    // video.remove() is a no-op when the element was never added to the DOM.
+    // The only way to release a WebMediaPlayer in Chrome is: pause → clear src → load().
+    // Skipping this causes the "too many WebMediaPlayers" intervention at ~75 concurrent.
+    const cleanup = () => {
+      URL.revokeObjectURL(url);
+      video.pause();
+      video.src = '';
+      video.load();
     };
-    
+
+    video.onloadedmetadata = () => {
+      video.currentTime = Math.min(1.0, video.duration / 2);
+    };
+
     video.onseeked = async () => {
       try {
         const bitmap = await createImageBitmap(video, { resizeWidth: 224, resizeQuality: 'medium' });
@@ -333,18 +344,16 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
         console.warn('Failed to extract video frame:', e);
         resolve(null);
       } finally {
-        URL.revokeObjectURL(url);
-        video.remove();
+        cleanup();
       }
     };
-    
+
     video.onerror = () => {
       console.warn('Video load error');
-      URL.revokeObjectURL(url);
-      video.remove();
+      cleanup();
       resolve(null);
     };
-    
+
     video.src = url;
   });
 }
@@ -388,7 +397,7 @@ function lazyDecodeThumbnail(idx: number) {
   };
 
   if (VIDEO_EXTS.has(ext)) {
-    extractVideoFrame(f.file).then(done).catch(() => done(null));
+    videoFrameLimit(() => extractVideoFrame(f.file)).then(done).catch(() => done(null));
   } else {
     createImageBitmap(f.file, { resizeWidth: 96, resizeQuality: 'low' })
       .then(done).catch(() => done(null));
@@ -504,6 +513,10 @@ const fullImages = new Map<number, HTMLImageElement>(); // index → HTMLImageEl
 const fullImageLRU = new Set<number>();                // LRU tracking for full-res images
 const thumbDecoding = new Set<number>();               // indices currently being decoded
 const thumbnailLRU = new Set<number>();                // indices in LRU order (most recently used at end)
+
+// Chrome limits concurrent WebMediaPlayers to ~75; cap video frame extraction
+// well below that so the render loop + embedAll can't together exceed the limit.
+const videoFrameLimit = pLimit(4);
 
 function resizeCanvas() {
   const wrap = dom.canvas.parentElement;
@@ -1069,7 +1082,7 @@ async function embedAll(files: PhotoFile[]) {
       const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
       if (VIDEO_EXTS.has(ext)) {
         // Use cached thumbnail if available, otherwise extract frame now
-        const thumb = state.thumbnails[idx] ?? await extractVideoFrame(f.file);
+        const thumb = state.thumbnails[idx] ?? await videoFrameLimit(() => extractVideoFrame(f.file));
         if (thumb) {
           // Also store it so the render loop doesn't re-extract
           if (!state.thumbnails[idx]) {

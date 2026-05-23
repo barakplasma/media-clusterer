@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
-    "@saehrimnir/druidjs": "^0.8.0"
+    "@saehrimnir/druidjs": "^0.8.0",
+    "p-limit": "^7.3.0"
   }
 }
