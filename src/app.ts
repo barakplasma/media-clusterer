@@ -1020,6 +1020,30 @@ async function loadModel() {
   }
 }
 
+// ── Embedding helpers ─────────────────────────────────────────────────────────
+
+// Resize a File to 256px wide before GPU upload. Returns null if the browser
+// cannot decode/resize it (caller should skip inference, not fall back to
+// full-res, to avoid the OOM this fix is meant to prevent).
+async function resizeForEmbedding(file: File): Promise<RawImage | null> {
+  try {
+    const bmp = await createImageBitmap(file, { resizeWidth: 256, resizeQuality: 'medium' });
+    try {
+      const cvs = document.createElement('canvas');
+      cvs.width = bmp.width;
+      cvs.height = bmp.height;
+      const ctx2d = cvs.getContext('2d');
+      if (!ctx2d) return null;
+      ctx2d.drawImage(bmp, 0, 0);
+      return await RawImage.fromCanvas(cvs);
+    } finally {
+      bmp.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 // ── Embedding loop ───────────────────────────────────────────────────────────
 async function embedAll(files: PhotoFile[]) {
   state.phase = 'embedding';
@@ -1066,26 +1090,13 @@ async function embedAll(files: PhotoFile[]) {
           missInputs.push(f.file);
         }
       } else {
-        // Pre-resize to 256px wide before GPU upload; full-res photos (e.g. 4K = ~48 MB
-        // raw pixels) uploaded directly to WebGPU cause OOM at 200+ images.
-        // createImageBitmap with resizeWidth decodes + resizes atomically in the browser,
-        // so the full-res intermediate never lands in JS-accessible memory.
-        try {
-          const bmp = await createImageBitmap(f.file, { resizeWidth: 256, resizeQuality: 'medium' });
-          const cvs = document.createElement('canvas');
-          cvs.width = bmp.width;
-          cvs.height = bmp.height;
-          const ctx2d = cvs.getContext('2d');
-          if (ctx2d) {
-            ctx2d.drawImage(bmp, 0, 0);
-            bmp.close();
-            missInputs.push(await RawImage.fromCanvas(cvs));
-          } else {
-            bmp.close();
-            missInputs.push(f.file);
-          }
-        } catch {
-          missInputs.push(f.file);
+        const resized = await resizeForEmbedding(f.file);
+        if (resized !== null) {
+          missInputs.push(resized);
+        } else {
+          // Cannot resize — use zero vector rather than risking OOM with full-res
+          vectors[i + bi] = new Float64Array(768);
+          return;
         }
       }
       missIndices.push(bi);
