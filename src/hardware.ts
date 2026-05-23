@@ -3,7 +3,6 @@
  */
 
 export function computeOptimalBatchSize(
-  avgFileSizeBytes: number = 2 * 1024 * 1024,
   deviceMemoryGB?: number,
   perfMem?: { jsHeapSizeLimit: number; usedJSHeapSize: number }
 ): number {
@@ -11,17 +10,18 @@ export function computeOptimalBatchSize(
   const memGB = deviceMemoryGB ?? (typeof navigator !== 'undefined' ? (navigator as any).deviceMemory : undefined) ?? 2;
   const memory = perfMem ?? (typeof performance !== 'undefined' ? (performance as any).memory : undefined);
 
+  // JS heap headroom is a proxy for total available RAM; GPU memory is not
+  // directly queryable from JS. Images are pre-resized to 256px before GPU
+  // upload so input size is constant (~200 KB each) and no longer a factor.
   const headroomBytes = memory
     ? Math.max(0, memory.jsHeapSizeLimit - memory.usedJSHeapSize)
     : memGB * 0.3 * 1024 * 1024 * 1024; // assume 30% of device RAM usable
 
-  // Apply a 20% safety margin to the available headroom
   const safeHeadroomBytes = headroomBytes * 0.8;
 
-  // ViT-B/16: 197 patches × 768 dims × 12 layers × 4 attention tensors × 4 bytes × 3× safety margin
-  const vitActivationsPerImage = 197 * 768 * 12 * 4 * 4 * 3; // ~87MB
-  const bytesPerImageInference = Math.max(avgFileSizeBytes * 0.5, vitActivationsPerImage);
+  // ViT-B/16: 197 tokens × 768 dims × 12 layers × 4 attention tensors × 4 bytes
+  const vitActivationsPerImage = 197 * 768 * 12 * 4 * 4; // ~28 MB
 
-  const optimal = Math.floor(safeHeadroomBytes / bytesPerImageInference);
-  return Math.max(1, optimal);
+  const optimal = Math.floor(safeHeadroomBytes / vitActivationsPerImage);
+  return Math.min(32, Math.max(1, optimal));
 }

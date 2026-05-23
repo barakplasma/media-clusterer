@@ -2,42 +2,38 @@ import { describe, it, expect } from 'vitest';
 import { computeOptimalBatchSize } from './hardware';
 
 describe('Hardware Utilities: computeOptimalBatchSize', () => {
-  it('calculates optimal batch size based on deviceMemoryGB when performance.memory is missing', () => {
-    // 8GB device memory, 2MB average file size
-    const batchSize = computeOptimalBatchSize(2 * 1024 * 1024, 8, undefined);
-    expect(batchSize).toBe(23);
+  it('uses deviceMemoryGB when performance.memory is unavailable', () => {
+    // 8GB device — headroom = 8 * 0.3 * 0.8 GB = ~1.9 GB
+    // vitActivationsPerImage ≈ 28 MB → optimal ~71, capped at 32
+    const batchSize = computeOptimalBatchSize(8, undefined);
+    expect(batchSize).toBe(32);
   });
 
-  it('calculates optimal batch size using performance.memory when available', () => {
-    // Exact simulation of Chrome's performance.memory
+  it('uses performance.memory when available', () => {
     const perfMem = {
-      jsHeapSizeLimit: 4 * 1024 * 1024 * 1024, // 4GB limit
-      usedJSHeapSize: 1 * 1024 * 1024 * 1024,  // 1GB used
+      jsHeapSizeLimit: 4 * 1024 * 1024 * 1024, // 4 GB
+      usedJSHeapSize:  1 * 1024 * 1024 * 1024, // 1 GB used → 3 GB headroom
     };
-    
-    const batchSize = computeOptimalBatchSize(2 * 1024 * 1024, undefined, perfMem);
-    expect(batchSize).toBe(29);
+    // safe = 3 GB * 0.8 = 2.4 GB; 2.4 GB / 28 MB ≈ 85 → capped at 32
+    const batchSize = computeOptimalBatchSize(undefined, perfMem);
+    expect(batchSize).toBe(32);
   });
 
-  it('returns at least 1 even under severe memory constraints', () => {
+  it('returns 1 under severe memory constraints', () => {
     const perfMem = {
-      jsHeapSizeLimit: 100 * 1024 * 1024, // 100MB limit
-      usedJSHeapSize: 95 * 1024 * 1024,   // 95MB used -> 5MB headroom
+      jsHeapSizeLimit: 100 * 1024 * 1024, // 100 MB
+      usedJSHeapSize:   95 * 1024 * 1024, // 95 MB used → 5 MB headroom
     };
-    
-    // safe headroom = 4MB. That is less than the ~87MB needed per image.
-    // The function should return Math.max(1, optimal) -> 1
-    const batchSize = computeOptimalBatchSize(2 * 1024 * 1024, undefined, perfMem);
+    // safe = 4 MB; 4 MB / 28 MB < 1 → floor(0.14) = 0 → max(1, 0) = 1
+    const batchSize = computeOptimalBatchSize(undefined, perfMem);
     expect(batchSize).toBe(1);
   });
 
-  it('adjusts batch size for very large files', () => {
-    // 1000MB average file size!
-    // bytesPerImageInference = max(500MB, ~87MB) = 500MB
-    const batchSize = computeOptimalBatchSize(1000 * 1024 * 1024, 16, undefined); // 16GB device
-    
-    // 16 * 0.3 * 0.8 = 3.84GB safe headroom = ~4,123,168,604 bytes
-    // 4,123,168,604 / (500 * 1024 * 1024) = ~7.86 -> 7
-    expect(batchSize).toBe(7);
+  it('returns a small batch on a 2 GB device', () => {
+    // 2 GB device — headroom = 2 * 0.3 * 0.8 GB = ~480 MB
+    // 480 MB / 28 MB ≈ 17
+    const batchSize = computeOptimalBatchSize(2, undefined);
+    expect(batchSize).toBeGreaterThanOrEqual(16);
+    expect(batchSize).toBeLessThanOrEqual(20);
   });
 });
