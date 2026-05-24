@@ -48,11 +48,22 @@ async function downloadWithProgress(
   return out.buffer;
 }
 
+// Reused across all imageToTensor calls — avoids per-image GC pressure
+let _canvas: HTMLCanvasElement | null = null;
+let _ctx: CanvasRenderingContext2D | null = null;
+
+function getCanvas(): CanvasRenderingContext2D {
+  if (!_canvas || !_ctx) {
+    _canvas = document.createElement('canvas');
+    _canvas.width = MODEL_W;
+    _canvas.height = MODEL_H;
+    _ctx = _canvas.getContext('2d')!;
+  }
+  return _ctx;
+}
+
 function imageToTensor(source: ImageBitmap): ort.Tensor {
-  const canvas = document.createElement('canvas');
-  canvas.width = MODEL_W;
-  canvas.height = MODEL_H;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = getCanvas();
   ctx.drawImage(source, 0, 0, MODEL_W, MODEL_H);
   const { data } = ctx.getImageData(0, 0, MODEL_W, MODEL_H);
 
@@ -108,7 +119,7 @@ export async function embedWithSapiens2(
     let owned = false;
 
     if (src instanceof File) {
-      bmp = await createImageBitmap(src);
+      bmp = await createImageBitmap(src, { resizeWidth: MODEL_W, resizeHeight: MODEL_H, resizeQuality: 'medium' });
       owned = true;
     } else {
       bmp = src;
