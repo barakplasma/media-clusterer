@@ -27,6 +27,9 @@ export interface Camera {
 /** Supported projection methods */
 export type ProjectionMethod = 'UMAP' | 'TSNE' | 'PCA' | 'ISOMAP' | 'LLE' | 'MDS' | 'SAMMON' | 'TriMap';
 
+/** Vision model variant */
+export type ModelVariant = 'nomic' | 'sapiens2';
+
 /** Application settings */
 export interface Settings {
   density: number;      // 1.0 = default, smaller = tighter, larger = sparse
@@ -38,6 +41,7 @@ export interface Settings {
   batchSize: number;    // GPU inference batch size (higher = faster, more memory)
   randomSampleSize: number; // 0 = load all; >0 = randomly sample n files when folder has more than n
   viewerOnly: boolean;  // Skip AI models, arrange by folder/date instead
+  modelVariant: ModelVariant; // Vision embedding model to use
 }
 
 /** Application state */
@@ -109,6 +113,7 @@ export interface DOMElements {
   bottomPanel: HTMLDivElement;
   headerRecenterBtn: HTMLButtonElement;
   demoBtn: HTMLButtonElement;
+  modelSelect: HTMLSelectElement;
 }
 
 /** IndexedDB cache entry */

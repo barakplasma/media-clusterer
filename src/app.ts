@@ -5,6 +5,8 @@
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
+import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
+import type { Sapiens2Session } from './sapiens2';
 import {
   l2normalize,
   extractVector,
@@ -107,6 +109,7 @@ const dom: DOMElements = {
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
+  modelSelect: document.getElementById('model-select') as HTMLSelectElement,
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
@@ -128,6 +131,7 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
+  modelVariant: 'nomic',
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -158,6 +162,7 @@ const camera: Camera = { x: 0, y: 0, scale: 1 };
 let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
 let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
+let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
@@ -173,7 +178,10 @@ function updateDeviceBadge() {
 
   if (state.settings.viewerOnly) {
     deviceBadgeEl.textContent = 'Viewer';
-    deviceBadgeEl.style.color = '#4ade80'; // Green for viewer mode
+    deviceBadgeEl.style.color = '#4ade80';
+  } else if (sapiens2Session) {
+    deviceBadgeEl.textContent = modelDevice === 'webgpu' ? 'Sapiens2 · WebGPU' : 'Sapiens2 · CPU';
+    deviceBadgeEl.style.color = modelDevice === 'webgpu' ? '#4ade80' : '#fb923c';
   } else if (modelDevice === 'webgpu') {
     deviceBadgeEl.textContent = 'WebGPU';
     deviceBadgeEl.style.color = '#4ade80';
@@ -944,10 +952,42 @@ async function runProjection(vectors: Float64Array[], method: ProjectionMethod, 
 
 // ── Model singleton ──────────────────────────────────────────────────────────
 async function loadModel() {
-  if (extractor) return;
+  if (extractor || sapiens2Session) return;
   state.phase = 'loading_model';
   setStatus('Loading model…');
   setProgress(0);
+
+  if (state.settings.modelVariant === 'sapiens2') {
+    try {
+      const result = await loadSapiens2((pct) => {
+        setProgress(pct);
+        setStatus(`Loading Sapiens2 model… ${pct.toFixed(0)}%`);
+      });
+      sapiens2Session = result.session;
+      modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
+    } catch (err) {
+      setStatus('Failed to load Sapiens2 model.');
+      dom.loadModelBtn.hidden = false;
+      throw err;
+    }
+    updateDeviceBadge();
+    setProgress(100);
+    state.phase = 'model_ready';
+    setProgress(0);
+    dom.loadModelBtn.hidden = true;
+    dom.modelSelect.disabled = true;
+    dom.openBtn.disabled = false;
+    dom.openBtn.classList.add('primary');
+    dom.demoBtn.disabled = false;
+    if (!dom.resumeBtn.hidden) {
+      dom.resumeBtn.disabled = false;
+      dom.resumeBtn.classList.add('primary');
+      setStatus('Sapiens2 ready — resume or open a folder.');
+    } else {
+      setStatus('Sapiens2 ready — open a folder to start.');
+    }
+    return;
+  }
 
   const MODEL_SIZE_BYTES = 380 * 1024 * 1024 + 134 * 1024 * 1024;
   const loaded = new Map<string, number>();
@@ -1021,6 +1061,7 @@ async function loadModel() {
   state.phase = 'model_ready';
   setProgress(0);
   dom.loadModelBtn.hidden = true;
+  dom.modelSelect.disabled = true;
   dom.openBtn.disabled = false;
   dom.openBtn.classList.add('primary');
   dom.demoBtn.disabled = false;
@@ -1064,17 +1105,22 @@ async function embedAll(files: PhotoFile[]) {
   let cacheHits = 0;
   const writeQueue: [CacheKey, Float64Array][] = [];
 
-  const batchSize = state.settings.batchSize;
+  const isSapiens2 = state.settings.modelVariant === 'sapiens2';
+  // Sapiens2 takes 1024×768 inputs — run one at a time to stay within memory budget
+  const batchSize = isSapiens2 ? 1 : state.settings.batchSize;
+  // Separate cache namespace so nomic and sapiens2 vectors don't collide
+  const cachePrefix = isSapiens2 ? '@sapiens2/' : '';
+
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, Math.min(i + batchSize, files.length));
-    const keys = batch.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    const keys = batch.map(f => `${cachePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
 
     // One IDB transaction for the whole batch
     const cached = await cacheGetBatch(keys);
 
-    // Resolve inputs for cache misses (convert video thumbnails to RawImage in parallel)
+    // Resolve inputs for cache misses
     const missIndices: number[] = [];
-    const missInputs: (File | RawImage)[] = [];
+    const missInputs: (File | RawImage | ImageBitmap)[] = [];
 
     await Promise.all(batch.map(async (f, bi) => {
       if (cached[bi]) return; // cache hit — handled below
@@ -1084,24 +1130,31 @@ async function embedAll(files: PhotoFile[]) {
         // Use cached thumbnail if available, otherwise extract frame now
         const thumb = state.thumbnails[idx] ?? await videoFrameLimit(() => extractVideoFrame(f.file));
         if (thumb) {
-          // Also store it so the render loop doesn't re-extract
           if (!state.thumbnails[idx]) {
             state.thumbnails[idx] = thumb;
             thumbDecoding.delete(idx);
           }
-          const canvas = document.createElement('canvas');
-          canvas.width = thumb.width;
-          canvas.height = thumb.height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(thumb, 0, 0);
-            missInputs.push(await RawImage.fromCanvas(canvas));
+          if (isSapiens2) {
+            // Pass ImageBitmap directly; sapiens2 embedder handles resize
+            missInputs.push(thumb);
           } else {
-            missInputs.push(f.file);
+            const canvas = document.createElement('canvas');
+            canvas.width = thumb.width;
+            canvas.height = thumb.height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(thumb, 0, 0);
+              missInputs.push(await RawImage.fromCanvas(canvas));
+            } else {
+              missInputs.push(f.file);
+            }
           }
         } else {
           missInputs.push(f.file);
         }
+      } else if (isSapiens2) {
+        // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
+        missInputs.push(f.file);
       } else {
         const resized = await resizeForEmbedding(f.file);
         if (resized !== null) {
@@ -1120,14 +1173,23 @@ async function embedAll(files: PhotoFile[]) {
       if (cached[bi]) { vectors[i + bi] = cached[bi]!; cacheHits++; }
     }
 
-    // Run true batch inference for all cache misses at once
+    // Run inference for cache misses
     if (missInputs.length > 0) {
-      if (!extractor) throw new Error('Extractor not loaded');
       try {
-        const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
-        const extracted = missInputs.length === 1
-          ? [extractVector(output)]
-          : extractBatchedVectors(output, missInputs.length);
+        let extracted: Float32Array[];
+        if (isSapiens2) {
+          if (!sapiens2Session) throw new Error('Sapiens2 session not loaded');
+          extracted = await embedWithSapiens2(
+            sapiens2Session,
+            missInputs as (File | ImageBitmap)[],
+          );
+        } else {
+          if (!extractor) throw new Error('Extractor not loaded');
+          const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
+          extracted = missInputs.length === 1
+            ? [extractVector(output)]
+            : extractBatchedVectors(output, missInputs.length);
+        }
 
         for (let m = 0; m < missIndices.length; m++) {
           const bi = missIndices[m];
@@ -1848,6 +1910,7 @@ if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projection
 dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
+dom.modelSelect.value = state.settings.modelVariant;
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
@@ -1930,6 +1993,17 @@ dom.enableSearchToggle.addEventListener('change', async () => {
     setTimeout(() => setProgress(0), 500);
     setStatus('Text model loaded.');
   }
+});
+
+dom.modelSelect.addEventListener('change', () => {
+  if (extractor || sapiens2Session) {
+    // Model already loaded — revert and inform user
+    dom.modelSelect.value = state.settings.modelVariant;
+    setStatus('Model already loaded. Reload the page to switch models.');
+    return;
+  }
+  state.settings.modelVariant = dom.modelSelect.value as 'nomic' | 'sapiens2';
+  saveSettings();
 });
 
 dom.densitySlider.addEventListener('input', async () => {
