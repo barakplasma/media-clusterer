@@ -13,11 +13,26 @@ const getGitInfo = (cmd: string, envVar?: string) => {
 const gitBranch = getGitInfo('git rev-parse --abbrev-ref HEAD', 'GITHUB_HEAD_REF') || getGitInfo('git rev-parse --abbrev-ref HEAD', 'GITHUB_REF_NAME');
 const gitCommit = getGitInfo('git rev-parse --short HEAD', 'GITHUB_SHA')?.substring(0, 7);
 
+// onnxruntime-web WASM files are loaded at runtime from the CDN via
+// ort.env.wasm.wasmPaths (set in src/sapiens2.ts). Bundling them into dist
+// is both wasteful and hits Cloudflare Pages' 25 MiB per-file limit.
+const excludeOrtWasm = {
+  name: 'exclude-ort-wasm',
+  generateBundle(_: unknown, bundle: Record<string, { fileName?: string }>) {
+    for (const key of Object.keys(bundle)) {
+      if (bundle[key].fileName?.includes('ort-wasm')) {
+        delete bundle[key];
+      }
+    }
+  },
+};
+
 export default defineConfig({
   define: {
     __GIT_BRANCH__: JSON.stringify(gitBranch),
     __GIT_COMMIT__: JSON.stringify(gitCommit),
   },
+  plugins: [excludeOrtWasm],
   build: {
     sourcemap: true,
   },
