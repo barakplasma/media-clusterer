@@ -57,7 +57,7 @@ function getCanvas(): CanvasRenderingContext2D {
     _canvas = document.createElement('canvas');
     _canvas.width = MODEL_W;
     _canvas.height = MODEL_H;
-    _ctx = _canvas.getContext('2d')!;
+    _ctx = _canvas.getContext('2d', { willReadFrequently: true })!;
   }
   return _ctx;
 }
@@ -85,6 +85,7 @@ export async function loadSapiens2(
   onProgress?: (pct: number) => void,
 ): Promise<{ session: Sapiens2Session; device: 'webgpu' | 'wasm' }> {
   ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+  ort.env.logLevel = 'error'; // suppress EP-assignment warnings — expected with int8 ONNX on WebGPU
 
   const modelBuffer = await downloadWithProgress(MODEL_URL, onProgress);
 
