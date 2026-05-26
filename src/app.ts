@@ -7,6 +7,7 @@ import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
 import type { Sapiens2Session, Sapiens2Variant } from './sapiens2';
+import { getChromeAIAvailability, ChromeAISessionManager } from './chromeAI';
 import {
   l2normalize,
   extractVector,
@@ -176,6 +177,7 @@ let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
 let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
+let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
 let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -202,6 +204,9 @@ function updateDeviceBadge() {
                 : `Sapiens2·${variant} · CPU`;
     deviceBadgeEl.textContent = label;
     deviceBadgeEl.style.color = modelDevice === 'webgpu' ? '#4ade80' : '#fb923c';
+  } else if (chromeAIManager) {
+    deviceBadgeEl.textContent = 'Chrome AI · Built-in';
+    deviceBadgeEl.style.color = '#4ade80';
   } else if (modelDevice === 'webgpu') {
     deviceBadgeEl.textContent = 'WebGPU';
     deviceBadgeEl.style.color = '#4ade80';
@@ -985,10 +990,92 @@ async function runProjection(vectors: Float64Array[], method: ProjectionMethod, 
 
 // ── Model singleton ──────────────────────────────────────────────────────────
 async function loadModel(signal?: AbortSignal) {
-  if (extractor || sapiens2Session) return;
+  if (extractor || sapiens2Session || chromeAIManager) return;
   state.phase = 'loading_model';
   setStatus('Loading model…');
   setProgress(0);
+
+  if (state.settings.modelVariant === 'chrome-ai') {
+    setStatus('Checking Chrome AI availability…');
+    const availability = await getChromeAIAvailability();
+
+    if (availability === 'unavailable') {
+      setStatus(
+        'Chrome AI unavailable. Enable chrome://flags/#prompt-api-for-gemini-nano in Chrome 138+.'
+      );
+      dom.loadModelBtn.hidden = false;
+      state.phase = 'idle';
+      return;
+    }
+
+    if (availability === 'downloadable' || availability === 'downloading') {
+      setStatus('Chrome AI model downloading (managed by Chrome, this happens once)…');
+      let polls = 0;
+      while (polls < 60) {
+        await new Promise(r => setTimeout(r, 2000));
+        const current = await getChromeAIAvailability();
+        if (current === 'available') break;
+        setStatus(`Chrome AI model downloading… (${++polls * 2}s elapsed)`);
+      }
+      if (await getChromeAIAvailability() !== 'available') {
+        setStatus('Chrome AI model download timed out. Try again later.');
+        dom.loadModelBtn.hidden = false;
+        state.phase = 'idle';
+        return;
+      }
+    }
+
+    setStatus('Initializing Chrome AI session…');
+    chromeAIManager = new ChromeAISessionManager();
+
+    if (!textExtractor) {
+      setStatus('Loading text embedding model (134 MB)…');
+      const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
+      const textLoaded = new Map<string, number>();
+
+      const textProgressCb = (e: ProgressEvent) => {
+        if (e.status === 'progress') {
+          textLoaded.set(e.file, e.loaded ?? 0);
+          const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
+          const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
+          setProgress(pct);
+          setStatus(`Loading text model… ${pct.toFixed(0)}%`);
+        }
+      };
+
+      const tryLoadText = (device: 'webgpu' | 'wasm') =>
+        (pipeline as Pipeline)(
+          'feature-extraction',
+          'nomic-ai/nomic-embed-text-v1.5',
+          { device, dtype: 'fp32', progress_callback: textProgressCb }
+        ) as Promise<PipelineInstance>;
+
+      try {
+        textExtractor = await tryLoadText('webgpu');
+      } catch {
+        textLoaded.clear();
+        textExtractor = await tryLoadText('wasm');
+      }
+    }
+
+    updateDeviceBadge();
+    setProgress(100);
+    state.phase = 'model_ready';
+    setProgress(0);
+    dom.loadModelBtn.hidden = true;
+    dom.modelSelect.disabled = true;
+    dom.openBtn.disabled = false;
+    dom.openBtn.classList.add('primary');
+    dom.demoBtn.disabled = false;
+    if (!dom.resumeBtn.hidden) {
+      dom.resumeBtn.disabled = false;
+      dom.resumeBtn.classList.add('primary');
+      setStatus('Chrome AI ready — resume or open a folder.');
+    } else {
+      setStatus('Chrome AI ready — open a folder to start.');
+    }
+    return;
+  }
 
   if (state.settings.modelVariant.startsWith('sapiens2')) {
     const sapiens2Variant = state.settings.modelVariant.split('-')[1] as Sapiens2Variant;
@@ -1142,11 +1229,13 @@ async function embedAll(files: PhotoFile[]) {
   const writeQueue: [CacheKey, Float64Array][] = [];
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
-  // Sapiens2 takes 1024×768 inputs — run one at a time to stay within memory budget
-  const batchSize = isSapiens2 ? 1 : state.settings.batchSize;
+  const isChromeAI = state.settings.modelVariant === 'chrome-ai';
+  // Sapiens2 and Chrome AI run one image at a time
+  const batchSize = (isSapiens2 || isChromeAI) ? 1 : state.settings.batchSize;
   // Separate cache namespace per variant so vectors don't collide across models.
   // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
-  const cachePrefix = !isSapiens2 ? ''
+  const cachePrefix = isChromeAI ? '@chrome-ai/'
+    : !isSapiens2 ? ''
     : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
     : `@${state.settings.modelVariant}/`;
 
@@ -1177,8 +1266,8 @@ async function embedAll(files: PhotoFile[]) {
             state.thumbnails[idx] = thumb;
             thumbDecoding.delete(idx);
           }
-          if (isSapiens2) {
-            // Pass ImageBitmap directly; sapiens2 embedder handles resize
+          if (isSapiens2 || isChromeAI) {
+            // Pass ImageBitmap directly; model handles resize
             missInputs.push(thumb);
           } else {
             const canvas = document.createElement('canvas');
@@ -1195,8 +1284,8 @@ async function embedAll(files: PhotoFile[]) {
         } else {
           missInputs.push(f.file);
         }
-      } else if (isSapiens2) {
-        // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
+      } else if (isSapiens2 || isChromeAI) {
+        // Pass File directly; model handles resize internally
         missInputs.push(f.file);
       } else {
         const resized = await resizeForEmbedding(f.file);
@@ -1226,6 +1315,16 @@ async function embedAll(files: PhotoFile[]) {
             sapiens2Session,
             missInputs as (File | ImageBitmap)[],
           );
+        } else if (isChromeAI) {
+          if (!chromeAIManager) throw new Error('Chrome AI not initialized');
+          if (!textExtractor) throw new Error('Text embedding model not loaded');
+          extracted = [];
+          for (const input of missInputs as (File | ImageBitmap)[]) {
+            const description = await chromeAIManager.describe(input as ImageBitmap | Blob);
+            // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
+            const output = await textExtractor(`search_document: ${description}`, { pooling: 'mean', normalize: true });
+            extracted.push(extractVector(output));
+          }
         } else {
           if (!extractor) throw new Error('Extractor not loaded');
           const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
@@ -2040,7 +2139,7 @@ dom.enableSearchToggle.addEventListener('change', async () => {
 });
 
 dom.modelSelect.addEventListener('change', () => {
-  if (extractor || sapiens2Session) {
+  if (extractor || sapiens2Session || chromeAIManager) {
     // Model already loaded — revert and inform user
     dom.modelSelect.value = state.settings.modelVariant;
     setStatus('Model already loaded. Reload the page to switch models.');
@@ -2219,7 +2318,7 @@ if (_savedKeys) {
 }
 
 dom.loadModelBtn.addEventListener('click', async () => {
-  if (extractor) return;
+  if (extractor || sapiens2Session || chromeAIManager) return;
   dom.loadModelBtn.disabled = true;
   await loadModel();
 });
@@ -2347,7 +2446,8 @@ dom.resumeBtn.addEventListener('click', async () => {
     } else {
       // AI mode: restore search index
       setStatus('Restoring search index…');
-      const resumePrefix = !state.settings.modelVariant.startsWith('sapiens2') ? ''
+      const resumePrefix = state.settings.modelVariant === 'chrome-ai' ? '@chrome-ai/'
+        : !state.settings.modelVariant.startsWith('sapiens2') ? ''
         : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
         : `@${state.settings.modelVariant}/`;
       const keys = matched.map(f => `${resumePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
@@ -2436,7 +2536,7 @@ function buildDebugInfo(): string {
     `density:     ${state.settings.density}`,
     ``,
     `── models ──────────────────`,
-    `vision:      ${extractor ? `loaded (${modelDevice ?? '?'})` : 'none'}`,
+    `vision:      ${extractor ? `loaded (${modelDevice ?? '?'})` : sapiens2Session ? `sapiens2 (${modelDevice ?? '?'})` : chromeAIManager ? 'chrome-ai (built-in)' : 'none'}`,
     `text:        ${textExtractor ? 'loaded' : 'none'}`,
     ``,
     `── memory ──────────────────`,
@@ -2586,6 +2686,7 @@ debugCopyBtn.addEventListener('click', async () => {
   get camera() { return camera; },
   get extractor() { return extractor; },
   get textExtractor() { return textExtractor; },
+  get chromeAIManager() { return chromeAIManager; },
   get thumbDecoding() { return thumbDecoding; },
   buildDebugInfo,
 };

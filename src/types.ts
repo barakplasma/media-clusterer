@@ -28,7 +28,7 @@ export interface Camera {
 export type ProjectionMethod = 'UMAP' | 'TSNE' | 'PCA' | 'ISOMAP' | 'LLE' | 'MDS' | 'SAMMON' | 'TriMap';
 
 /** Vision model variant */
-export type ModelVariant = 'nomic' | 'sapiens2-int8' | 'sapiens2-fp16' | 'sapiens2-fp32';
+export type ModelVariant = 'nomic' | 'sapiens2-int8' | 'sapiens2-fp16' | 'sapiens2-fp32' | 'chrome-ai';
 
 /** Application settings */
 export interface Settings {
