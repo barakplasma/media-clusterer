@@ -1014,7 +1014,9 @@ async function loadModel(signal?: AbortSignal) {
       setStatus('Chrome AI model downloading (managed by Chrome, this happens once)…');
       let polls = 0;
       while (polls < 60) {
+        signal?.throwIfAborted();
         await new Promise(r => setTimeout(r, 2000));
+        signal?.throwIfAborted();
         const current = await getChromeAIAvailability();
         if (current === 'available') break;
         setStatus(`Chrome AI model downloading… (${++polls * 2}s elapsed)`);
@@ -1304,7 +1306,14 @@ async function embedAll(files: PhotoFile[]) {
 
     // Apply cache hits
     for (let bi = 0; bi < batch.length; bi++) {
-      if (cached[bi]) { vectors[i + bi] = cached[bi]!; cacheHits++; }
+      if (cached[bi]) {
+        vectors[i + bi] = cached[bi]!;
+        cacheHits++;
+        if (isChromeAI) {
+          const f = batch[bi];
+          state.captions[i + bi] = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
+        }
+      }
     }
 
     // Run inference for cache misses
@@ -1324,8 +1333,10 @@ async function embedAll(files: PhotoFile[]) {
           for (let m = 0; m < missInputs.length; m++) {
             const input = missInputs[m] as File | ImageBitmap;
             const description = await chromeAIManager.describe(input as ImageBitmap | Blob);
+            const f = batch[missIndices[m]];
             // Store caption indexed by global file index for modal display
             state.captions[i + missIndices[m]] = description;
+            try { localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description); } catch (_) {}
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
             const output = await textExtractor(`search_document: ${description}`, { pooling: 'mean', normalize: true });
             extracted.push(extractVector(output));
@@ -2072,6 +2083,22 @@ dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
 dom.modelSelect.value = state.settings.modelVariant;
 applyTheme(state.settings.theme);
 
+// Disable the Chrome AI option on unsupported browsers/platforms at startup
+getChromeAIAvailability().then(avail => {
+  const chromeAIOption = dom.modelSelect.querySelector<HTMLOptionElement>('option[value="chrome-ai"]');
+  if (!chromeAIOption) return;
+  if (avail === 'unavailable') {
+    chromeAIOption.disabled = true;
+    chromeAIOption.textContent += ' — not available on this browser';
+    // If the saved setting was chrome-ai but it's unavailable, fall back to sapiens2-fp16
+    if (state.settings.modelVariant === 'chrome-ai') {
+      state.settings.modelVariant = 'sapiens2-fp16';
+      dom.modelSelect.value = 'sapiens2-fp16';
+      saveSettings();
+    }
+  }
+});
+
 const updateSearchUI = () => {
   // In viewer mode, always disable search
   if (state.settings.viewerOnly) {
@@ -2476,6 +2503,9 @@ dom.resumeBtn.addEventListener('click', async () => {
     }
 
     state.thumbnails = initThumbnails(matched);
+    if (state.settings.modelVariant === 'chrome-ai') {
+      state.captions = matched.map(f => localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`));
+    }
     state.phase = 'done';
     resizeCanvas();
     fitCamera();
