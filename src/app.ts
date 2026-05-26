@@ -365,7 +365,7 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
     };
 
     video.onerror = () => {
-      console.warn('Video load error');
+      console.debug('Video load error (unsupported format):', file.name);
       cleanup();
       resolve(null);
     };
@@ -1140,7 +1140,11 @@ async function embedAll(files: PhotoFile[]) {
       const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
       if (VIDEO_EXTS.has(ext)) {
         // Use cached thumbnail if available, otherwise extract frame now
-        const thumb = state.thumbnails[idx] ?? await videoFrameLimit(() => extractVideoFrame(f.file));
+        let thumb: ImageBitmap | null = state.thumbnails[idx] ?? null;
+        if (!thumb && !thumbFailed.has(idx)) {
+          thumb = await videoFrameLimit(() => extractVideoFrame(f.file));
+          if (!thumb) thumbFailed.add(idx);
+        }
         if (thumb) {
           if (!state.thumbnails[idx]) {
             state.thumbnails[idx] = thumb;
