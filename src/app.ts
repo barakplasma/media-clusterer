@@ -980,9 +980,11 @@ async function loadModel() {
 
   if (state.settings.modelVariant === 'sapiens2') {
     try {
-      const result = await loadSapiens2((pct) => {
+      const result = await loadSapiens2((pct, fromCache) => {
         setProgress(pct);
-        setStatus(`Loading Sapiens2 model… ${pct.toFixed(0)}%`);
+        setStatus(fromCache
+          ? 'Loading Sapiens2 model from cache…'
+          : `Downloading Sapiens2 model… ${pct.toFixed(0)}%`);
       });
       sapiens2Session = result.session;
       modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';

@@ -9,6 +9,7 @@ import { l2normalize } from './embeddings';
 
 const MODEL_URL =
   'https://huggingface.co/barakplasma/sapiens2-onnx/resolve/main/sapiens2_0.1b_int8.onnx';
+const MODEL_CACHE_NAME = 'sapiens2-model-v1';
 
 // Input resolution expected by the model
 const MODEL_H = 1024;
@@ -21,6 +22,9 @@ const G_SCALE = 1 / (255 * 0.224), G_OFF = 0.456 / 0.224;
 const B_SCALE = 1 / (255 * 0.225), B_OFF = 0.406 / 0.225;
 
 export type Sapiens2Session = ort.InferenceSession;
+
+// Progress callback receives current percent and whether bytes came from cache.
+export type Sapiens2ProgressCallback = (pct: number, fromCache: boolean) => void;
 
 async function downloadWithProgress(
   url: string,
@@ -48,6 +52,36 @@ async function downloadWithProgress(
   let offset = 0;
   for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.length; }
   return out.buffer;
+}
+
+async function loadModelBuffer(
+  onProgress?: Sapiens2ProgressCallback,
+): Promise<{ buffer: ArrayBuffer; fromCache: boolean }> {
+  // Try Cache API first — avoids re-downloading 116 MB on every visit.
+  // Keyed on the canonical HuggingFace URL (stable), not any signed redirect.
+  if (typeof caches !== 'undefined') {
+    try {
+      const cache = await caches.open(MODEL_CACHE_NAME);
+      const cached = await cache.match(MODEL_URL);
+      if (cached) {
+        onProgress?.(100, true);
+        return { buffer: await cached.arrayBuffer(), fromCache: true };
+      }
+    } catch { /* Cache API unavailable (private browsing, etc.) — fall through */ }
+  }
+
+  const buffer = await downloadWithProgress(MODEL_URL, (pct) => onProgress?.(pct, false));
+
+  // Persist to cache in the background — don't block session creation.
+  if (typeof caches !== 'undefined') {
+    caches.open(MODEL_CACHE_NAME)
+      .then(cache => cache.put(MODEL_URL, new Response(buffer.slice(0), {
+        headers: { 'Content-Type': 'application/octet-stream' },
+      })))
+      .catch(() => {}); // best-effort; failure just means next visit re-downloads
+  }
+
+  return { buffer, fromCache: false };
 }
 
 // Reused across all imageToTensor calls — avoids per-image canvas alloc
@@ -78,8 +112,8 @@ function imageToTensor(source: ImageBitmap): ort.Tensor {
   const { data } = ctx.getImageData(0, 0, MODEL_W, MODEL_H);
 
   for (let i = 0; i < _pixels; i++) {
-    _tensorBuf[i]             = data[i * 4]     * R_SCALE - R_OFF;
-    _tensorBuf[_pixels + i]   = data[i * 4 + 1] * G_SCALE - G_OFF;
+    _tensorBuf[i]               = data[i * 4]     * R_SCALE - R_OFF;
+    _tensorBuf[_pixels + i]     = data[i * 4 + 1] * G_SCALE - G_OFF;
     _tensorBuf[2 * _pixels + i] = data[i * 4 + 2] * B_SCALE - B_OFF;
   }
   return new ort.Tensor('float32', _tensorBuf, [1, 3, MODEL_H, MODEL_W]);
@@ -99,28 +133,28 @@ async function decodeBitmap(src: File | ImageBitmap): Promise<{ bmp: ImageBitmap
 
 /**
  * Load the Sapiens2 ONNX model. Tries WebGPU first, falls back to WASM.
- * Returns the session and the device that was used.
+ * The model is cached in the browser's Cache API after the first download.
  */
 export async function loadSapiens2(
-  onProgress?: (pct: number) => void,
-): Promise<{ session: Sapiens2Session; device: 'webgpu' | 'wasm' }> {
+  onProgress?: Sapiens2ProgressCallback,
+): Promise<{ session: Sapiens2Session; device: 'webgpu' | 'wasm'; fromCache: boolean }> {
   ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
   ort.env.logLevel = 'error'; // suppress EP-assignment warnings — expected with int8 ONNX on WebGPU
 
-  const modelBuffer = await downloadWithProgress(MODEL_URL, onProgress);
+  const { buffer: modelBuffer, fromCache } = await loadModelBuffer(onProgress);
 
   try {
     const session = await ort.InferenceSession.create(modelBuffer, {
       executionProviders: ['webgpu'],
       graphOptimizationLevel: 'all',
     });
-    return { session, device: 'webgpu' };
+    return { session, device: 'webgpu', fromCache };
   } catch {
     const session = await ort.InferenceSession.create(modelBuffer, {
       executionProviders: ['wasm'],
       graphOptimizationLevel: 'all',
     });
-    return { session, device: 'wasm' };
+    return { session, device: 'wasm', fromCache };
   }
 }
 
