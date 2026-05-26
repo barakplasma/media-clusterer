@@ -56,7 +56,8 @@ jobs:
           PR_BRANCH: ${{ github.head_ref }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          BRANCH_URL="https://${PR_BRANCH}.media-clusterer.pages.dev"
+          BRANCH_SLUG=$(echo "$PR_BRANCH" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+          BRANCH_URL="https://${BRANCH_SLUG}.media-clusterer.pages.dev"
           SHORT_SHA="${COMMIT_SHA:0:7}"
 
           # Get commit message safely via gh api (avoids injection from untrusted input)
