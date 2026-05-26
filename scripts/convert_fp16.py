@@ -1,7 +1,7 @@
 """Convert sapiens2_0.1b_fp32.onnx → sapiens2_0.1b_fp16.onnx for WebGPU inference.
 
 Usage:
-    pip install onnx onnxmltools huggingface_hub
+    pip install onnx onnxconverter-common huggingface_hub
     python scripts/convert_fp16.py [--upload]
 
 The fp32 source is downloaded automatically from HuggingFace if not present locally.
@@ -25,7 +25,7 @@ def download_fp32():
 
 def convert():
     import onnx
-    from onnxmltools.utils.float16_converter import convert_float_to_float16
+    from onnxconverter_common import float16
 
     print(f"Loading {SRC} ...")
     model = onnx.load(str(SRC))
@@ -33,9 +33,9 @@ def convert():
     print("Converting to fp16 (keep_io_types=True) ...")
     # keep_io_types=True preserves float32 inputs/outputs so the browser JS
     # needs no changes — only internal weights/activations become fp16.
-    fp16 = convert_float_to_float16(model, keep_io_types=True)
+    fp16_model = float16.convert_float_to_float16(model, keep_io_types=True)
 
-    onnx.save(fp16, str(DST))
+    onnx.save(fp16_model, str(DST))
     print(f"Saved {DST} ({DST.stat().st_size / 1e6:.0f} MB)")
 
 def upload():
