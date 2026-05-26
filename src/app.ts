@@ -131,11 +131,19 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  modelVariant: 'nomic',
+  modelVariant: 'sapiens2',
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
-const settings: Settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) } : DEFAULT_SETTINGS;
+// Migrate existing users who had 'nomic' stored before sapiens2 became the default
+if (savedSettings) {
+  const parsed = JSON.parse(savedSettings);
+  if (!parsed.modelVariant || parsed.modelVariant === 'nomic') {
+    parsed.modelVariant = 'sapiens2';
+    localStorage.setItem('mc_settings', JSON.stringify(parsed));
+  }
+}
+const settings: Settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem('mc_settings')!) } : DEFAULT_SETTINGS;
 
 const state: AppState = {
   phase: 'idle',
@@ -373,7 +381,7 @@ function initThumbnails(files: PhotoFile[]): (ImageBitmap | null)[] {
 }
 
 function lazyDecodeThumbnail(idx: number) {
-  if (thumbDecoding.has(idx) || state.thumbnails[idx]) return;
+  if (thumbDecoding.has(idx) || state.thumbnails[idx] || thumbFailed.has(idx)) return;
   thumbDecoding.add(idx);
   const f = state.files[idx];
 
@@ -405,7 +413,9 @@ function lazyDecodeThumbnail(idx: number) {
   };
 
   if (VIDEO_EXTS.has(ext)) {
-    videoFrameLimit(() => extractVideoFrame(f.file)).then(done).catch(() => done(null));
+    videoFrameLimit(() => extractVideoFrame(f.file))
+      .then(result => { if (!result) thumbFailed.add(idx); done(result); })
+      .catch(() => { thumbFailed.add(idx); done(null); });
   } else {
     createImageBitmap(f.file, { resizeWidth: 96, resizeQuality: 'low' })
       .then(done).catch(() => done(null));
@@ -520,6 +530,7 @@ async function kmeansAsync(points: number[][], k: number, maxIter = 60): Promise
 const fullImages = new Map<number, HTMLImageElement>(); // index → HTMLImageElement
 const fullImageLRU = new Set<number>();                // LRU tracking for full-res images
 const thumbDecoding = new Set<number>();               // indices currently being decoded
+const thumbFailed = new Set<number>();                 // indices where video frame extraction permanently failed
 const thumbnailLRU = new Set<number>();                // indices in LRU order (most recently used at end)
 
 // Chrome limits concurrent WebMediaPlayers to ~75; cap video frame extraction
@@ -677,6 +688,7 @@ function resetAll() {
   fullImages.clear();
   fullImageLRU.clear();
   thumbDecoding.clear();
+  thumbFailed.clear();
   thumbnailLRU.clear();
   for (const f of state.files) {
     if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
@@ -1252,6 +1264,7 @@ async function processFiles(files: PhotoFile[]) {
     if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
   }
   thumbDecoding.clear();
+  thumbFailed.clear();
   thumbnailLRU.clear();
 
   state.files = files;
