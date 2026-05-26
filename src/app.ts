@@ -5,6 +5,8 @@
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
+import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
+import type { Sapiens2Session } from './sapiens2';
 import {
   l2normalize,
   extractVector,
@@ -107,6 +109,7 @@ const dom: DOMElements = {
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
+  modelSelect: document.getElementById('model-select') as HTMLSelectElement,
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
@@ -128,10 +131,19 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
+  modelVariant: 'sapiens2',
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
-const settings: Settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) } : DEFAULT_SETTINGS;
+// Migrate existing users who had 'nomic' stored before sapiens2 became the default
+if (savedSettings) {
+  const parsed = JSON.parse(savedSettings);
+  if (!parsed.modelVariant || parsed.modelVariant === 'nomic') {
+    parsed.modelVariant = 'sapiens2';
+    localStorage.setItem('mc_settings', JSON.stringify(parsed));
+  }
+}
+const settings: Settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem('mc_settings')!) } : DEFAULT_SETTINGS;
 
 const state: AppState = {
   phase: 'idle',
@@ -158,6 +170,8 @@ const camera: Camera = { x: 0, y: 0, scale: 1 };
 let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
 let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
+let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
+let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
@@ -173,7 +187,15 @@ function updateDeviceBadge() {
 
   if (state.settings.viewerOnly) {
     deviceBadgeEl.textContent = 'Viewer';
-    deviceBadgeEl.style.color = '#4ade80'; // Green for viewer mode
+    deviceBadgeEl.style.color = '#4ade80';
+  } else if (sapiens2Session) {
+    const threads = navigator.hardwareConcurrency || 1;
+    const mt = typeof SharedArrayBuffer !== 'undefined';
+    const label = modelDevice === 'webgpu' ? 'Sapiens2 · WebGPU'
+                : mt ? `Sapiens2 · ${threads}T`
+                : 'Sapiens2 · CPU';
+    deviceBadgeEl.textContent = label;
+    deviceBadgeEl.style.color = modelDevice === 'webgpu' ? '#4ade80' : '#fb923c';
   } else if (modelDevice === 'webgpu') {
     deviceBadgeEl.textContent = 'WebGPU';
     deviceBadgeEl.style.color = '#4ade80';
@@ -325,7 +347,13 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
     // video.remove() is a no-op when the element was never added to the DOM.
     // The only way to release a WebMediaPlayer in Chrome is: pause → clear src → load().
     // Skipping this causes the "too many WebMediaPlayers" intervention at ~75 concurrent.
+    // Null out all handlers before tearing down the element.
+    // Setting video.src='' and video.load() can re-fire onerror on the same
+    // handler, turning one failed decode into N cascading error logs.
     const cleanup = () => {
+      video.onloadedmetadata = null;
+      video.onseeked = null;
+      video.onerror = null;
       URL.revokeObjectURL(url);
       video.pause();
       video.src = '';
@@ -349,7 +377,7 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
     };
 
     video.onerror = () => {
-      console.warn('Video load error');
+      console.debug('Video load error (unsupported format):', file.name);
       cleanup();
       resolve(null);
     };
@@ -365,7 +393,7 @@ function initThumbnails(files: PhotoFile[]): (ImageBitmap | null)[] {
 }
 
 function lazyDecodeThumbnail(idx: number) {
-  if (thumbDecoding.has(idx) || state.thumbnails[idx]) return;
+  if (thumbDecoding.has(idx) || state.thumbnails[idx] || thumbFailed.has(idx)) return;
   thumbDecoding.add(idx);
   const f = state.files[idx];
 
@@ -378,7 +406,10 @@ function lazyDecodeThumbnail(idx: number) {
     state.thumbnails[idx] = bm;
     thumbDecoding.delete(idx);
 
-    // Update LRU: remove if present, add to end (most recently used)
+    // Only track in LRU when we have an actual bitmap — null entries (failed
+    // decodes) would crowd out real thumbnails and trigger unnecessary evictions.
+    if (!bm) { scheduleRender(); return; }
+
     thumbnailLRU.delete(idx);
     thumbnailLRU.add(idx);
 
@@ -397,7 +428,9 @@ function lazyDecodeThumbnail(idx: number) {
   };
 
   if (VIDEO_EXTS.has(ext)) {
-    videoFrameLimit(() => extractVideoFrame(f.file)).then(done).catch(() => done(null));
+    videoFrameLimit(() => extractVideoFrame(f.file))
+      .then(result => { if (!result) thumbFailed.add(idx); done(result); })
+      .catch(() => { thumbFailed.add(idx); done(null); });
   } else {
     createImageBitmap(f.file, { resizeWidth: 96, resizeQuality: 'low' })
       .then(done).catch(() => done(null));
@@ -512,6 +545,7 @@ async function kmeansAsync(points: number[][], k: number, maxIter = 60): Promise
 const fullImages = new Map<number, HTMLImageElement>(); // index → HTMLImageElement
 const fullImageLRU = new Set<number>();                // LRU tracking for full-res images
 const thumbDecoding = new Set<number>();               // indices currently being decoded
+const thumbFailed = new Set<number>();                 // indices where video frame extraction permanently failed
 const thumbnailLRU = new Set<number>();                // indices in LRU order (most recently used at end)
 
 // Chrome limits concurrent WebMediaPlayers to ~75; cap video frame extraction
@@ -669,6 +703,7 @@ function resetAll() {
   fullImages.clear();
   fullImageLRU.clear();
   thumbDecoding.clear();
+  thumbFailed.clear();
   thumbnailLRU.clear();
   for (const f of state.files) {
     if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
@@ -943,11 +978,45 @@ async function runProjection(vectors: Float64Array[], method: ProjectionMethod, 
 }
 
 // ── Model singleton ──────────────────────────────────────────────────────────
-async function loadModel() {
-  if (extractor) return;
+async function loadModel(signal?: AbortSignal) {
+  if (extractor || sapiens2Session) return;
   state.phase = 'loading_model';
   setStatus('Loading model…');
   setProgress(0);
+
+  if (state.settings.modelVariant === 'sapiens2') {
+    try {
+      const result = await loadSapiens2((pct, fromCache) => {
+        setProgress(pct);
+        setStatus(fromCache
+          ? 'Loading Sapiens2 model from cache…'
+          : `Downloading Sapiens2 model… ${pct.toFixed(0)}%`);
+      }, signal);
+      sapiens2Session = result.session;
+      modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
+    } catch (err) {
+      setStatus('Failed to load Sapiens2 model.');
+      dom.loadModelBtn.hidden = false;
+      throw err;
+    }
+    updateDeviceBadge();
+    setProgress(100);
+    state.phase = 'model_ready';
+    setProgress(0);
+    dom.loadModelBtn.hidden = true;
+    dom.modelSelect.disabled = true;
+    dom.openBtn.disabled = false;
+    dom.openBtn.classList.add('primary');
+    dom.demoBtn.disabled = false;
+    if (!dom.resumeBtn.hidden) {
+      dom.resumeBtn.disabled = false;
+      dom.resumeBtn.classList.add('primary');
+      setStatus('Sapiens2 ready — resume or open a folder.');
+    } else {
+      setStatus('Sapiens2 ready — open a folder to start.');
+    }
+    return;
+  }
 
   const MODEL_SIZE_BYTES = 380 * 1024 * 1024 + 134 * 1024 * 1024;
   const loaded = new Map<string, number>();
@@ -1021,6 +1090,7 @@ async function loadModel() {
   state.phase = 'model_ready';
   setProgress(0);
   dom.loadModelBtn.hidden = true;
+  dom.modelSelect.disabled = true;
   dom.openBtn.disabled = false;
   dom.openBtn.classList.add('primary');
   dom.demoBtn.disabled = false;
@@ -1064,17 +1134,22 @@ async function embedAll(files: PhotoFile[]) {
   let cacheHits = 0;
   const writeQueue: [CacheKey, Float64Array][] = [];
 
-  const batchSize = state.settings.batchSize;
+  const isSapiens2 = state.settings.modelVariant === 'sapiens2';
+  // Sapiens2 takes 1024×768 inputs — run one at a time to stay within memory budget
+  const batchSize = isSapiens2 ? 1 : state.settings.batchSize;
+  // Separate cache namespace so nomic and sapiens2 vectors don't collide
+  const cachePrefix = isSapiens2 ? '@sapiens2/' : '';
+
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, Math.min(i + batchSize, files.length));
-    const keys = batch.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    const keys = batch.map(f => `${cachePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
 
     // One IDB transaction for the whole batch
     const cached = await cacheGetBatch(keys);
 
-    // Resolve inputs for cache misses (convert video thumbnails to RawImage in parallel)
+    // Resolve inputs for cache misses
     const missIndices: number[] = [];
-    const missInputs: (File | RawImage)[] = [];
+    const missInputs: (File | RawImage | ImageBitmap)[] = [];
 
     await Promise.all(batch.map(async (f, bi) => {
       if (cached[bi]) return; // cache hit — handled below
@@ -1082,26 +1157,37 @@ async function embedAll(files: PhotoFile[]) {
       const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
       if (VIDEO_EXTS.has(ext)) {
         // Use cached thumbnail if available, otherwise extract frame now
-        const thumb = state.thumbnails[idx] ?? await videoFrameLimit(() => extractVideoFrame(f.file));
+        let thumb: ImageBitmap | null = state.thumbnails[idx] ?? null;
+        if (!thumb && !thumbFailed.has(idx)) {
+          thumb = await videoFrameLimit(() => extractVideoFrame(f.file));
+          if (!thumb) thumbFailed.add(idx);
+        }
         if (thumb) {
-          // Also store it so the render loop doesn't re-extract
           if (!state.thumbnails[idx]) {
             state.thumbnails[idx] = thumb;
             thumbDecoding.delete(idx);
           }
-          const canvas = document.createElement('canvas');
-          canvas.width = thumb.width;
-          canvas.height = thumb.height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(thumb, 0, 0);
-            missInputs.push(await RawImage.fromCanvas(canvas));
+          if (isSapiens2) {
+            // Pass ImageBitmap directly; sapiens2 embedder handles resize
+            missInputs.push(thumb);
           } else {
-            missInputs.push(f.file);
+            const canvas = document.createElement('canvas');
+            canvas.width = thumb.width;
+            canvas.height = thumb.height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(thumb, 0, 0);
+              missInputs.push(await RawImage.fromCanvas(canvas));
+            } else {
+              missInputs.push(f.file);
+            }
           }
         } else {
           missInputs.push(f.file);
         }
+      } else if (isSapiens2) {
+        // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
+        missInputs.push(f.file);
       } else {
         const resized = await resizeForEmbedding(f.file);
         if (resized !== null) {
@@ -1120,14 +1206,23 @@ async function embedAll(files: PhotoFile[]) {
       if (cached[bi]) { vectors[i + bi] = cached[bi]!; cacheHits++; }
     }
 
-    // Run true batch inference for all cache misses at once
+    // Run inference for cache misses
     if (missInputs.length > 0) {
-      if (!extractor) throw new Error('Extractor not loaded');
       try {
-        const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
-        const extracted = missInputs.length === 1
-          ? [extractVector(output)]
-          : extractBatchedVectors(output, missInputs.length);
+        let extracted: Float32Array[];
+        if (isSapiens2) {
+          if (!sapiens2Session) throw new Error('Sapiens2 session not loaded');
+          extracted = await embedWithSapiens2(
+            sapiens2Session,
+            missInputs as (File | ImageBitmap)[],
+          );
+        } else {
+          if (!extractor) throw new Error('Extractor not loaded');
+          const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
+          extracted = missInputs.length === 1
+            ? [extractVector(output)]
+            : extractBatchedVectors(output, missInputs.length);
+        }
 
         for (let m = 0; m < missIndices.length; m++) {
           const bi = missIndices[m];
@@ -1190,6 +1285,7 @@ async function processFiles(files: PhotoFile[]) {
     if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
   }
   thumbDecoding.clear();
+  thumbFailed.clear();
   thumbnailLRU.clear();
 
   state.files = files;
@@ -1848,6 +1944,7 @@ if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projection
 dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
+dom.modelSelect.value = state.settings.modelVariant;
 applyTheme(state.settings.theme);
 
 const updateSearchUI = () => {
@@ -1932,6 +2029,17 @@ dom.enableSearchToggle.addEventListener('change', async () => {
   }
 });
 
+dom.modelSelect.addEventListener('change', () => {
+  if (extractor || sapiens2Session) {
+    // Model already loaded — revert and inform user
+    dom.modelSelect.value = state.settings.modelVariant;
+    setStatus('Model already loaded. Reload the page to switch models.');
+    return;
+  }
+  state.settings.modelVariant = dom.modelSelect.value as 'nomic' | 'sapiens2';
+  saveSettings();
+});
+
 dom.densitySlider.addEventListener('input', async () => {
   state.settings.density = parseFloat(dom.densitySlider.value);
   saveSettings();
@@ -1988,16 +2096,24 @@ dom.viewerOnlyToggle.addEventListener('change', async () => {
   updateSearchUI();
   updateDeviceBadge();
 
-  // If enabling viewer mode and we're idle, update UI immediately
-  if (state.settings.viewerOnly && state.phase === 'idle') {
-    dom.loadModelBtn.hidden = true;
-    dom.openBtn.disabled = false;
-    dom.openBtn.classList.add('primary');
-    dom.demoBtn.disabled = false;
-    setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+  if (state.settings.viewerOnly) {
+    // Cancel any in-progress model download
+    if (modelLoadAbort) {
+      modelLoadAbort.abort();
+      modelLoadAbort = null;
+      state.phase = 'idle';
+    }
+    if (state.phase === 'idle' || state.phase === 'loading_model') {
+      dom.loadModelBtn.hidden = true;
+      dom.openBtn.disabled = false;
+      dom.openBtn.classList.add('primary');
+      dom.demoBtn.disabled = false;
+      setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+    }
   } else if (!state.settings.viewerOnly && state.phase === 'idle') {
     // Switching back to AI mode
     dom.loadModelBtn.hidden = false;
+    dom.loadModelBtn.disabled = false;
     setStatus('AI mode enabled — click "Load AI Models" to begin.');
   }
 
@@ -2221,7 +2337,8 @@ dom.resumeBtn.addEventListener('click', async () => {
     } else {
       // AI mode: restore search index
       setStatus('Restoring search index…');
-      const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+      const resumePrefix = state.settings.modelVariant === 'sapiens2' ? '@sapiens2/' : '';
+      const keys = matched.map(f => `${resumePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
       const cachedVectors = await cacheGetBatch(keys);
       state.vectors = cachedVectors.map(v => v || new Float64Array(768));
       if (state.vectors.length > 0) {
@@ -2251,13 +2368,17 @@ dom.resumeBtn.addEventListener('click', async () => {
 // Auto-start model loading (only if not in viewer mode)
 if (!state.settings.viewerOnly) {
   dom.loadModelBtn.disabled = true;
+  modelLoadAbort = new AbortController();
   (async () => {
     try {
-      await loadModel();
+      await loadModel(modelLoadAbort!.signal);
     } catch (err) {
+      if ((err as Error).name === 'AbortError') return; // user switched to viewer mode
       dom.loadModelBtn.hidden = false;
       dom.loadModelBtn.disabled = false;
       setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
+    } finally {
+      modelLoadAbort = null;
     }
   })();
 } else {
