@@ -112,6 +112,7 @@ const dom: DOMElements = {
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
   modelSelect: document.getElementById('model-select') as HTMLSelectElement,
+  modalCaption: document.getElementById('modal-caption') as HTMLDivElement,
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
@@ -159,6 +160,7 @@ const state: AppState = {
   rawPoints: null,
   clusters: null,
   thumbnails: [],
+  captions: [],
   searchResults: null,
   searchQuery: '',
   searchScores: null,
@@ -720,7 +722,7 @@ function resetAll() {
     if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
   }
   state.phase = 'idle'; state.files = []; state.vectors = [];
-  state.points = []; state.clusters = null; state.thumbnails = [];
+  state.points = []; state.clusters = null; state.thumbnails = []; state.captions = [];
   state.searchResults = null;
   state.searchQuery = '';
   state.searchScores = null;
@@ -1319,8 +1321,11 @@ async function embedAll(files: PhotoFile[]) {
           if (!chromeAIManager) throw new Error('Chrome AI not initialized');
           if (!textExtractor) throw new Error('Text embedding model not loaded');
           extracted = [];
-          for (const input of missInputs as (File | ImageBitmap)[]) {
+          for (let m = 0; m < missInputs.length; m++) {
+            const input = missInputs[m] as File | ImageBitmap;
             const description = await chromeAIManager.describe(input as ImageBitmap | Blob);
+            // Store caption indexed by global file index for modal display
+            state.captions[i + missIndices[m]] = description;
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
             const output = await textExtractor(`search_document: ${description}`, { pooling: 'mean', normalize: true });
             extracted.push(extractVector(output));
@@ -2005,6 +2010,17 @@ const openFileModal = (index: number) => {
     dom.modalImg.onload = updateSizeInfo;
   } else {
     dom.modalVideo.onloadedmetadata = updateSizeInfo;
+  }
+
+  // Show AI-generated caption when chrome-ai model produced one
+  const caption = state.captions[index] ?? null;
+  if (caption) {
+    dom.modalCaption.textContent = caption;
+    dom.modalCaption.style.display = 'block';
+    dom.modalFooter.style.borderRadius = '0';
+  } else {
+    dom.modalCaption.style.display = 'none';
+    dom.modalFooter.style.borderRadius = '';
   }
 
   dom.modal.classList.add('open');

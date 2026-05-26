@@ -331,7 +331,8 @@
 
     #modal-img {
       width: 100%;
-      height: calc(90dvh - 44px);
+      flex: 1;
+      min-height: 0;
       object-fit: contain;
       background: #000;
       border-radius: 12px 12px 0 0;
@@ -418,10 +419,6 @@
 
     /* Mobile: smaller padding */
     @media (max-width: 600px) {
-      #modal-img, #modal-video {
-        height: calc(90dvh - 38px);
-      }
-
       #modal-footer {
         padding: 8px 12px;
         font-size: 11px;
@@ -453,6 +450,19 @@
       font-size: 18px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
       z-index: 1001;
+    }
+
+    #modal-caption {
+      display: none;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-radius: 0 0 12px 12px;
+      padding: 7px 16px 9px;
+      font-size: 12px;
+      font-style: italic;
+      color: var(--text-dim);
+      line-height: 1.5;
+      flex-shrink: 0;
     }
 
     /* ── About Modal ── */
@@ -608,7 +618,7 @@
     <button id="modal-nav-down" class="modal-nav-btn" title="Down">▼</button>
     <button id="modal-close" title="Close">✕</button>
     <img id="modal-img" alt="Full view">
-    <video id="modal-video" controls loop style="width: 100%; height: calc(90dvh - 44px); object-fit: contain; display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
+    <video id="modal-video" controls loop style="width: 100%; flex: 1; min-height: 0; object-fit: contain; display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
     <div id="modal-footer">
       <span id="modal-up" class="modal-link" title="Up one level">↑</span>
       <span class="modal-sep"> · </span>
@@ -620,6 +630,7 @@
       <span class="modal-sep"> · </span>
       <span id="modal-meta" class="modal-meta"></span>
     </div>
+    <div id="modal-caption"></div>
   </div>
 </div>
 

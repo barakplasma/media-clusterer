@@ -53,6 +53,7 @@ export interface AppState {
   rawPoints: number[][] | null;
   clusters: Int32Array | null;
   thumbnails: (ImageBitmap | null)[];
+  captions: (string | null)[];
   searchResults: Int32Array | null;
   searchQuery: string;
   searchScores: Float32Array | null;
@@ -114,6 +115,7 @@ export interface DOMElements {
   headerRecenterBtn: HTMLButtonElement;
   demoBtn: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
+  modalCaption: HTMLDivElement;
 }
 
 /** IndexedDB cache entry */
