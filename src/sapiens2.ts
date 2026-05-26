@@ -139,23 +139,24 @@ export async function loadSapiens2(
   onProgress?: Sapiens2ProgressCallback,
 ): Promise<{ session: Sapiens2Session; device: 'webgpu' | 'wasm'; fromCache: boolean }> {
   ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
-  ort.env.logLevel = 'error'; // suppress EP-assignment warnings — expected with int8 ONNX on WebGPU
+  ort.env.logLevel = 'error';
+  // Use as many threads as the browser allows.
+  // SharedArrayBuffer (required for multithreading) is available when the page
+  // is served with COOP: same-origin + COEP: credentialless headers.
+  // Without those headers ORT silently falls back to a single thread.
+  ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
 
   const { buffer: modelBuffer, fromCache } = await loadModelBuffer(onProgress);
 
-  try {
-    const session = await ort.InferenceSession.create(modelBuffer, {
-      executionProviders: ['webgpu'],
-      graphOptimizationLevel: 'all',
-    });
-    return { session, device: 'webgpu', fromCache };
-  } catch {
-    const session = await ort.InferenceSession.create(modelBuffer, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all',
-    });
-    return { session, device: 'wasm', fromCache };
-  }
+  // int8-quantized ONNX models have very limited WebGPU kernel coverage in
+  // onnxruntime-web: the session appears to load on WebGPU but most ops fall
+  // back to single-threaded WASM, giving worse throughput than multithreaded
+  // WASM. Skip the WebGPU attempt for this model.
+  const session = await ort.InferenceSession.create(modelBuffer, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: 'all',
+  });
+  return { session, device: 'wasm', fromCache };
 }
 
 /**

@@ -188,8 +188,11 @@ function updateDeviceBadge() {
     deviceBadgeEl.textContent = 'Viewer';
     deviceBadgeEl.style.color = '#4ade80';
   } else if (sapiens2Session) {
-    deviceBadgeEl.textContent = modelDevice === 'webgpu' ? 'Sapiens2 · WebGPU' : 'Sapiens2 · CPU';
-    deviceBadgeEl.style.color = modelDevice === 'webgpu' ? '#4ade80' : '#fb923c';
+    const threads = navigator.hardwareConcurrency || 1;
+    const mt = typeof SharedArrayBuffer !== 'undefined';
+    const label = mt ? `Sapiens2 · ${threads}T` : 'Sapiens2 · CPU';
+    deviceBadgeEl.textContent = label;
+    deviceBadgeEl.style.color = mt ? '#4ade80' : '#fb923c';
   } else if (modelDevice === 'webgpu') {
     deviceBadgeEl.textContent = 'WebGPU';
     deviceBadgeEl.style.color = '#4ade80';
