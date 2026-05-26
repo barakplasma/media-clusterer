@@ -151,16 +151,24 @@ export async function loadSapiens2(
   // fp16 ONNX has full WebGPU kernel coverage — try WebGPU first.
   // Falls back to multithreaded WASM (numThreads set above) if WebGPU is
   // unavailable or fails.
+  // logSeverityLevel: 3 (error) suppresses benign WASM-level [W:] warnings:
+  // - constant_folding Tile node (fp16 has no CPU kernel for constant folding)
+  // - VerifyEachNodeIsAssignedToAnEp (shape ops intentionally stay on CPU)
+  const sessionOpts: ort.InferenceSession.SessionOptions = {
+    graphOptimizationLevel: 'all',
+    logSeverityLevel: 3,
+  };
+
   try {
     const session = await ort.InferenceSession.create(modelBuffer, {
+      ...sessionOpts,
       executionProviders: ['webgpu'],
-      graphOptimizationLevel: 'all',
     });
     return { session, device: 'webgpu', fromCache };
   } catch {
     const session = await ort.InferenceSession.create(modelBuffer, {
+      ...sessionOpts,
       executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all',
     });
     return { session, device: 'wasm', fromCache };
   }
