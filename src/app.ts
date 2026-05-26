@@ -171,6 +171,7 @@ let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
 let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
+let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
@@ -977,7 +978,7 @@ async function runProjection(vectors: Float64Array[], method: ProjectionMethod, 
 }
 
 // ── Model singleton ──────────────────────────────────────────────────────────
-async function loadModel() {
+async function loadModel(signal?: AbortSignal) {
   if (extractor || sapiens2Session) return;
   state.phase = 'loading_model';
   setStatus('Loading model…');
@@ -990,7 +991,7 @@ async function loadModel() {
         setStatus(fromCache
           ? 'Loading Sapiens2 model from cache…'
           : `Downloading Sapiens2 model… ${pct.toFixed(0)}%`);
-      });
+      }, signal);
       sapiens2Session = result.session;
       modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
     } catch (err) {
@@ -2095,16 +2096,24 @@ dom.viewerOnlyToggle.addEventListener('change', async () => {
   updateSearchUI();
   updateDeviceBadge();
 
-  // If enabling viewer mode and we're idle, update UI immediately
-  if (state.settings.viewerOnly && state.phase === 'idle') {
-    dom.loadModelBtn.hidden = true;
-    dom.openBtn.disabled = false;
-    dom.openBtn.classList.add('primary');
-    dom.demoBtn.disabled = false;
-    setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+  if (state.settings.viewerOnly) {
+    // Cancel any in-progress model download
+    if (modelLoadAbort) {
+      modelLoadAbort.abort();
+      modelLoadAbort = null;
+      state.phase = 'idle';
+    }
+    if (state.phase === 'idle' || state.phase === 'loading_model') {
+      dom.loadModelBtn.hidden = true;
+      dom.openBtn.disabled = false;
+      dom.openBtn.classList.add('primary');
+      dom.demoBtn.disabled = false;
+      setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+    }
   } else if (!state.settings.viewerOnly && state.phase === 'idle') {
     // Switching back to AI mode
     dom.loadModelBtn.hidden = false;
+    dom.loadModelBtn.disabled = false;
     setStatus('AI mode enabled — click "Load AI Models" to begin.');
   }
 
@@ -2328,7 +2337,8 @@ dom.resumeBtn.addEventListener('click', async () => {
     } else {
       // AI mode: restore search index
       setStatus('Restoring search index…');
-      const keys = matched.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+      const resumePrefix = state.settings.modelVariant === 'sapiens2' ? '@sapiens2/' : '';
+      const keys = matched.map(f => `${resumePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
       const cachedVectors = await cacheGetBatch(keys);
       state.vectors = cachedVectors.map(v => v || new Float64Array(768));
       if (state.vectors.length > 0) {
@@ -2358,13 +2368,17 @@ dom.resumeBtn.addEventListener('click', async () => {
 // Auto-start model loading (only if not in viewer mode)
 if (!state.settings.viewerOnly) {
   dom.loadModelBtn.disabled = true;
+  modelLoadAbort = new AbortController();
   (async () => {
     try {
-      await loadModel();
+      await loadModel(modelLoadAbort!.signal);
     } catch (err) {
+      if ((err as Error).name === 'AbortError') return; // user switched to viewer mode
       dom.loadModelBtn.hidden = false;
       dom.loadModelBtn.disabled = false;
       setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
+    } finally {
+      modelLoadAbort = null;
     }
   })();
 } else {

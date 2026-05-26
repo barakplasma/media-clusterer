@@ -29,8 +29,9 @@ export type Sapiens2ProgressCallback = (pct: number, fromCache: boolean) => void
 async function downloadWithProgress(
   url: string,
   onProgress?: (pct: number) => void,
+  signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
-  const res = await fetch(url);
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`Sapiens2 download failed: ${res.status}`);
 
   const total = parseInt(res.headers.get('Content-Length') ?? '0', 10);
@@ -56,6 +57,7 @@ async function downloadWithProgress(
 
 async function loadModelBuffer(
   onProgress?: Sapiens2ProgressCallback,
+  signal?: AbortSignal,
 ): Promise<{ buffer: ArrayBuffer; fromCache: boolean }> {
   // Try Cache API first — avoids re-downloading 116 MB on every visit.
   // Keyed on the canonical HuggingFace URL (stable), not any signed redirect.
@@ -70,7 +72,7 @@ async function loadModelBuffer(
     } catch { /* Cache API unavailable (private browsing, etc.) — fall through */ }
   }
 
-  const buffer = await downloadWithProgress(MODEL_URL, (pct) => onProgress?.(pct, false));
+  const buffer = await downloadWithProgress(MODEL_URL, (pct) => onProgress?.(pct, false), signal);
 
   // Persist to cache in the background — don't block session creation.
   if (typeof caches !== 'undefined') {
@@ -137,6 +139,7 @@ async function decodeBitmap(src: File | ImageBitmap): Promise<{ bmp: ImageBitmap
  */
 export async function loadSapiens2(
   onProgress?: Sapiens2ProgressCallback,
+  signal?: AbortSignal,
 ): Promise<{ session: Sapiens2Session; device: 'webgpu' | 'wasm'; fromCache: boolean }> {
   ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
   ort.env.logLevel = 'error';
@@ -146,7 +149,8 @@ export async function loadSapiens2(
   // Without those headers ORT silently falls back to a single thread.
   ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
 
-  const { buffer: modelBuffer, fromCache } = await loadModelBuffer(onProgress);
+  const { buffer: modelBuffer, fromCache } = await loadModelBuffer(onProgress, signal);
+  signal?.throwIfAborted();
 
   // fp16 ONNX has full WebGPU kernel coverage — try WebGPU first.
   // Falls back to multithreaded WASM (numThreads set above) if WebGPU is
