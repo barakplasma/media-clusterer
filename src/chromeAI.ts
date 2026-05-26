@@ -16,9 +16,20 @@ export type LanguageModelAvailability =
   | 'downloading'
   | 'unavailable';
 
+// Content items within a message
+type LanguageModelContentItem =
+  | { type: 'text'; value: string }
+  | { type: 'image'; value: ImageBitmap | Blob | HTMLCanvasElement | HTMLImageElement | HTMLVideoElement };
+
+// Messages use role/content wrapper per the Prompt API spec
+interface LanguageModelMessage {
+  role: 'user' | 'assistant';
+  content: LanguageModelContentItem[];
+}
+
 export interface LanguageModelSession {
   prompt(
-    inputs: Array<{ type: 'text'; value: string } | { type: 'image'; value: ImageBitmap | Blob }>,
+    input: LanguageModelMessage | LanguageModelMessage[],
     options?: { signal?: AbortSignal }
   ): Promise<string>;
   destroy(): void;
@@ -26,10 +37,12 @@ export interface LanguageModelSession {
 
 interface LanguageModelStatic {
   availability(options?: {
-    expectedInputs?: Array<{ type: string }>;
+    expectedInputs?: Array<{ type: string; languages?: string[] }>;
+    expectedOutputs?: Array<{ type: string; languages?: string[] }>;
   }): Promise<LanguageModelAvailability>;
   create(options?: {
-    expectedInputs?: Array<{ type: string }>;
+    expectedInputs?: Array<{ type: string; languages?: string[] }>;
+    expectedOutputs?: Array<{ type: string; languages?: string[] }>;
     signal?: AbortSignal;
   }): Promise<LanguageModelSession>;
 }
@@ -58,7 +71,8 @@ export async function getChromeAIAvailability(): Promise<LanguageModelAvailabili
   if (!api) return 'unavailable';
   try {
     return await api.availability({
-      expectedInputs: [{ type: 'image' }, { type: 'text' }],
+      expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
+      expectedOutputs: [{ type: 'text', languages: ['en'] }],
     });
   } catch {
     return 'unavailable';
@@ -93,16 +107,21 @@ export class ChromeAISessionManager {
 
     if (!this.session) {
       this.session = await api.create({
-        expectedInputs: [{ type: 'image' }, { type: 'text' }],
+        expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
+        expectedOutputs: [{ type: 'text', languages: ['en'] }],
         signal,
       });
     }
 
+    // Prompt API requires role/content message wrapper with content items using type+value
     const description = await this.session.prompt(
-      [
-        { type: 'image', value: image },
-        { type: 'text', value: DESCRIBE_PROMPT },
-      ],
+      {
+        role: 'user',
+        content: [
+          { type: 'image', value: image },
+          { type: 'text', value: DESCRIBE_PROMPT },
+        ],
+      },
       { signal }
     );
 
