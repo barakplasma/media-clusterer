@@ -687,7 +687,9 @@
       <label>Vision Model</label>
       <select id="model-select" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; outline: none;">
         <option value="nomic">nomic-embed-vision (general · 380 MB)</option>
-        <option value="sapiens2">Sapiens2-0.1B (human-centric · 116 MB)</option>
+        <option value="sapiens2-fp16">Sapiens2-0.1B fp16 (human-centric · 229 MB)</option>
+        <option value="sapiens2-int8">Sapiens2-0.1B int8 (human-centric · 116 MB)</option>
+        <option value="sapiens2-fp32">Sapiens2-0.1B fp32 (human-centric · 458 MB)</option>
       </select>
       <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">Sapiens2 is pretrained on 1B human images — better for photos of people. Takes effect on next model load. Switching requires a page reload.</div>
     </div>

@@ -6,7 +6,7 @@ import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
-import type { Sapiens2Session } from './sapiens2';
+import type { Sapiens2Session, Sapiens2Variant } from './sapiens2';
 import {
   l2normalize,
   extractVector,
@@ -37,6 +37,7 @@ import type {
   PointerState,
   CanvasPointerPos,
   CacheKey,
+  ModelVariant,
 } from './types';
 
 // Enable caching and local model access for persistent storage
@@ -131,15 +132,19 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  modelVariant: 'sapiens2',
+  modelVariant: 'sapiens2-fp16',
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
-// Migrate existing users who had 'nomic' stored before sapiens2 became the default
+// Migrate legacy modelVariant values to the new named variants
 if (savedSettings) {
   const parsed = JSON.parse(savedSettings);
   if (!parsed.modelVariant || parsed.modelVariant === 'nomic') {
-    parsed.modelVariant = 'sapiens2';
+    parsed.modelVariant = 'sapiens2-fp16';
+    localStorage.setItem('mc_settings', JSON.stringify(parsed));
+  } else if (parsed.modelVariant === 'sapiens2') {
+    // 'sapiens2' was the generic name for fp16 — keep pointing at the same model
+    parsed.modelVariant = 'sapiens2-fp16';
     localStorage.setItem('mc_settings', JSON.stringify(parsed));
   }
 }
@@ -191,9 +196,10 @@ function updateDeviceBadge() {
   } else if (sapiens2Session) {
     const threads = navigator.hardwareConcurrency || 1;
     const mt = typeof SharedArrayBuffer !== 'undefined';
-    const label = modelDevice === 'webgpu' ? 'Sapiens2 · WebGPU'
-                : mt ? `Sapiens2 · ${threads}T`
-                : 'Sapiens2 · CPU';
+    const variant = state.settings.modelVariant.split('-')[1] ?? 'fp16';
+    const label = modelDevice === 'webgpu' ? `Sapiens2·${variant} · WebGPU`
+                : mt ? `Sapiens2·${variant} · ${threads}T`
+                : `Sapiens2·${variant} · CPU`;
     deviceBadgeEl.textContent = label;
     deviceBadgeEl.style.color = modelDevice === 'webgpu' ? '#4ade80' : '#fb923c';
   } else if (modelDevice === 'webgpu') {
@@ -984,13 +990,14 @@ async function loadModel(signal?: AbortSignal) {
   setStatus('Loading model…');
   setProgress(0);
 
-  if (state.settings.modelVariant === 'sapiens2') {
+  if (state.settings.modelVariant.startsWith('sapiens2')) {
+    const sapiens2Variant = state.settings.modelVariant.split('-')[1] as Sapiens2Variant;
     try {
-      const result = await loadSapiens2((pct, fromCache) => {
+      const result = await loadSapiens2(sapiens2Variant, (pct, fromCache) => {
         setProgress(pct);
         setStatus(fromCache
-          ? 'Loading Sapiens2 model from cache…'
-          : `Downloading Sapiens2 model… ${pct.toFixed(0)}%`);
+          ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
+          : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`);
       }, signal);
       sapiens2Session = result.session;
       modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
@@ -1134,11 +1141,14 @@ async function embedAll(files: PhotoFile[]) {
   let cacheHits = 0;
   const writeQueue: [CacheKey, Float64Array][] = [];
 
-  const isSapiens2 = state.settings.modelVariant === 'sapiens2';
+  const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
   // Sapiens2 takes 1024×768 inputs — run one at a time to stay within memory budget
   const batchSize = isSapiens2 ? 1 : state.settings.batchSize;
-  // Separate cache namespace so nomic and sapiens2 vectors don't collide
-  const cachePrefix = isSapiens2 ? '@sapiens2/' : '';
+  // Separate cache namespace per variant so vectors don't collide across models.
+  // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
+  const cachePrefix = !isSapiens2 ? ''
+    : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
+    : `@${state.settings.modelVariant}/`;
 
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, Math.min(i + batchSize, files.length));
@@ -2036,7 +2046,7 @@ dom.modelSelect.addEventListener('change', () => {
     setStatus('Model already loaded. Reload the page to switch models.');
     return;
   }
-  state.settings.modelVariant = dom.modelSelect.value as 'nomic' | 'sapiens2';
+  state.settings.modelVariant = dom.modelSelect.value as ModelVariant;
   saveSettings();
 });
 
@@ -2337,7 +2347,9 @@ dom.resumeBtn.addEventListener('click', async () => {
     } else {
       // AI mode: restore search index
       setStatus('Restoring search index…');
-      const resumePrefix = state.settings.modelVariant === 'sapiens2' ? '@sapiens2/' : '';
+      const resumePrefix = !state.settings.modelVariant.startsWith('sapiens2') ? ''
+        : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
+        : `@${state.settings.modelVariant}/`;
       const keys = matched.map(f => `${resumePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
       const cachedVectors = await cacheGetBatch(keys);
       state.vectors = cachedVectors.map(v => v || new Float64Array(768));
