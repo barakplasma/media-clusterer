@@ -8,8 +8,8 @@ import * as ort from 'onnxruntime-web';
 import { l2normalize } from './embeddings';
 
 const MODEL_URL =
-  'https://huggingface.co/barakplasma/sapiens2-onnx/resolve/main/sapiens2_0.1b_int8.onnx';
-const MODEL_CACHE_NAME = 'sapiens2-model-v1';
+  'https://huggingface.co/barakplasma/sapiens2-onnx/resolve/main/sapiens2_0.1b_fp16.onnx';
+const MODEL_CACHE_NAME = 'sapiens2-model-v2'; // bumped from v1 (int8) to evict stale cache
 
 // Input resolution expected by the model
 const MODEL_H = 1024;
@@ -148,15 +148,22 @@ export async function loadSapiens2(
 
   const { buffer: modelBuffer, fromCache } = await loadModelBuffer(onProgress);
 
-  // int8-quantized ONNX models have very limited WebGPU kernel coverage in
-  // onnxruntime-web: the session appears to load on WebGPU but most ops fall
-  // back to single-threaded WASM, giving worse throughput than multithreaded
-  // WASM. Skip the WebGPU attempt for this model.
-  const session = await ort.InferenceSession.create(modelBuffer, {
-    executionProviders: ['wasm'],
-    graphOptimizationLevel: 'all',
-  });
-  return { session, device: 'wasm', fromCache };
+  // fp16 ONNX has full WebGPU kernel coverage — try WebGPU first.
+  // Falls back to multithreaded WASM (numThreads set above) if WebGPU is
+  // unavailable or fails.
+  try {
+    const session = await ort.InferenceSession.create(modelBuffer, {
+      executionProviders: ['webgpu'],
+      graphOptimizationLevel: 'all',
+    });
+    return { session, device: 'webgpu', fromCache };
+  } catch {
+    const session = await ort.InferenceSession.create(modelBuffer, {
+      executionProviders: ['wasm'],
+      graphOptimizationLevel: 'all',
+    });
+    return { session, device: 'wasm', fromCache };
+  }
 }
 
 /**
