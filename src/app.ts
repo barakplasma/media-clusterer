@@ -341,7 +341,13 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
     // video.remove() is a no-op when the element was never added to the DOM.
     // The only way to release a WebMediaPlayer in Chrome is: pause → clear src → load().
     // Skipping this causes the "too many WebMediaPlayers" intervention at ~75 concurrent.
+    // Null out all handlers before tearing down the element.
+    // Setting video.src='' and video.load() can re-fire onerror on the same
+    // handler, turning one failed decode into N cascading error logs.
     const cleanup = () => {
+      video.onloadedmetadata = null;
+      video.onseeked = null;
+      video.onerror = null;
       URL.revokeObjectURL(url);
       video.pause();
       video.src = '';
@@ -394,7 +400,10 @@ function lazyDecodeThumbnail(idx: number) {
     state.thumbnails[idx] = bm;
     thumbDecoding.delete(idx);
 
-    // Update LRU: remove if present, add to end (most recently used)
+    // Only track in LRU when we have an actual bitmap — null entries (failed
+    // decodes) would crowd out real thumbnails and trigger unnecessary evictions.
+    if (!bm) { scheduleRender(); return; }
+
     thumbnailLRU.delete(idx);
     thumbnailLRU.add(idx);
 
