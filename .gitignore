@@ -27,3 +27,6 @@ Thumbs.db
 .env
 .env.local
 
+
+# ONNX model files (stored in HuggingFace, not git)
+*.onnx
