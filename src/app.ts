@@ -1288,9 +1288,23 @@ async function embedAll(files: PhotoFile[]) {
         } else {
           missInputs.push(f.file);
         }
-      } else if (isSapiens2 || isChromeAI) {
-        // Pass File directly; model handles resize internally
+      } else if (isSapiens2) {
+        // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
         missInputs.push(f.file);
+      } else if (isChromeAI) {
+        // Use cached thumbnail if already decoded, else create a small bitmap.
+        // Avoids sending the full-res file to the Prompt API on every image.
+        let thumb = state.thumbnails[idx] ?? null;
+        if (!thumb) {
+          try {
+            thumb = await createImageBitmap(f.file, { resizeWidth: 256, resizeQuality: 'medium' });
+          } catch {
+            missInputs.push(f.file);
+            missIndices.push(bi);
+            return;
+          }
+        }
+        missInputs.push(thumb);
       } else {
         const resized = await resizeForEmbedding(f.file);
         if (resized !== null) {
