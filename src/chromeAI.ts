@@ -29,7 +29,7 @@ interface LanguageModelMessage {
 
 export interface LanguageModelSession {
   prompt(
-    input: LanguageModelMessage | LanguageModelMessage[],
+    input: LanguageModelMessage[],
     options?: { signal?: AbortSignal }
   ): Promise<string>;
   destroy(): void;
@@ -113,15 +113,17 @@ export class ChromeAISessionManager {
       });
     }
 
-    // Prompt API requires role/content message wrapper with content items using type+value
+    // Prompt API requires an array of role/content messages
     const description = await this.session.prompt(
-      {
-        role: 'user',
-        content: [
-          { type: 'image', value: image },
-          { type: 'text', value: DESCRIBE_PROMPT },
-        ],
-      },
+      [
+        {
+          role: 'user',
+          content: [
+            { type: 'image', value: image },
+            { type: 'text', value: DESCRIBE_PROMPT },
+          ],
+        },
+      ],
       { signal }
     );
 
