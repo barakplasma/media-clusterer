@@ -1270,9 +1270,11 @@ async function embedAll(files: PhotoFile[]) {
             state.thumbnails[idx] = thumb;
             thumbDecoding.delete(idx);
           }
-          if (isSapiens2 || isChromeAI) {
-            // Pass ImageBitmap directly; model handles resize
+          if (isSapiens2) {
             missInputs.push(thumb);
+          } else if (isChromeAI) {
+            // Clone so Chrome AI doesn't close the bitmap that's cached in state.thumbnails
+            missInputs.push(await createImageBitmap(thumb));
           } else {
             const canvas = document.createElement('canvas');
             canvas.width = thumb.width;
@@ -1293,18 +1295,18 @@ async function embedAll(files: PhotoFile[]) {
         missInputs.push(f.file);
       } else if (isChromeAI) {
         // Use cached thumbnail if already decoded, else create a small bitmap.
-        // Avoids sending the full-res file to the Prompt API on every image.
-        let thumb = state.thumbnails[idx] ?? null;
-        if (!thumb) {
-          try {
-            thumb = await createImageBitmap(f.file, { resizeWidth: 256, resizeQuality: 'medium' });
-          } catch {
-            missInputs.push(f.file);
-            missIndices.push(bi);
-            return;
-          }
+        // Always create a fresh bitmap for the inference queue — never share the
+        // state.thumbnails reference, because Chrome AI closes the bitmap after use.
+        const cached = state.thumbnails[idx];
+        try {
+          missInputs.push(cached
+            ? await createImageBitmap(cached)  // clone so the canvas copy stays intact
+            : await createImageBitmap(f.file, { resizeWidth: 256, resizeQuality: 'medium' }));
+        } catch {
+          missInputs.push(f.file);
+          missIndices.push(bi);
+          return;
         }
-        missInputs.push(thumb);
       } else {
         const resized = await resizeForEmbedding(f.file);
         if (resized !== null) {
