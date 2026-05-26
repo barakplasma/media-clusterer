@@ -116,6 +116,9 @@ export interface DOMElements {
   demoBtn: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
   modalCaption: HTMLDivElement;
+  chromeAIPromptInput: HTMLTextAreaElement;
+  chromeAIPromptReset: HTMLButtonElement;
+  chromeAIPromptSetting: HTMLDivElement;
 }
 
 /** IndexedDB cache entry */

@@ -7,7 +7,7 @@ import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
 import type { Sapiens2Session, Sapiens2Variant } from './sapiens2';
-import { getChromeAIAvailability, ChromeAISessionManager } from './chromeAI';
+import { getChromeAIAvailability, ChromeAISessionManager, DEFAULT_DESCRIBE_PROMPT } from './chromeAI';
 import {
   l2normalize,
   extractVector,
@@ -113,6 +113,9 @@ const dom: DOMElements = {
   demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
   modelSelect: document.getElementById('model-select') as HTMLSelectElement,
   modalCaption: document.getElementById('modal-caption') as HTMLDivElement,
+  chromeAIPromptInput: document.getElementById('chrome-ai-prompt') as HTMLTextAreaElement,
+  chromeAIPromptReset: document.getElementById('chrome-ai-prompt-reset') as HTMLButtonElement,
+  chromeAIPromptSetting: document.getElementById('chrome-ai-prompt-setting') as HTMLDivElement,
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
@@ -181,6 +184,9 @@ let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vis
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
 let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
+
+const CHROME_AI_PROMPT_KEY = 'mc_chrome_ai_prompt';
+const getChromeAIPrompt = () => localStorage.getItem(CHROME_AI_PROMPT_KEY) ?? DEFAULT_DESCRIBE_PROMPT;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
@@ -1348,7 +1354,7 @@ async function embedAll(files: PhotoFile[]) {
           extracted = [];
           for (let m = 0; m < missInputs.length; m++) {
             const input = missInputs[m] as File | ImageBitmap;
-            const description = await chromeAIManager.describe(input as ImageBitmap | Blob);
+            const description = await chromeAIManager.describe(input as ImageBitmap | Blob, getChromeAIPrompt());
             const f = batch[missIndices[m]];
             // Store caption indexed by global file index for modal display
             state.captions[i + missIndices[m]] = description;
@@ -2115,6 +2121,30 @@ getChromeAIAvailability().then(avail => {
   }
 });
 
+// Initialize Chrome AI prompt textarea with stored value
+const updateChromeAIPromptVisibility = () => {
+  const isChrome = state.settings.modelVariant === 'chrome-ai';
+  dom.chromeAIPromptSetting.style.display = isChrome ? '' : 'none';
+};
+if (dom.chromeAIPromptInput) {
+  dom.chromeAIPromptInput.value = getChromeAIPrompt();
+  dom.chromeAIPromptInput.addEventListener('input', () => {
+    const val = dom.chromeAIPromptInput.value.trim();
+    if (val) {
+      localStorage.setItem(CHROME_AI_PROMPT_KEY, val);
+    } else {
+      localStorage.removeItem(CHROME_AI_PROMPT_KEY);
+    }
+  });
+}
+if (dom.chromeAIPromptReset) {
+  dom.chromeAIPromptReset.addEventListener('click', () => {
+    localStorage.removeItem(CHROME_AI_PROMPT_KEY);
+    dom.chromeAIPromptInput.value = DEFAULT_DESCRIBE_PROMPT;
+  });
+}
+updateChromeAIPromptVisibility();
+
 const updateSearchUI = () => {
   // In viewer mode, always disable search
   if (state.settings.viewerOnly) {
@@ -2206,6 +2236,7 @@ dom.modelSelect.addEventListener('change', () => {
   }
   state.settings.modelVariant = dom.modelSelect.value as ModelVariant;
   saveSettings();
+  updateChromeAIPromptVisibility();
 });
 
 dom.densitySlider.addEventListener('input', async () => {

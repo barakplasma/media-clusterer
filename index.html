@@ -707,6 +707,15 @@
       <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">Sapiens2 is pretrained on 1B human images — better for photos of people. Chrome AI uses the browser's built-in Gemini Nano to describe images (Chrome 138+ only, requires <code>chrome://flags/#prompt-api-for-gemini-nano</code>). Takes effect on next model load. Switching requires a page reload.</div>
     </div>
 
+    <div class="setting-item" id="chrome-ai-prompt-setting">
+      <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+        <span>Chrome AI Describe Prompt</span>
+        <button id="chrome-ai-prompt-reset" style="font-size: 11px; padding: 2px 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text-dim); border-radius: 4px; cursor: pointer;">Reset</button>
+      </label>
+      <textarea id="chrome-ai-prompt" rows="4" style="width: 100%; margin-top: 6px; padding: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; font-size: 12px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
+      <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">The prompt sent to Gemini Nano to describe each image. Changes apply to new embeddings only (cached results are not re-processed). Only shown when Chrome AI is selected.</div>
+    </div>
+
     <div class="setting-item">
       <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
         <span>Random Sample Size</span>

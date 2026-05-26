@@ -53,7 +53,7 @@ declare global {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const DESCRIBE_PROMPT =
+export const DEFAULT_DESCRIBE_PROMPT =
   'Describe this image for photo organization and clustering. ' +
   'Include: main subjects, setting or location, dominant colors, mood, ' +
   'lighting conditions, and any activity taking place. ' +
@@ -97,7 +97,7 @@ export class ChromeAISessionManager {
   private session: LanguageModelSession | null = null;
   private callCount = 0;
 
-  async describe(image: ImageBitmap | Blob, signal?: AbortSignal): Promise<string> {
+  async describe(image: ImageBitmap | Blob, prompt: string = DEFAULT_DESCRIBE_PROMPT, signal?: AbortSignal): Promise<string> {
     const api = getAPI();
 
     if (this.session && this.callCount > 0 && this.callCount % SESSION_RECYCLE_INTERVAL === 0) {
@@ -120,7 +120,7 @@ export class ChromeAISessionManager {
           role: 'user',
           content: [
             { type: 'image', value: image },
-            { type: 'text', value: DESCRIBE_PROMPT },
+            { type: 'text', value: prompt },
           ],
         },
       ],
