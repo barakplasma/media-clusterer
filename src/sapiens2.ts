@@ -1,15 +1,23 @@
 /**
  * Sapiens2 ONNX embedder for browser inference via onnxruntime-web.
- * Model: barakplasma/sapiens2-onnx (facebook/sapiens2-pretrain-0.1b, int8)
+ * Model: barakplasma/sapiens2-onnx (facebook/sapiens2-pretrain-0.1b)
  * Output: 768-dim L2-normalized float32 vector per image.
  */
 
 import * as ort from 'onnxruntime-web';
 import { l2normalize } from './embeddings';
 
-const MODEL_URL =
-  'https://huggingface.co/barakplasma/sapiens2-onnx/resolve/main/sapiens2_0.1b_fp16.onnx';
-const MODEL_CACHE_NAME = 'sapiens2-model-v2'; // bumped from v1 (int8) to evict stale cache
+export type Sapiens2Variant = 'int8' | 'fp16' | 'fp32';
+
+const HF_BASE = 'https://huggingface.co/barakplasma/sapiens2-onnx/resolve/main';
+
+// Per-variant URL and Cache API bucket.
+// fp16 keeps the v2 cache name so existing downloads aren't re-fetched.
+const VARIANT_CONFIG: Record<Sapiens2Variant, { url: string; cacheName: string; sizeMB: number }> = {
+  int8: { url: `${HF_BASE}/sapiens2_0.1b_int8.onnx`,  cacheName: 'sapiens2-model-int8-v1', sizeMB: 116 },
+  fp16: { url: `${HF_BASE}/sapiens2_0.1b_fp16.onnx`,  cacheName: 'sapiens2-model-v2',      sizeMB: 229 },
+  fp32: { url: `${HF_BASE}/sapiens2_0.1b_fp32.onnx`,  cacheName: 'sapiens2-model-fp32-v1', sizeMB: 458 },
+};
 
 // Input resolution expected by the model
 const MODEL_H = 1024;
@@ -56,15 +64,16 @@ async function downloadWithProgress(
 }
 
 async function loadModelBuffer(
+  cfg: typeof VARIANT_CONFIG[Sapiens2Variant],
   onProgress?: Sapiens2ProgressCallback,
   signal?: AbortSignal,
 ): Promise<{ buffer: ArrayBuffer; fromCache: boolean }> {
-  // Try Cache API first — avoids re-downloading 116 MB on every visit.
+  // Try Cache API first — avoids re-downloading on every visit.
   // Keyed on the canonical HuggingFace URL (stable), not any signed redirect.
   if (typeof caches !== 'undefined') {
     try {
-      const cache = await caches.open(MODEL_CACHE_NAME);
-      const cached = await cache.match(MODEL_URL);
+      const cache = await caches.open(cfg.cacheName);
+      const cached = await cache.match(cfg.url);
       if (cached) {
         onProgress?.(100, true);
         return { buffer: await cached.arrayBuffer(), fromCache: true };
@@ -72,12 +81,12 @@ async function loadModelBuffer(
     } catch { /* Cache API unavailable (private browsing, etc.) — fall through */ }
   }
 
-  const buffer = await downloadWithProgress(MODEL_URL, (pct) => onProgress?.(pct, false), signal);
+  const buffer = await downloadWithProgress(cfg.url, (pct) => onProgress?.(pct, false), signal);
 
   // Persist to cache in the background — don't block session creation.
   if (typeof caches !== 'undefined') {
-    caches.open(MODEL_CACHE_NAME)
-      .then(cache => cache.put(MODEL_URL, new Response(buffer.slice(0), {
+    caches.open(cfg.cacheName)
+      .then(cache => cache.put(cfg.url, new Response(buffer.slice(0), {
         headers: { 'Content-Type': 'application/octet-stream' },
       })))
       .catch(() => {}); // best-effort; failure just means next visit re-downloads
@@ -134,10 +143,11 @@ async function decodeBitmap(src: File | ImageBitmap): Promise<{ bmp: ImageBitmap
 }
 
 /**
- * Load the Sapiens2 ONNX model. Tries WebGPU first, falls back to WASM.
+ * Load a Sapiens2 ONNX model. Tries WebGPU first, falls back to WASM.
  * The model is cached in the browser's Cache API after the first download.
  */
 export async function loadSapiens2(
+  variant: Sapiens2Variant = 'fp16',
   onProgress?: Sapiens2ProgressCallback,
   signal?: AbortSignal,
 ): Promise<{ session: Sapiens2Session; device: 'webgpu' | 'wasm'; fromCache: boolean }> {
@@ -149,7 +159,8 @@ export async function loadSapiens2(
   // Without those headers ORT silently falls back to a single thread.
   ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
 
-  const { buffer: modelBuffer, fromCache } = await loadModelBuffer(onProgress, signal);
+  const cfg = VARIANT_CONFIG[variant];
+  const { buffer: modelBuffer, fromCache } = await loadModelBuffer(cfg, onProgress, signal);
   signal?.throwIfAborted();
 
   // fp16 ONNX has full WebGPU kernel coverage — try WebGPU first.
