@@ -8,6 +8,7 @@ import pLimit from 'p-limit';
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
 import type { Sapiens2Session, Sapiens2Variant } from './sapiens2';
 import { getChromeAIAvailability, ChromeAISessionManager, DEFAULT_DESCRIBE_PROMPT } from './chromeAI';
+import type { LanguageModelAvailability } from './chromeAI';
 import {
   l2normalize,
   extractVector,
@@ -183,10 +184,19 @@ let textExtractor: PipelineInstance | null = null;  // Text model (for search qu
 let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
+let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption generator (non-chrome-ai modes)
+let captionAbortController: AbortController | null = null; // Cancels in-flight lazy caption
+let chromeAIAvailability: LanguageModelAvailability = 'unavailable'; // Set at page load
 let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
 
 const CHROME_AI_PROMPT_KEY = 'mc_chrome_ai_prompt';
 const getChromeAIPrompt = () => localStorage.getItem(CHROME_AI_PROMPT_KEY) ?? DEFAULT_DESCRIBE_PROMPT;
+
+// Progressive projection state
+let progressiveProjectionRunning = false;
+let lastProgressiveCount = 0;
+const PROGRESSIVE_MIN = 3;      // min vectors before first progressive projection
+const PROGRESSIVE_INTERVAL = 3; // kick off projection every N new vectors
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
@@ -950,9 +960,9 @@ function render() {
 }
 
 // ── Projection ───────────────────────────────────────────────────────────────
-async function runProjection(vectors: Float64Array[], method: ProjectionMethod, nNeighbors: number): Promise<number[][]> {
+async function runProjection(vectors: Float64Array[], method: ProjectionMethod, nNeighbors: number, { silent = false } = {}): Promise<number[][]> {
   try {
-    setStatus(`Projecting with ${method}…`);
+    if (!silent) setStatus(`Projecting with ${method}…`);
     // Druid expects data as Array of Arrays or a Matrix
     const data = vectors.map(v => Array.from(v));
     const matrix = druid.Matrix.from(data);
@@ -1237,11 +1247,12 @@ async function embedAll(files: PhotoFile[]) {
   const vectors = new Array<Float64Array>(files.length);
   let cacheHits = 0;
   const writeQueue: [CacheKey, Float64Array][] = [];
+  lastProgressiveCount = 0;
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
   const isChromeAI = state.settings.modelVariant === 'chrome-ai';
-  // Sapiens2 and Chrome AI run one image at a time
-  const batchSize = (isSapiens2 || isChromeAI) ? 1 : state.settings.batchSize;
+  // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel session speedup
+  const batchSize = isChromeAI ? 2 : isSapiens2 ? 1 : state.settings.batchSize;
   // Separate cache namespace per variant so vectors don't collide across models.
   // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
   const cachePrefix = isChromeAI ? '@chrome-ai/'
@@ -1307,7 +1318,7 @@ async function embedAll(files: PhotoFile[]) {
         try {
           missInputs.push(cached
             ? await createImageBitmap(cached)  // clone so the canvas copy stays intact
-            : await createImageBitmap(f.file, { resizeWidth: 256, resizeQuality: 'medium' }));
+            : await createImageBitmap(f.file, { resizeWidth: 128, resizeQuality: 'medium' }));
         } catch {
           missInputs.push(f.file);
           missIndices.push(bi);
@@ -1352,9 +1363,15 @@ async function embedAll(files: PhotoFile[]) {
           if (!chromeAIManager) throw new Error('Chrome AI not initialized');
           if (!textExtractor) throw new Error('Text embedding model not loaded');
           extracted = [];
-          for (let m = 0; m < missInputs.length; m++) {
-            const input = missInputs[m] as File | ImageBitmap;
-            const description = await chromeAIManager.describe(input as ImageBitmap | Blob, getChromeAIPrompt());
+          // Fire all describes in parallel (each using its own session slot)
+          const prompt = getChromeAIPrompt();
+          const descs = await Promise.all(
+            missInputs.map((input, m) =>
+              chromeAIManager!.describe(input as ImageBitmap | Blob, prompt, undefined, m)
+            )
+          );
+          for (let m = 0; m < descs.length; m++) {
+            const description = descs[m];
             const f = batch[missIndices[m]];
             // Store caption indexed by global file index for modal display
             state.captions[i + missIndices[m]] = description;
@@ -1394,16 +1411,32 @@ async function embedAll(files: PhotoFile[]) {
 
     const done = Math.min(i + batchSize, files.length);
 
-    if (done === batchSize || didFlush) {
+    if (done < PROGRESSIVE_MIN) {
+      // Too few vectors for projection — show a simple grid
       resizeCanvas();
       const cols = Math.ceil(Math.sqrt(files.length));
-      const spacing = 60;
       state.points = Array.from({ length: done }, (_, j) => [
-        (j % cols) * spacing,
-        Math.floor(j / cols) * spacing
+        (j % cols) * 60, Math.floor(j / cols) * 60
       ]) as Point[];
       fitCamera();
       scheduleRender();
+    } else if (!progressiveProjectionRunning && done - lastProgressiveCount >= PROGRESSIVE_INTERVAL) {
+      const isFirst = lastProgressiveCount === 0; // first progressive projection → fit camera
+      lastProgressiveCount = done;
+      progressiveProjectionRunning = true;
+      const partialVecs = vectors.slice(0, done);
+      const nNeigh = Math.max(2, Math.min(15, done - 1));
+      runProjection(partialVecs, 'PCA', nNeigh, { silent: true })
+        .then(rawPts => {
+          if (state.phase === 'embedding') {
+            state.points = rawPts as unknown as Point[];
+            resizeCanvas();
+            if (isFirst) fitCamera();
+            scheduleRender();
+          }
+        })
+        .catch(() => {})
+        .finally(() => { progressiveProjectionRunning = false; });
     }
     const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
     setStatus(`Embedding ${done} / ${files.length} images…${fromCache}`);
@@ -2045,12 +2078,51 @@ const openFileModal = (index: number) => {
     dom.modalVideo.onloadedmetadata = updateSizeInfo;
   }
 
-  // Show AI-generated caption when chrome-ai model produced one
+  // Cancel any in-flight lazy caption from a previous modal open
+  captionAbortController?.abort();
+  captionAbortController = null;
+
+  // Pre-populate from localStorage so captions survive page reload for all modes
+  if (!state.captions[index]) {
+    const cached = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
+    if (cached) state.captions[index] = cached;
+  }
+
   const caption = state.captions[index] ?? null;
   if (caption) {
     dom.modalCaption.textContent = caption;
     dom.modalCaption.style.display = 'block';
     dom.modalFooter.style.borderRadius = '0';
+  } else if (chromeAIAvailability !== 'unavailable' && state.settings.modelVariant !== 'chrome-ai') {
+    // Lazy caption: Chrome AI is available but we're in a different embedding mode
+    dom.modalCaption.textContent = 'Generating caption…';
+    dom.modalCaption.style.display = 'block';
+    dom.modalFooter.style.borderRadius = '0';
+    if (!lazyCaptionManager) lazyCaptionManager = new ChromeAISessionManager();
+    const ac = new AbortController();
+    captionAbortController = ac;
+    const captureIndex = index;
+    const captureFile = f;
+    (async () => {
+      try {
+        const thumb = state.thumbnails[captureIndex];
+        const img = thumb
+          ? await createImageBitmap(thumb)
+          : await createImageBitmap(captureFile.file, { resizeWidth: 128, resizeQuality: 'medium' });
+        const desc = await lazyCaptionManager!.describe(img, getChromeAIPrompt(), ac.signal);
+        if (ac.signal.aborted) return;
+        state.captions[captureIndex] = desc;
+        try { localStorage.setItem(`@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`, desc); } catch (_) {}
+        if (state.activeFileIndex === captureIndex) {
+          dom.modalCaption.textContent = desc;
+        }
+      } catch {
+        if (!ac.signal.aborted && state.activeFileIndex === captureIndex) {
+          dom.modalCaption.style.display = 'none';
+          dom.modalFooter.style.borderRadius = '';
+        }
+      }
+    })();
   } else {
     dom.modalCaption.style.display = 'none';
     dom.modalFooter.style.borderRadius = '';
@@ -2074,6 +2146,8 @@ const closeModal = () => {
   dom.modalVideo.pause();
   dom.modalVideo.src = '';
   state.activeFileIndex = null;
+  captionAbortController?.abort();
+  captionAbortController = null;
 };
 
 dom.modalClose.addEventListener('click', closeModal);
@@ -2107,6 +2181,7 @@ applyTheme(state.settings.theme);
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
 getChromeAIAvailability().then(avail => {
+  chromeAIAvailability = avail;
   const chromeAIOption = dom.modelSelect.querySelector<HTMLOptionElement>('option[value="chrome-ai"]');
   if (!chromeAIOption) return;
   if (avail === 'unavailable') {

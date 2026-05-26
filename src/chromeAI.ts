@@ -94,19 +94,22 @@ function getAPI(): LanguageModelStatic {
  * recycling every SESSION_RECYCLE_INTERVAL calls prevents unbounded memory use.
  */
 export class ChromeAISessionManager {
-  private session: LanguageModelSession | null = null;
-  private callCount = 0;
+  private slots: Array<{ session: LanguageModelSession | null; callCount: number }> = [
+    { session: null, callCount: 0 },
+    { session: null, callCount: 0 },
+  ];
 
-  async describe(image: ImageBitmap | Blob, prompt: string = DEFAULT_DESCRIBE_PROMPT, signal?: AbortSignal): Promise<string> {
+  async describe(image: ImageBitmap | Blob, prompt: string = DEFAULT_DESCRIBE_PROMPT, signal?: AbortSignal, slot = 0): Promise<string> {
     const api = getAPI();
+    const s = this.slots[slot % this.slots.length];
 
-    if (this.session && this.callCount > 0 && this.callCount % SESSION_RECYCLE_INTERVAL === 0) {
-      this.session.destroy();
-      this.session = null;
+    if (s.session && s.callCount > 0 && s.callCount % SESSION_RECYCLE_INTERVAL === 0) {
+      s.session.destroy();
+      s.session = null;
     }
 
-    if (!this.session) {
-      this.session = await api.create({
+    if (!s.session) {
+      s.session = await api.create({
         expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
         expectedOutputs: [{ type: 'text', languages: ['en'] }],
         signal,
@@ -114,7 +117,7 @@ export class ChromeAISessionManager {
     }
 
     // Prompt API requires an array of role/content messages
-    const description = await this.session.prompt(
+    const description = await s.session.prompt(
       [
         {
           role: 'user',
@@ -127,15 +130,15 @@ export class ChromeAISessionManager {
       { signal }
     );
 
-    this.callCount++;
+    s.callCount++;
     return description.trim();
   }
 
   destroy(): void {
-    if (this.session) {
-      this.session.destroy();
-      this.session = null;
+    for (const s of this.slots) {
+      s.session?.destroy();
+      s.session = null;
+      s.callCount = 0;
     }
-    this.callCount = 0;
   }
 }
