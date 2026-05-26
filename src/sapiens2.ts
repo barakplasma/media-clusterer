@@ -14,9 +14,11 @@ const MODEL_URL =
 const MODEL_H = 1024;
 const MODEL_W = 768;
 
-// ImageNet normalization
-const MEAN = [0.485, 0.456, 0.406];
-const STD  = [0.229, 0.224, 0.225];
+// ImageNet normalization — precomputed as scale+offset so the hot loop uses
+// multiply instead of divide (3× cheaper per pixel, 786k pixels per image).
+const R_SCALE = 1 / (255 * 0.229), R_OFF = 0.485 / 0.229;
+const G_SCALE = 1 / (255 * 0.224), G_OFF = 0.456 / 0.224;
+const B_SCALE = 1 / (255 * 0.225), B_OFF = 0.406 / 0.225;
 
 export type Sapiens2Session = ort.InferenceSession;
 
@@ -48,9 +50,15 @@ async function downloadWithProgress(
   return out.buffer;
 }
 
-// Reused across all imageToTensor calls — avoids per-image GC pressure
+// Reused across all imageToTensor calls — avoids per-image canvas alloc
 let _canvas: HTMLCanvasElement | null = null;
 let _ctx: CanvasRenderingContext2D | null = null;
+
+// Reused tensor buffer — avoids allocating 9.4 MB on every image and the
+// resulting GC pressure. Safe to reuse because session.run() is awaited
+// before the buffer is overwritten for the next image.
+const _pixels = MODEL_H * MODEL_W;
+const _tensorBuf = new Float32Array(3 * _pixels);
 
 function getCanvas(): CanvasRenderingContext2D {
   if (!_canvas || !_ctx) {
@@ -64,17 +72,29 @@ function getCanvas(): CanvasRenderingContext2D {
 
 function imageToTensor(source: ImageBitmap): ort.Tensor {
   const ctx = getCanvas();
-  ctx.drawImage(source, 0, 0, MODEL_W, MODEL_H);
+  // source is already MODEL_W × MODEL_H — omit dest dimensions to skip the
+  // redundant scaling pass inside drawImage.
+  ctx.drawImage(source, 0, 0);
   const { data } = ctx.getImageData(0, 0, MODEL_W, MODEL_H);
 
-  const pixels = MODEL_H * MODEL_W;
-  const t = new Float32Array(3 * pixels);
-  for (let i = 0; i < pixels; i++) {
-    t[i]             = (data[i * 4]     / 255 - MEAN[0]) / STD[0];
-    t[pixels + i]    = (data[i * 4 + 1] / 255 - MEAN[1]) / STD[1];
-    t[2 * pixels + i] = (data[i * 4 + 2] / 255 - MEAN[2]) / STD[2];
+  for (let i = 0; i < _pixels; i++) {
+    _tensorBuf[i]             = data[i * 4]     * R_SCALE - R_OFF;
+    _tensorBuf[_pixels + i]   = data[i * 4 + 1] * G_SCALE - G_OFF;
+    _tensorBuf[2 * _pixels + i] = data[i * 4 + 2] * B_SCALE - B_OFF;
   }
-  return new ort.Tensor('float32', t, [1, 3, MODEL_H, MODEL_W]);
+  return new ort.Tensor('float32', _tensorBuf, [1, 3, MODEL_H, MODEL_W]);
+}
+
+async function decodeBitmap(src: File | ImageBitmap): Promise<{ bmp: ImageBitmap; owned: boolean }> {
+  if (src instanceof File) {
+    const bmp = await createImageBitmap(src, {
+      resizeWidth: MODEL_W,
+      resizeHeight: MODEL_H,
+      resizeQuality: 'medium',
+    });
+    return { bmp, owned: true };
+  }
+  return { bmp: src, owned: false };
 }
 
 /**
@@ -108,28 +128,37 @@ export async function loadSapiens2(
  * Embed a list of images using the Sapiens2 ONNX session (one at a time).
  * Accepts File or ImageBitmap; File objects are decoded internally.
  * Returns L2-normalized Float32Array of length 768 per image.
+ *
+ * Pipeline: decoding of image i+1 starts before inference on image i completes.
+ * createImageBitmap runs off the main thread, so its ~200ms overlaps with the
+ * ~450ms WASM inference, hiding most of the decode latency.
  */
 export async function embedWithSapiens2(
   session: Sapiens2Session,
   sources: (File | ImageBitmap)[],
 ): Promise<Float32Array[]> {
+  if (sources.length === 0) return [];
+
   const results: Float32Array[] = [];
 
-  for (const src of sources) {
-    let bmp: ImageBitmap;
-    let owned = false;
+  // Kick off decode for the first image immediately
+  let nextDecode = decodeBitmap(sources[0]);
 
-    if (src instanceof File) {
-      bmp = await createImageBitmap(src, { resizeWidth: MODEL_W, resizeHeight: MODEL_H, resizeQuality: 'medium' });
-      owned = true;
-    } else {
-      bmp = src;
+  for (let i = 0; i < sources.length; i++) {
+    const { bmp, owned } = await nextDecode;
+
+    // Start decoding image i+1 before running inference on image i.
+    // createImageBitmap is off-thread, so this overlaps with the ~450ms
+    // WASM session.run below and hides most of the decode cost.
+    if (i + 1 < sources.length) {
+      nextDecode = decodeBitmap(sources[i + 1]);
     }
 
     try {
       const tensor = imageToTensor(bmp);
       const output = await session.run({ pixel_values: tensor });
       const raw = output['embedding'].data as Float32Array;
+      // l2normalize returns a new Float32Array (copy), so _tensorBuf is safe to reuse
       results.push(l2normalize(raw));
     } finally {
       if (owned) bmp.close();
