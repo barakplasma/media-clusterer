@@ -372,10 +372,21 @@
     #stats { font-size: 11px; color: var(--text-dim); margin-left: auto; }
 
     /* ── File viewer dialog ────────────────────────────────────────────────── */
+    /* Override browser default centering — make it a true full-screen overlay */
     dialog#modal {
-      border: none;
-      padding: 0;
-      background: rgba(0,0,0,0.9);
+      border: none !important;
+      margin: 0 !important;
+      padding: 20px !important;
+      position: fixed !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      background: rgba(0,0,0,0.9) !important;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
     }
