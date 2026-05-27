@@ -28,7 +28,7 @@ export interface Camera {
 export type ProjectionMethod = 'UMAP' | 'TSNE' | 'PCA' | 'ISOMAP' | 'LLE' | 'MDS' | 'SAMMON' | 'TriMap';
 
 /** Vision model variant */
-export type ModelVariant = 'nomic' | 'sapiens2-int8' | 'sapiens2-fp16' | 'sapiens2-fp32';
+export type ModelVariant = 'nomic' | 'sapiens2-int8' | 'sapiens2-fp16' | 'sapiens2-fp32' | 'chrome-ai';
 
 /** Application settings */
 export interface Settings {
@@ -53,6 +53,7 @@ export interface AppState {
   rawPoints: number[][] | null;
   clusters: Int32Array | null;
   thumbnails: (ImageBitmap | null)[];
+  captions: (string | null)[];
   searchResults: Int32Array | null;
   searchQuery: string;
   searchScores: Float32Array | null;
@@ -114,6 +115,10 @@ export interface DOMElements {
   headerRecenterBtn: HTMLButtonElement;
   demoBtn: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
+  modalCaption: HTMLDivElement;
+  chromeAIPromptInput: HTMLTextAreaElement;
+  chromeAIPromptReset: HTMLButtonElement;
+  chromeAIPromptSetting: HTMLDivElement;
 }
 
 /** IndexedDB cache entry */
