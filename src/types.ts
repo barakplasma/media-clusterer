@@ -34,7 +34,6 @@ export type ModelVariant = 'nomic' | 'sapiens2-int8' | 'sapiens2-fp16' | 'sapien
 export interface Settings {
   density: number;      // 1.0 = default, smaller = tighter, larger = sparse
   loopVideos: boolean;
-  theme: 'dark' | 'light' | 'system';
   drawBudget: number;   // MAX_DRAW_PER_FRAME
   enableTextSearch: boolean;
   projectionMethod: ProjectionMethod;
@@ -76,7 +75,7 @@ export interface DOMElements {
   progressBar: HTMLDivElement;
   statusEl: HTMLDivElement;
   canvas: HTMLCanvasElement;
-  modal: HTMLDivElement;
+  modal: HTMLDialogElement;
   modalClose: HTMLButtonElement;
   modalNavLeft: HTMLButtonElement;
   modalNavRight: HTMLButtonElement;
@@ -95,11 +94,11 @@ export interface DOMElements {
   searchClearBtn: HTMLButtonElement;
   fileInput: HTMLInputElement;
   aboutBtn: HTMLButtonElement;
-  aboutModal: HTMLDivElement;
+  aboutModal: HTMLDialogElement;
   aboutClose: HTMLButtonElement;
   statsEl: HTMLDivElement;
   settingsBtn: HTMLButtonElement;
-  settingsModal: HTMLDivElement;
+  settingsModal: HTMLDialogElement;
   settingsClose: HTMLButtonElement;
   densitySlider: HTMLInputElement;
   loopToggle: HTMLInputElement;
