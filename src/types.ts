@@ -103,7 +103,6 @@ export interface DOMElements {
   settingsClose: HTMLButtonElement;
   densitySlider: HTMLInputElement;
   loopToggle: HTMLInputElement;
-  themeSelect: HTMLSelectElement;
   drawBudgetSlider: HTMLInputElement;
   enableSearchToggle: HTMLInputElement;
   projectionSelect: HTMLSelectElement;
