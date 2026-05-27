@@ -755,15 +755,6 @@
     </div>
 
     <div class="setting-item">
-      <label>Appearance</label>
-      <select id="theme-select" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; outline: none;">
-        <option value="dark">Dark Theme</option>
-        <option value="light">Light Theme</option>
-        <option value="system">Follow System</option>
-      </select>
-    </div>
-
-    <div class="setting-item">
       <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
         <span>Embedding Batch Size</span>
         <div style="display: flex; align-items: center; gap: 6px;">
@@ -812,6 +803,8 @@
     border: 1px solid var(--border);
     border-radius: 12px;
     max-width: 420px;
+    max-height: 90dvh;
+    overflow-y: auto;
     width: 100%;
     position: relative;
     box-shadow: 0 24px 48px rgba(0,0,0,0.5);
