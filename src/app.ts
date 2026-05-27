@@ -145,7 +145,7 @@ const savedSettings = localStorage.getItem('mc_settings');
 // Migrate legacy modelVariant values to the new named variants
 if (savedSettings) {
   const parsed = JSON.parse(savedSettings);
-  if (!parsed.modelVariant || parsed.modelVariant === 'nomic') {
+  if (!parsed.modelVariant) {
     parsed.modelVariant = 'sapiens2-fp16';
     localStorage.setItem('mc_settings', JSON.stringify(parsed));
   } else if (parsed.modelVariant === 'sapiens2') {
