@@ -101,7 +101,6 @@ const dom: DOMElements = {
   settingsClose: document.getElementById('settings-close') as HTMLButtonElement,
   densitySlider: document.getElementById('density-slider') as HTMLInputElement,
   loopToggle: document.getElementById('loop-toggle') as HTMLInputElement,
-  themeSelect: document.getElementById('theme-select') as HTMLSelectElement,
   drawBudgetSlider: document.getElementById('draw-budget-slider') as HTMLInputElement,
   enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
@@ -2170,7 +2169,6 @@ const saveSettings = () => {
 dom.densitySlider.value = state.settings.density.toString();
 dom.drawBudgetSlider.value = state.settings.drawBudget.toString();
 dom.loopToggle.checked = state.settings.loopVideos;
-dom.themeSelect.value = state.settings.theme;
 dom.enableSearchToggle.checked = state.settings.enableTextSearch;
 if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
 dom.batchSizeInput.value = state.settings.batchSize.toString();
@@ -2397,11 +2395,6 @@ dom.viewerOnlyToggle.addEventListener('change', async () => {
   }
 });
 
-dom.themeSelect.addEventListener('change', () => {
-  state.settings.theme = dom.themeSelect.value as 'dark' | 'light' | 'system';
-  saveSettings();
-  applyTheme(state.settings.theme);
-});
 
 if (dom.projectionSelect) {
   dom.projectionSelect.addEventListener('change', async (e) => {
