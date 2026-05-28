@@ -1080,7 +1080,7 @@ async function loadModel(signal?: AbortSignal) {
     state.phase = 'model_ready';
     setProgress(0);
     dom.loadModelBtn.hidden = true;
-    dom.modelSelect.disabled = true;
+    dom.modelSelect.disabled = false;
     dom.openBtn.disabled = false;
     dom.openBtn.classList.add('primary');
     dom.demoBtn.disabled = false;
@@ -1115,7 +1115,7 @@ async function loadModel(signal?: AbortSignal) {
     state.phase = 'model_ready';
     setProgress(0);
     dom.loadModelBtn.hidden = true;
-    dom.modelSelect.disabled = true;
+    dom.modelSelect.disabled = false;
     dom.openBtn.disabled = false;
     dom.openBtn.classList.add('primary');
     dom.demoBtn.disabled = false;
@@ -2256,15 +2256,12 @@ dom.enableSearchToggle.addEventListener('change', async () => {
 });
 
 dom.modelSelect.addEventListener('change', () => {
-  if (extractor || sapiens2Session || chromeAIManager) {
-    // Model already loaded — revert and inform user
-    dom.modelSelect.value = state.settings.modelVariant;
-    setStatus('Model already loaded. Reload the page to switch models.');
-    return;
-  }
   state.settings.modelVariant = dom.modelSelect.value as ModelVariant;
   saveSettings();
   updateChromeAIPromptVisibility();
+  if (extractor || sapiens2Session || chromeAIManager) {
+    window.location.reload();
+  }
 });
 
 dom.densitySlider.addEventListener('input', async () => {
