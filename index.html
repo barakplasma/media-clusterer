@@ -675,6 +675,8 @@
       <span id="modal-meta"     class="modal-meta"></span>
       <span id="modal-gps-sep"  class="modal-sep" style="display:none"> · </span>
       <a    id="modal-gps"      class="modal-link" target="_blank" rel="noopener" title="Open in OpenStreetMap" style="display:none"></a>
+      <span id="modal-exif-sep" class="modal-sep" style="display:none"> · </span>
+      <button id="modal-exif-btn" class="modal-link" style="display:none;background:none;border:none;padding:0;cursor:pointer;font:inherit;" title="Show EXIF details">EXIF ▸</button>
     </div>
     <div id="modal-caption"></div>
   </div>
@@ -849,5 +851,19 @@
 </dialog>
 
 <script type="module" src="/src/app.ts"></script>
+
+<!-- ── EXIF detail dialog ──────────────────────────────────────────────────── -->
+<dialog id="exif-dialog" style="
+  background:var(--surface);color:var(--text-main);
+  border:1px solid var(--border);border-radius:12px;
+  padding:0;width:min(480px,94vw);max-height:80vh;
+  display:flex;flex-direction:column;overflow:hidden;
+">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);flex-shrink:0;">
+    <span style="font-weight:600;font-size:14px;">EXIF Data</span>
+    <button id="exif-dialog-close" style="background:none;border:none;color:var(--text-dim);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;">✕</button>
+  </div>
+  <div id="exif-dialog-body" style="overflow-y:auto;padding:14px 18px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;"></div>
+</dialog>
 </body>
 </html>

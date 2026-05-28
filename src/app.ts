@@ -3,7 +3,7 @@
  */
 
 import './sentry';
-import exifr from 'exifr';
+import exifr from '@modernized/exifr';
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
@@ -91,6 +91,7 @@ const dom: DOMElements = {
   modalDatetime: document.getElementById('modal-datetime') as HTMLDivElement,
   modalMeta: document.getElementById('modal-meta') as HTMLSpanElement,
   modalGps: document.getElementById('modal-gps') as HTMLAnchorElement,
+  modalExifBtn: document.getElementById('modal-exif-btn') as HTMLButtonElement,
   searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
@@ -2073,30 +2074,37 @@ const openFileModal = (index: number) => {
     dom.modalVideo.onloadedmetadata = updateSizeInfo;
   }
 
-  // GPS: read lazily from EXIF and cache on the PhotoFile object
+  // EXIF: full parse lazily; result feeds footer GPS and detail dialog
   const gpsSep = document.getElementById('modal-gps-sep') as HTMLSpanElement;
-  const showGps = (gps: { latitude: number; longitude: number } | null) => {
-    if (gps) {
-      const lat = gps.latitude.toFixed(5);
-      const lon = gps.longitude.toFixed(5);
-      dom.modalGps.textContent = `${lat}, ${lon}`;
-      dom.modalGps.href = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=15`;
+  const exifSep = document.getElementById('modal-exif-sep') as HTMLSpanElement;
+  const applyExif = (exif: Record<string, unknown> | null) => {
+    const lat = exif?.latitude as number | undefined;
+    const lon = exif?.longitude as number | undefined;
+    if (typeof lat === 'number' && typeof lon === 'number') {
+      dom.modalGps.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+      dom.modalGps.href = `https://www.openstreetmap.org/?mlat=${lat.toFixed(5)}&mlon=${lon.toFixed(5)}&zoom=15`;
       dom.modalGps.style.display = '';
       gpsSep.style.display = '';
     } else {
       dom.modalGps.style.display = 'none';
       gpsSep.style.display = 'none';
     }
+    const hasExif = exif && Object.keys(exif).length > 0;
+    dom.modalExifBtn.style.display = hasExif ? '' : 'none';
+    exifSep.style.display = hasExif ? '' : 'none';
   };
 
-  if (f.gps !== undefined) {
-    showGps(f.gps);
+  if (f.exifData !== undefined) {
+    applyExif(f.exifData);
   } else {
-    showGps(null);
-    exifr.gps(f.file).then(gps => {
-      f.gps = gps ?? null;
-      if (state.activeFileIndex === index) showGps(f.gps);
-    }).catch(() => { f.gps = null; });
+    applyExif(null);
+    exifr.parse(f.file, { gps: true, exif: true, iptc: false, xmp: false, icc: false, jfif: false })
+      .then(exif => {
+        f.exifData = exif ?? null;
+        f.gps = (typeof exif?.latitude === 'number' && typeof exif?.longitude === 'number')
+          ? { latitude: exif.latitude as number, longitude: exif.longitude as number } : null;
+        if (state.activeFileIndex === index) applyExif(f.exifData ?? null);
+      }).catch(() => { f.exifData = null; f.gps = null; });
   }
 
   // Cancel any in-flight lazy caption and pending debounce from a previous modal open
@@ -2194,6 +2202,71 @@ dom.modalClose.addEventListener('click', closeModal);
 dom.modal.addEventListener('click', (e) => {
   if (e.target === dom.modal) closeModal();
 });
+
+// ── EXIF detail dialog ───────────────────────────────────────────────────────
+const exifDialog = document.getElementById('exif-dialog') as HTMLDialogElement;
+const exifDialogBody = document.getElementById('exif-dialog-body') as HTMLDivElement;
+const exifDialogClose = document.getElementById('exif-dialog-close') as HTMLButtonElement;
+
+const EXIF_LABELS: Record<string, string> = {
+  Make: 'Camera Make', Model: 'Camera Model', LensModel: 'Lens',
+  FNumber: 'Aperture', ExposureTime: 'Shutter Speed', ISO: 'ISO',
+  FocalLength: 'Focal Length', FocalLengthIn35mmFormat: '35mm Equiv.',
+  DateTimeOriginal: 'Date Taken', CreateDate: 'Date Created',
+  ImageWidth: 'Width', ImageHeight: 'Height', Orientation: 'Orientation',
+  Flash: 'Flash', WhiteBalance: 'White Balance', ExposureMode: 'Exposure Mode',
+  ExposureProgram: 'Exposure Program', MeteringMode: 'Metering Mode',
+  ColorSpace: 'Color Space', Software: 'Software',
+  Artist: 'Artist', Copyright: 'Copyright',
+  latitude: 'Latitude', longitude: 'Longitude',
+};
+
+function formatExifValue(key: string, val: unknown): string {
+  if (val === null || val === undefined) return '';
+  if (key === 'FNumber') return `f/${val}`;
+  if (key === 'ExposureTime') {
+    const s = val as number;
+    return s < 1 ? `1/${Math.round(1 / s)}s` : `${s}s`;
+  }
+  if (key === 'FocalLength' || key === 'FocalLengthIn35mmFormat') return `${val}mm`;
+  if (key === 'latitude' || key === 'longitude') return (val as number).toFixed(6);
+  if (val instanceof Date) return val.toLocaleString();
+  return String(val);
+}
+
+dom.modalExifBtn.addEventListener('click', () => {
+  const idx = state.activeFileIndex;
+  if (idx === null) return;
+  const exif = state.files[idx]?.exifData;
+  if (!exif) return;
+
+  exifDialogBody.innerHTML = '';
+  const dl = document.createElement('dl');
+  dl.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0;';
+
+  for (const [key, label] of Object.entries(EXIF_LABELS)) {
+    if (!(key in exif) || exif[key] === null || exif[key] === undefined) continue;
+    const formatted = formatExifValue(key, exif[key]);
+    if (!formatted) continue;
+    const dt = document.createElement('dt');
+    dt.style.cssText = 'color:var(--text-dim);white-space:nowrap;';
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.style.cssText = 'margin:0;color:var(--text-main);word-break:break-all;';
+    dd.textContent = formatted;
+    dl.append(dt, dd);
+  }
+
+  if (!dl.children.length) {
+    exifDialogBody.textContent = 'No recognised EXIF fields found.';
+  } else {
+    exifDialogBody.appendChild(dl);
+  }
+  exifDialog.showModal();
+});
+
+exifDialogClose.addEventListener('click', () => exifDialog.close());
+exifDialog.addEventListener('click', (e) => { if (e.target === exifDialog) exifDialog.close(); });
 
 // ── Settings ────────────────────────────────────────────────────────────────
 const saveSettings = () => {
