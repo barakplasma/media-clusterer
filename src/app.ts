@@ -1842,7 +1842,7 @@ dom.canvas.addEventListener('pointerup', (e) => {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) lastPinchDist = 0;
 
-  if (wasSingleTap && state.phase === 'done' && state.points.length) {
+  if (wasSingleTap && state.points.length) {
     const { cx, cy } = pointerPos(e);
     const wx = (cx - dom.canvas.width / 2) / camera.scale + camera.x;
     const wy = (cy - dom.canvas.height / 2) / camera.scale + camera.y;
