@@ -56,7 +56,6 @@ const THUMB_WORLD = 48;   // thumbnail size in world units
 const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const BATCH_SIZE = IS_MOBILE ? 4 : 16; // fallback before settings load
-const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const MAX_THUMBNAILS_CACHE = 2000; // Max decoded thumbnails to keep in memory (LRU)
 const MAX_FULL_IMAGES = 100; // Max full-res images to keep in memory (LRU)
@@ -1401,11 +1400,9 @@ async function embedAll(files: PhotoFile[]) {
       }
     }
 
-    let didFlush = false;
-    if (writeQueue.length >= WRITE_BATCH) {
+    if (writeQueue.length > 0) {
       await cachePutBatch(writeQueue);
       writeQueue.length = 0;
-      didFlush = true;
     }
 
     const done = Math.min(i + batchSize, files.length);
@@ -1442,10 +1439,6 @@ async function embedAll(files: PhotoFile[]) {
     setStatus(`Embedding ${done} / ${files.length} images…${fromCache}`);
     setProgress(10 + (done / files.length) * 80); // 10% to 90%
     await yieldMain();
-  }
-
-  if (writeQueue.length > 0) {
-    await cachePutBatch(writeQueue);
   }
 
   refreshCacheSize();
