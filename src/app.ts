@@ -238,10 +238,8 @@ function updateDeviceBadge() {
 
 async function refreshCacheSize() {
   try {
-    const { count, bytes } = await cacheStats();
-    const mb = bytes / (1024 * 1024);
-    const display = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
-    const text = count === 0 ? '' : `${count} embeddings · ${display}`;
+    const { count } = await cacheStats();
+    const text = count === 0 ? '' : `${count} embeddings`;
     if (cacheSizeEl) cacheSizeEl.textContent = text;
     if (storageBadgeEl) { storageBadgeEl.textContent = text; (storageBadgeEl as HTMLElement).style.display = text ? '' : 'none'; }
   } catch {
