@@ -185,8 +185,6 @@ let textExtractor: PipelineInstance | null = null;  // Text model (for search qu
 let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
-let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption generator (non-chrome-ai modes)
-let captionAbortController: AbortController | null = null; // Cancels in-flight lazy caption
 let chromeAIAvailability: LanguageModelAvailability = 'unavailable'; // Set at page load
 let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
 
@@ -1341,10 +1339,6 @@ async function embedAll(files: PhotoFile[]) {
       if (cached[bi]) {
         vectors[i + bi] = cached[bi]!;
         cacheHits++;
-        if (isChromeAI) {
-          const f = batch[bi];
-          state.captions[i + bi] = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
-        }
       }
     }
 
@@ -1372,9 +1366,7 @@ async function embedAll(files: PhotoFile[]) {
           for (let m = 0; m < descs.length; m++) {
             const description = descs[m];
             const f = batch[missIndices[m]];
-            // Store caption indexed by global file index for modal display
             state.captions[i + missIndices[m]] = description;
-            try { localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description); } catch (_) {}
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
             const output = await textExtractor(`search_document: ${description}`, { pooling: 'mean', normalize: true });
             extracted.push(extractVector(output));
@@ -2077,51 +2069,11 @@ const openFileModal = (index: number) => {
     dom.modalVideo.onloadedmetadata = updateSizeInfo;
   }
 
-  // Cancel any in-flight lazy caption from a previous modal open
-  captionAbortController?.abort();
-  captionAbortController = null;
-
-  // Pre-populate from localStorage so captions survive page reload for all modes
-  if (!state.captions[index]) {
-    const cached = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
-    if (cached) state.captions[index] = cached;
-  }
-
   const caption = state.captions[index] ?? null;
   if (caption) {
     dom.modalCaption.textContent = caption;
     dom.modalCaption.style.display = 'block';
     dom.modalFooter.style.borderRadius = '0';
-  } else if (chromeAIAvailability !== 'unavailable' && state.settings.modelVariant !== 'chrome-ai') {
-    // Lazy caption: Chrome AI is available but we're in a different embedding mode
-    dom.modalCaption.textContent = 'Generating caption…';
-    dom.modalCaption.style.display = 'block';
-    dom.modalFooter.style.borderRadius = '0';
-    if (!lazyCaptionManager) lazyCaptionManager = new ChromeAISessionManager();
-    const ac = new AbortController();
-    captionAbortController = ac;
-    const captureIndex = index;
-    const captureFile = f;
-    (async () => {
-      try {
-        const thumb = state.thumbnails[captureIndex];
-        const img = thumb
-          ? await createImageBitmap(thumb)
-          : await createImageBitmap(captureFile.file, { resizeWidth: 128, resizeQuality: 'medium' });
-        const desc = await lazyCaptionManager!.describe(img, getChromeAIPrompt(), ac.signal);
-        if (ac.signal.aborted) return;
-        state.captions[captureIndex] = desc;
-        try { localStorage.setItem(`@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`, desc); } catch (_) {}
-        if (state.activeFileIndex === captureIndex) {
-          dom.modalCaption.textContent = desc;
-        }
-      } catch {
-        if (!ac.signal.aborted && state.activeFileIndex === captureIndex) {
-          dom.modalCaption.style.display = 'none';
-          dom.modalFooter.style.borderRadius = '';
-        }
-      }
-    })();
   } else {
     dom.modalCaption.style.display = 'none';
     dom.modalFooter.style.borderRadius = '';
@@ -2149,8 +2101,6 @@ dom.modal.addEventListener('close', () => {
   dom.modalVideo.pause();
   dom.modalVideo.src = '';
   state.activeFileIndex = null;
-  captionAbortController?.abort();
-  captionAbortController = null;
 });
 
 dom.modalClose.addEventListener('click', closeModal);
@@ -2617,9 +2567,6 @@ dom.resumeBtn.addEventListener('click', async () => {
     }
 
     state.thumbnails = initThumbnails(matched);
-    if (state.settings.modelVariant === 'chrome-ai') {
-      state.captions = matched.map(f => localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`));
-    }
     state.phase = 'done';
     resizeCanvas();
     fitCamera();
