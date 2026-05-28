@@ -2583,7 +2583,7 @@ if (_savedKeys) {
   try {
     const n = JSON.parse(_savedKeys).length;
     dom.resumeBtn.hidden = false;
-    dom.resumeBtn.textContent = `Resume last session (${n} images)`;
+    dom.resumeBtn.innerHTML = `🔄 <span class="btn-label">Resume last session (${n} images)</span>`;
   } catch (_) { localStorage.clear(); }
 }
 
