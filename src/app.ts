@@ -107,6 +107,7 @@ const dom: DOMElements = {
   enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
   viewerOnlyToggle: document.getElementById('viewer-only-toggle') as HTMLInputElement,
+  lazyCaptionToggle: document.getElementById('lazy-caption-toggle') as HTMLInputElement,
   batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
   batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
   randomSampleSizeInput: document.getElementById('random-sample-size') as HTMLInputElement,
@@ -140,6 +141,7 @@ const DEFAULT_SETTINGS: Settings = {
   randomSampleSize: 100,
   viewerOnly: false,
   modelVariant: 'sapiens2-fp16',
+  enableLazyCaption: false,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -2092,7 +2094,7 @@ const openFileModal = (index: number) => {
     dom.modalCaption.textContent = caption;
     dom.modalCaption.style.display = 'block';
     dom.modalFooter.style.borderRadius = '0';
-  } else if (chromeAIAvailability !== 'unavailable') {
+  } else if (state.settings.enableLazyCaption && chromeAIAvailability !== 'unavailable') {
     // Hide until the debounce fires — no flash when quickly flipping images
     dom.modalCaption.style.display = 'none';
     dom.modalFooter.style.borderRadius = '';
@@ -2186,6 +2188,7 @@ if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projection
 dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
+dom.lazyCaptionToggle.checked = state.settings.enableLazyCaption;
 dom.modelSelect.value = state.settings.modelVariant;
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
@@ -2367,6 +2370,11 @@ dom.randomSampleSizeInput.addEventListener('input', () => {
 
 dom.loopToggle.addEventListener('change', () => {
   state.settings.loopVideos = dom.loopToggle.checked;
+  saveSettings();
+});
+
+dom.lazyCaptionToggle.addEventListener('change', () => {
+  state.settings.enableLazyCaption = dom.lazyCaptionToggle.checked;
   saveSettings();
 });
 
