@@ -94,6 +94,8 @@ export interface DOMElements {
   modalMeta: HTMLSpanElement;
   modalGps: HTMLAnchorElement;
   modalExifBtn: HTMLButtonElement;
+  modalPrevBtn: HTMLButtonElement;
+  modalNextBtn: HTMLButtonElement;
   searchWrap: HTMLDivElement;
   searchInput: HTMLInputElement;
   searchClearBtn: HTMLButtonElement;

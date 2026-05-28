@@ -92,6 +92,8 @@ const dom: DOMElements = {
   modalMeta: document.getElementById('modal-meta') as HTMLSpanElement,
   modalGps: document.getElementById('modal-gps') as HTMLAnchorElement,
   modalExifBtn: document.getElementById('modal-exif-btn') as HTMLButtonElement,
+  modalPrevBtn: document.getElementById('modal-prev-btn') as HTMLButtonElement,
+  modalNextBtn: document.getElementById('modal-next-btn') as HTMLButtonElement,
   searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
@@ -2869,6 +2871,29 @@ function navigateCanvas(dir: 'left' | 'right' | 'up' | 'down') {
   }
 }
 
+function navigateSequential(delta: 1 | -1) {
+  if (!state.points.length) return;
+  let currentIndex = state.activeFileIndex ?? state.lastViewedIndex;
+  if (currentIndex === null) {
+    let minD = Infinity;
+    for (let i = 0; i < state.points.length; i++) {
+      const dx = state.points[i][0] - camera.x, dy = state.points[i][1] - camera.y;
+      const d = dx * dx + dy * dy;
+      if (d < minD) { minD = d; currentIndex = i; }
+    }
+  }
+  if (currentIndex === null) return;
+  const sorted = Array.from({ length: state.files.length }, (_, i) => i)
+    .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
+  const pos = sorted.indexOf(currentIndex);
+  if (pos === -1) return;
+  const nextPos = (pos + delta + sorted.length) % sorted.length;
+  openFileModal(sorted[nextPos]);
+}
+
+dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1));
+dom.modalNextBtn.addEventListener('click', () => navigateSequential(1));
+
 document.addEventListener('keydown', (e) => {
   if (e.key === '`') {
     const open = debugOverlay.style.display === 'none';
@@ -2902,37 +2927,7 @@ document.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
   if ((key === 'n' || key === 'p') && state.points.length > 0 && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')) {
     e.preventDefault();
-
-    // Determine current index
-    let currentIndex = state.activeFileIndex ?? state.lastViewedIndex;
-    if (currentIndex === null) {
-      // Find index closest to camera center
-      const pts = state.points;
-      let minD = Infinity;
-      for (let i = 0; i < pts.length; i++) {
-        const dx = pts[i][0] - camera.x;
-        const dy = pts[i][1] - camera.y;
-        const d = dx * dx + dy * dy;
-        if (d < minD) { minD = d; currentIndex = i; }
-      }
-    }
-
-    if (currentIndex !== null) {
-      // Get indices sorted by datetime (oldest first)
-      const sortedIndices = Array.from({ length: state.files.length }, (_, i) => i)
-        .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
-
-      // Find current position in datetime order
-      const currentPos = sortedIndices.indexOf(currentIndex);
-      if (currentPos !== -1) {
-        // Move to next/previous in datetime order
-        const nextPos = key === 'n'
-	  ? (currentPos + 1) % sortedIndices.length
-	  : (currentPos - 1 + sortedIndices.length) % sortedIndices.length;
-	const nextIndex = sortedIndices[nextPos];
-	openFileModal(nextIndex);
-      }
-    }
+    navigateSequential(key === 'n' ? 1 : -1);
   }
 });
 

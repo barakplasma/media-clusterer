@@ -515,6 +515,23 @@
 
     .modal-meta { color: var(--text-dim); flex-shrink: 0; }
 
+    .modal-seq-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      border-radius: 6px;
+      width: 32px; height: 28px;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .modal-seq-btn:hover { background: var(--surface-hover); color: var(--primary); }
+    .modal-seq-btn:active { transform: scale(0.92); }
+
     #modal-caption {
       display: none;
       background: var(--surface);
@@ -664,6 +681,9 @@
     <img id="modal-img" alt="Full view">
     <video id="modal-video" controls loop style="width:100%;flex:1;min-height:0;object-fit:contain;display:none;background:#000;border-radius:12px 12px 0 0;"></video>
     <div id="modal-footer">
+      <button id="modal-prev-btn" class="modal-seq-btn" title="Previous (P)">&#x2039;</button>
+      <button id="modal-next-btn" class="modal-seq-btn" title="Next (N)">&#x203A;</button>
+      <span class="modal-sep" style="margin-right:4px;"> </span>
       <span id="modal-up"       class="modal-link" title="Up one level">↑</span>
       <span class="modal-sep"> · </span>
       <span id="modal-path"     class="modal-path"></span>
