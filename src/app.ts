@@ -22,6 +22,7 @@ import {
   cacheStats,
 } from './db';
 import { getNextImageInDirection } from './spatial';
+import '@picocss/pico/css/pico.conditional.min.css';
 import { computeOptimalBatchSize } from './hardware';
 import type {
   AppState,
@@ -74,7 +75,7 @@ const dom: DOMElements = {
   progressBar: document.getElementById('progress-bar') as HTMLDivElement,
   statusEl: document.getElementById('status') as HTMLDivElement,
   canvas: document.getElementById('canvas') as HTMLCanvasElement,
-  modal: document.getElementById('modal') as HTMLDivElement,
+  modal: document.getElementById('modal') as HTMLDialogElement,
   modalClose: document.getElementById('modal-close') as HTMLButtonElement,
   modalNavLeft: document.getElementById('modal-nav-left') as HTMLButtonElement,
   modalNavRight: document.getElementById('modal-nav-right') as HTMLButtonElement,
@@ -93,11 +94,11 @@ const dom: DOMElements = {
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
   fileInput: document.getElementById('file-input') as HTMLInputElement,
   aboutBtn: document.getElementById('about-btn') as HTMLButtonElement,
-  aboutModal: document.getElementById('about-modal') as HTMLDivElement,
+  aboutModal: document.getElementById('about-modal') as HTMLDialogElement,
   aboutClose: document.getElementById('about-close') as HTMLButtonElement,
   statsEl: document.getElementById('stats') as HTMLDivElement,
   settingsBtn: document.getElementById('settings-btn') as HTMLButtonElement,
-  settingsModal: document.getElementById('settings-modal') as HTMLDivElement,
+  settingsModal: document.getElementById('settings-modal') as HTMLDialogElement,
   settingsClose: document.getElementById('settings-close') as HTMLButtonElement,
   densitySlider: document.getElementById('density-slider') as HTMLInputElement,
   loopToggle: document.getElementById('loop-toggle') as HTMLInputElement,
@@ -119,9 +120,10 @@ const dom: DOMElements = {
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
-  const versionEl = document.getElementById('version-info');
+  const versionEl = document.getElementById('version-info') as HTMLElement | null;
   if (versionEl) {
-  versionEl.textContent = `${__GIT_BRANCH__}@${__GIT_COMMIT__}`;
+    versionEl.textContent = `${__GIT_BRANCH__}@${__GIT_COMMIT__}`;
+    versionEl.style.display = '';
   }
 
   // ── Constants ────────────────────────────────────────────────────────────────
@@ -130,7 +132,6 @@ const dom: DOMElements = {
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
-  theme: 'system',
   drawBudget: IS_MOBILE ? 150 : 400,
   enableTextSearch: false,
   projectionMethod: 'TSNE',
@@ -144,7 +145,7 @@ const savedSettings = localStorage.getItem('mc_settings');
 // Migrate legacy modelVariant values to the new named variants
 if (savedSettings) {
   const parsed = JSON.parse(savedSettings);
-  if (!parsed.modelVariant || parsed.modelVariant === 'nomic') {
+  if (!parsed.modelVariant) {
     parsed.modelVariant = 'sapiens2-fp16';
     localStorage.setItem('mc_settings', JSON.stringify(parsed));
   } else if (parsed.modelVariant === 'sapiens2') {
@@ -243,10 +244,10 @@ async function refreshCacheSize() {
     const display = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
     const text = count === 0 ? '' : `${count} embeddings · ${display}`;
     if (cacheSizeEl) cacheSizeEl.textContent = text;
-    if (storageBadgeEl) storageBadgeEl.textContent = text;
+    if (storageBadgeEl) { storageBadgeEl.textContent = text; (storageBadgeEl as HTMLElement).style.display = text ? '' : 'none'; }
   } catch {
     if (cacheSizeEl) cacheSizeEl.textContent = '';
-    if (storageBadgeEl) storageBadgeEl.textContent = '';
+    if (storageBadgeEl) { storageBadgeEl.textContent = ''; (storageBadgeEl as HTMLElement).style.display = 'none'; }
   }
 }
 
@@ -581,10 +582,8 @@ const thumbnailLRU = new Set<number>();                // indices in LRU order (
 const videoFrameLimit = pLimit(4);
 
 function resizeCanvas() {
-  const wrap = dom.canvas.parentElement;
-  if (!wrap) return;
-  dom.canvas.width = wrap.clientWidth || 800;
-  dom.canvas.height = wrap.clientHeight || 600;
+  dom.canvas.width = window.innerWidth || 800;
+  dom.canvas.height = window.innerHeight || 600;
 }
 
 async function spreadPointsAsync(projectedPoints: number[][]): Promise<Point[]> {
@@ -2127,7 +2126,7 @@ const openFileModal = (index: number) => {
     dom.modalFooter.style.borderRadius = '';
   }
 
-  dom.modal.classList.add('open');
+  dom.modal.showModal();
   state.activeFileIndex = index;
   state.lastViewedIndex = index;
 
@@ -2141,26 +2140,26 @@ const openFileModal = (index: number) => {
 };
 
 const closeModal = () => {
-  dom.modal.classList.remove('open');
+  dom.modal.close();
+};
+
+// Cleanup happens on the native close event (handles X button, Escape, and backdrop click)
+dom.modal.addEventListener('close', () => {
   dom.modalVideo.pause();
   dom.modalVideo.src = '';
   state.activeFileIndex = null;
   captionAbortController?.abort();
   captionAbortController = null;
-};
+});
 
 dom.modalClose.addEventListener('click', closeModal);
 
+// Backdrop click: dialog is fullscreen overlay, click on dialog outside content closes it
 dom.modal.addEventListener('click', (e) => {
   if (e.target === dom.modal) closeModal();
 });
 
 // ── Settings ────────────────────────────────────────────────────────────────
-const applyTheme = (theme: 'dark' | 'light' | 'system') => {
-  const isLight = theme === 'light' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches);
-  document.documentElement.classList.toggle('light-mode', isLight);
-};
-
 const saveSettings = () => {
   localStorage.setItem('mc_settings', JSON.stringify(state.settings));
 };
@@ -2175,7 +2174,6 @@ dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
 dom.modelSelect.value = state.settings.modelVariant;
-applyTheme(state.settings.theme);
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
 getChromeAIAvailability().then(avail => {
@@ -2240,15 +2238,15 @@ updateSearchUI();
 refreshCacheSize();
 
 dom.settingsBtn.addEventListener('click', () => {
-  dom.settingsModal.classList.add('open');
+  dom.settingsModal.showModal();
 });
 
 dom.settingsClose.addEventListener('click', () => {
-  dom.settingsModal.classList.remove('open');
+  dom.settingsModal.close();
 });
 
 dom.settingsModal.addEventListener('click', (e) => {
-  if (e.target === dom.settingsModal) dom.settingsModal.classList.remove('open');
+  if (e.target === dom.settingsModal) dom.settingsModal.close();
 });
 
 dom.enableSearchToggle.addEventListener('change', async () => {
@@ -2266,7 +2264,7 @@ dom.enableSearchToggle.addEventListener('change', async () => {
   // If enabled and models are already loaded, load the text model now
   if (state.settings.enableTextSearch && state.phase !== 'idle' && state.phase !== 'loading_model' && !textExtractor) {
     // We duplicate the text loading logic here for dynamic loading
-    dom.settingsModal.classList.remove('open');
+    dom.settingsModal.close();
     setStatus('Loading text model for search…');
     const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
     const textLoaded = new Map<string, number>();
@@ -2441,15 +2439,15 @@ if (dom.projectionSelect) {
 }
 
 dom.aboutBtn.addEventListener('click', () => {
-  dom.aboutModal.classList.add('open');
+  dom.aboutModal.showModal();
 });
 
 dom.aboutClose.addEventListener('click', () => {
-  dom.aboutModal.classList.remove('open');
+  dom.aboutModal.close();
 });
 
 dom.aboutModal.addEventListener('click', (e) => {
-  if (e.target === dom.aboutModal) dom.aboutModal.classList.remove('open');
+  if (e.target === dom.aboutModal) dom.aboutModal.close();
 });
 
 window.addEventListener('resize', () => {
@@ -2463,7 +2461,7 @@ resizeCanvas();
 // Open about modal on first-ever visit
 if (!localStorage.getItem('mc_hasVisited')) {
   localStorage.setItem('mc_hasVisited', 'true');
-  dom.aboutModal.classList.add('open');
+  dom.aboutModal.showModal();
 }
 
 const _savedKeys = localStorage.getItem('po_fileKeys');

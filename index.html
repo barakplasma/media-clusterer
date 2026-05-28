@@ -12,139 +12,214 @@
   <meta property="og:url" content="https://barakplasma.github.io/media-clusterer/">
   <meta name="twitter:card" content="summary_large_image">
   <style>
+    /* ── Design Tokens ─────────────────────────────────────────────────────── */
     :root {
-      --bg: #0b0e14;
-      --surface: #161b22;
-      --surface-hover: #1c2128;
-      --border: #30363d;
-      --primary: #58a6ff;
-      --primary-hover: #1f6feb;
-      --accent: #8957e5;
-      --text-main: #c9d1d9;
-      --text-dim: #8b949e;
-      --success: #3fb950;
-      --radius: 8px;
-      --transition: 0.15s cubic-bezier(0.33, 1, 0.68, 1);
+      --primary:        #58a6ff;
+      --primary-hover:  #1f6feb;
+      --accent:         #8957e5;
+      --bg:             #0b0e14;
+      --surface:        #161b22;
+      --surface-hover:  #1c2128;
+      --border:         #30363d;
+      --text-main:      #c9d1d9;
+      --text-dim:       #8b949e;
+      --success:        #3fb950;
+      --radius:         8px;
+      --tr:             0.15s cubic-bezier(0.33, 1, 0.68, 1);
+
+      /* PicoCSS overrides (scoped via .pico class) */
+      --pico-primary:              var(--primary);
+      --pico-primary-hover:        var(--primary-hover);
+      --pico-primary-focus:        rgba(88,166,255,0.25);
+      --pico-primary-inverse:      #ffffff;
+      --pico-font-family:          -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      --pico-border-radius:        var(--radius);
+      --pico-font-size:            14px;
     }
 
-    :root.light-mode {
-      --bg: #ffffff;
-      --surface: #f6f8fa;
-      --surface-hover: #eaeef2;
-      --border: #d0d7de;
-      --primary: #0969da;
-      --primary-hover: #0550ae;
-      --accent: #8250df;
-      --text-main: #1f2328;
-      --text-dim: #636c76;
+    @media (prefers-color-scheme: light) {
+      :root {
+        --primary:       #0969da;
+        --primary-hover: #0550ae;
+        --accent:        #8250df;
+        --bg:            #ffffff;
+        --surface:       #f6f8fa;
+        --surface-hover: #eaeef2;
+        --border:        #d0d7de;
+        --text-main:     #1f2328;
+        --text-dim:      #636c76;
+
+        --pico-primary:       var(--primary);
+        --pico-primary-hover: var(--primary-hover);
+      }
     }
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    /* ── Base Reset ─────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      margin: 0; padding: 0;
+      overflow: hidden;
+      height: 100dvh;
+      width: 100%;
+    }
 
     body {
       background: var(--bg);
       color: var(--text-main);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      height: 100dvh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ── Header ── */
-    header {
-      display: flex;
-      flex-direction: column;
-      padding: 12px 16px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      gap: 12px;
-      z-index: 10;
-      max-width: 400px;
-      width: 100%;
-      position: absolute;
-      top: 0;
-      left: 0;
-      border-bottom-right-radius: var(--radius);
-      border-right: 1px solid var(--border);
-      box-shadow: 2px 2px 12px rgba(0,0,0,0.2);
+    /* ── Full-viewport Canvas ──────────────────────────────────────────────── */
+    canvas#canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      cursor: grab;
+      touch-action: none;
+      z-index: 0;
+      background: radial-gradient(circle at center, var(--surface) 0%, var(--bg) 100%);
     }
+    canvas#canvas:active { cursor: grabbing; }
 
-    .brand {
+    /* ── Floating Toolbar ──────────────────────────────────────────────────── */
+    nav#toolbar {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-    }
-
-    h1 {
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--primary);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-
-    .controls { 
-      display: flex; 
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    button {
-      padding: 8px 14px;
-      border-radius: var(--radius);
+      gap: 4px;
+      width: max-content;
+      max-width: 96vw;
+      padding: 5px 10px;
+      border-radius: 9999px;
       border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text-main);
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all var(--transition);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      user-select: none;
-    }
-
-    button:hover:not(:disabled) {
-      background: var(--surface-hover);
-      border-color: var(--text-dim);
-    }
-
-    button:active:not(:disabled) {
-      transform: scale(0.98);
-    }
-
-    button:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-
-    button.primary {
-      background: var(--primary);
-      border-color: var(--primary-hover);
-      color: #ffffff;
-    }
-
-    button.primary:hover:not(:disabled) {
-      background: var(--primary-hover);
-      box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
-    }
-
-    #load-model-btn { flex: 1 1 100%; }
-    #resume-btn { flex: 1; }
-    #open-btn { flex: 1; }
-
-    /* ── Progress bar ── */
-    #progress-wrap {
-      height: 4px;
-      background: rgba(48, 54, 61, 0.5);
-      position: relative;
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      backdrop-filter: blur(20px) saturate(160%);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 1px 0 rgba(255,255,255,0.04) inset;
       overflow: hidden;
     }
 
+    /* ── Toolbar sections ── */
+    .tb-brand {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding-right: 6px;
+      border-right: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .brand-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--primary);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .tb-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: nowrap;
+    }
+
+    .tb-meta {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding-left: 6px;
+      border-left: 1px solid var(--border);
+      font-size: 10px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .tb-meta span {
+      padding: 1px 5px;
+      border-radius: 10px;
+      background: rgba(88,166,255,0.08);
+      border: 1px solid rgba(88,166,255,0.15);
+      white-space: nowrap;
+    }
+
+    /* ── Toolbar buttons ── */
+    nav#toolbar button {
+      padding: 4px 10px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-main);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+      transition: background var(--tr), border-color var(--tr);
+      user-select: none;
+    }
+    nav#toolbar button:hover:not(:disabled) {
+      background: var(--surface-hover);
+      border-color: var(--text-dim);
+    }
+    nav#toolbar button:active:not(:disabled) { transform: scale(0.97); }
+    nav#toolbar button:disabled { opacity: 0.38; cursor: not-allowed; }
+
+    nav#toolbar button.primary {
+      background: var(--primary);
+      border-color: var(--primary-hover);
+      color: #fff;
+    }
+    nav#toolbar button.primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+      box-shadow: 0 0 10px rgba(88,166,255,0.25);
+    }
+
+    /* Icon-only buttons */
+    nav#toolbar button.icon-btn {
+      padding: 4px 8px;
+      font-size: 14px;
+      border-color: transparent;
+      background: transparent;
+    }
+    nav#toolbar button.icon-btn:hover:not(:disabled) {
+      border-color: var(--border);
+      background: var(--surface-hover);
+    }
+
+    /* Hide text labels on narrow screens */
+    @media (max-width: 600px) {
+      .btn-label { display: none; }
+      nav#toolbar button { padding: 4px 7px; }
+      .tb-meta { display: none; }
+    }
+    @media (max-width: 400px) {
+      .brand-title { display: none; }
+    }
+
+    /* ── Progress bar ──────────────────────────────────────────────────────── */
+    #progress-wrap {
+      position: fixed;
+      top: 56px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(360px, 88vw);
+      height: 3px;
+      background: rgba(48,54,61,0.35);
+      border-radius: 9999px;
+      overflow: hidden;
+      z-index: 99;
+    }
     #progress-bar {
       height: 100%;
       background: linear-gradient(90deg, var(--primary), var(--accent));
@@ -153,45 +228,72 @@
       box-shadow: 0 0 8px var(--primary);
     }
 
-    /* ── Status ── */
+    /* ── Status text ───────────────────────────────────────────────────────── */
     #status {
-      padding: 0 4px;
-      font-size: 12px;
+      position: fixed;
+      top: 63px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 99;
+      font-size: 11px;
       color: var(--text-dim);
-      background: transparent;
+      pointer-events: none;
+      white-space: nowrap;
+      max-width: 90vw;
+      text-align: center;
+    }
+
+    /* ── Header recenter (floating, bottom-right, when search disabled) ──── */
+    #header-controls {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 100;
+    }
+    #header-recenter-btn {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      color: var(--text-main);
+      font-size: 18px;
+      cursor: pointer;
       display: flex;
       align-items: center;
-      min-height: 20px;
+      justify-content: center;
+      transition: background var(--tr);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.3);
     }
+    #header-recenter-btn:hover:not(:disabled) { background: var(--surface-hover); }
+    #header-recenter-btn:disabled { opacity: 0.38; cursor: not-allowed; }
 
-    /* ── Canvas area ── */
-    #canvas-wrap {
-      flex: 1;
-      position: relative;
-      background: radial-gradient(circle at center, #161b22 0%, #0b0e14 100%);
-      width: 100%;
-      height: 100%;
-    }
-
-    canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
-    canvas:active { cursor: grabbing; }
-
-    /* ── Bottom Panel ── */
+    /* ── Floating bottom search panel ─────────────────────────────────────── */
     #bottom-panel {
-      padding: 12px 16px;
-      background: var(--surface);
-      border-top: 1px solid var(--border);
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100;
+      width: min(620px, 96vw);
+      padding: 10px 14px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      backdrop-filter: blur(20px) saturate(160%);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.3);
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      z-index: 10;
+      gap: 8px;
     }
 
     .panel-row {
       display: flex;
       align-items: center;
-      gap: 10px;
-      width: 100%;
+      gap: 8px;
     }
 
     #search-wrap {
@@ -200,120 +302,96 @@
       display: flex;
       align-items: center;
     }
-
     #search-wrap.loading::after {
       content: "";
       position: absolute;
       right: 36px;
-      width: 14px;
-      height: 14px;
+      width: 14px; height: 14px;
       border: 2px solid var(--border);
       border-top-color: var(--primary);
       border-radius: 50%;
       animation: spin 0.6s linear infinite;
     }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     #search-input {
       width: 100%;
-      padding: 10px 36px 10px 12px;
+      padding: 9px 36px 9px 12px;
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       color: var(--text-main);
       font-size: 14px;
       outline: none;
-      transition: border-color var(--transition), box-shadow var(--transition);
+      transition: border-color var(--tr), box-shadow var(--tr);
     }
-
     #search-input:focus {
       border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
+      box-shadow: 0 0 0 3px rgba(88,166,255,0.1);
     }
-
-    #search-input:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
+    #search-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
     #search-clear-btn {
       position: absolute;
       right: 8px;
-      width: 24px;
-      height: 24px;
+      width: 24px; height: 24px;
       border-radius: 50%;
       background: transparent;
       border: none;
       color: var(--text-dim);
-      font-size: 16px;
+      font-size: 14px;
       padding: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
     }
+    #search-clear-btn:hover { color: var(--text-main); background: var(--border); }
 
-    #search-clear-btn:hover {
-      color: var(--text-main);
-      background: var(--border);
-    }
-
-    .utility-btns {
+    .bottom-controls {
       display: flex;
+      align-items: center;
       gap: 8px;
     }
+    .bottom-controls button {
+      padding: 5px 11px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-main);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background var(--tr);
+    }
+    .bottom-controls button:hover:not(:disabled) { background: var(--surface-hover); }
+    .bottom-controls button:disabled { opacity: 0.38; cursor: not-allowed; }
 
-    /* ── Modal ── */
-    #modal {
-      display: none;
+    #cache-size { font-size: 11px; color: var(--text-dim); }
+    #stats { font-size: 11px; color: var(--text-dim); margin-left: auto; }
+
+    /* ── File viewer dialog ────────────────────────────────────────────────── */
+    /* Override browser default centering — make it a true full-screen overlay.
+       Must target [open] only so the closed dialog keeps display:none. */
+    dialog#modal[open] {
+      border: none;
+      margin: 0;
+      padding: 20px;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.9);
-      z-index: 1000;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      backdrop-filter: blur(4px);
-    }
-
-    #modal.open { display: flex; animation: fadeIn 0.2s ease-out; }
-
-    .modal-nav-btn {
-      position: absolute;
-      background: rgba(0, 0, 0, 0.5);
-      color: white;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 50%;
-      width: 44px;
-      height: 44px;
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 20px;
-      cursor: pointer;
-      z-index: 10;
-      transition: background 0.2s, transform 0.1s;
-      user-select: none;
-      -webkit-tap-highlight-color: transparent;
+      background: rgba(0,0,0,0.9);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
     }
-    .modal-nav-btn:hover { background: rgba(0, 0, 0, 0.8); }
-    .modal-nav-btn:active { transform: scale(0.9); }
-    #modal-nav-left { left: -16px; top: 50%; transform: translateY(-50%); }
-    #modal-nav-right { right: -16px; top: 50%; transform: translateY(-50%); }
-    #modal-nav-up { top: -16px; left: 50%; transform: translateX(-50%); }
-    #modal-nav-down { bottom: 20px; left: 50%; transform: translateX(-50%); }
-    #modal-nav-left:active { transform: translateY(-50%) scale(0.9); }
-    #modal-nav-right:active { transform: translateY(-50%) scale(0.9); }
-    #modal-nav-up:active { transform: translateX(-50%) scale(0.9); }
-    #modal-nav-down:active { transform: translateX(-50%) scale(0.9); }
-
-    @keyframes fadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
+    dialog#modal::backdrop { display: none; }
 
     #modal-content {
       background: var(--surface);
@@ -329,19 +407,58 @@
       box-shadow: 0 24px 48px rgba(0,0,0,0.5);
     }
 
+    .modal-nav-btn {
+      position: absolute;
+      background: rgba(0,0,0,0.5);
+      color: white;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 50%;
+      width: 44px; height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      cursor: pointer;
+      z-index: 10;
+      transition: background 0.2s, transform 0.1s;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .modal-nav-btn:hover { background: rgba(0,0,0,0.8); }
+    .modal-nav-btn:active { transform: scale(0.9); }
+    #modal-nav-left  { left: -16px;  top: 50%;  transform: translateY(-50%); }
+    #modal-nav-right { right: -16px; top: 50%;  transform: translateY(-50%); }
+    #modal-nav-up    { top: -16px;   left: 50%; transform: translateX(-50%); }
+    #modal-nav-down  { bottom: 20px; left: 50%; transform: translateX(-50%); }
+    #modal-nav-left:active  { transform: translateY(-50%) scale(0.9); }
+    #modal-nav-right:active { transform: translateY(-50%) scale(0.9); }
+    #modal-nav-up:active    { transform: translateX(-50%) scale(0.9); }
+    #modal-nav-down:active  { transform: translateX(-50%) scale(0.9); }
+
     #modal-img {
-      width: 100%;
-      flex: 1;
-      min-height: 0;
+      width: 100%; flex: 1; min-height: 0;
       object-fit: contain;
       background: #000;
       border-radius: 12px 12px 0 0;
     }
 
-      border-radius: 12px 12px 0 0;
+    #modal-close {
+      position: absolute;
+      top: -16px; right: -16px;
+      width: 32px; height: 32px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 18px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 1001;
     }
 
-    /* Modal footer - single row */
     #modal-footer {
       background: var(--surface);
       border-top: 1px solid var(--border);
@@ -350,7 +467,6 @@
       display: flex;
       align-items: center;
       padding: 10px 16px;
-      gap: 0;
       font-size: 12px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       white-space: nowrap;
@@ -364,10 +480,7 @@
       flex-shrink: 0;
       transition: opacity 0.15s;
     }
-    .modal-link:hover {
-      opacity: 0.7;
-      text-decoration: underline;
-    }
+    .modal-link:hover { opacity: 0.7; text-decoration: underline; }
 
     .modal-path {
       color: var(--text-dim);
@@ -376,18 +489,10 @@
       text-overflow: ellipsis;
       min-width: 0;
     }
-    .modal-path .modal-link {
-      color: var(--text-dim);
-    }
-    .modal-path .modal-link:hover {
-      color: var(--primary);
-    }
+    .modal-path .modal-link { color: var(--text-dim); }
+    .modal-path .modal-link:hover { color: var(--primary); }
 
-    .modal-sep {
-      color: var(--text-dim);
-      flex-shrink: 0;
-      opacity: 0.5;
-    }
+    .modal-sep { color: var(--text-dim); flex-shrink: 0; opacity: 0.5; }
 
     .modal-filename {
       color: var(--text-main);
@@ -405,52 +510,10 @@
       text-overflow: ellipsis;
       min-width: 0;
     }
-    .modal-datetime .modal-link {
-      color: var(--text-dim);
-    }
-    .modal-datetime .modal-link:hover {
-      color: var(--primary);
-    }
+    .modal-datetime .modal-link { color: var(--text-dim); }
+    .modal-datetime .modal-link:hover { color: var(--primary); }
 
-    .modal-meta {
-      color: var(--text-dim);
-      flex-shrink: 0;
-    }
-
-    /* Mobile: smaller padding */
-    @media (max-width: 600px) {
-      #modal-footer {
-        padding: 8px 12px;
-        font-size: 11px;
-      }
-
-      .modal-path {
-        max-width: 25%;
-      }
-
-      .modal-filename {
-        max-width: 35%;
-      }
-    }
-
-    #modal-close {
-      position: absolute;
-      top: -16px;
-      right: -16px;
-      width: 32px;
-      height: 32px;
-      background: var(--primary);
-      color: white;
-      border: none;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      font-size: 18px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      z-index: 1001;
-    }
+    .modal-meta { color: var(--text-dim); flex-shrink: 0; }
 
     #modal-caption {
       display: none;
@@ -465,189 +528,173 @@
       flex-shrink: 0;
     }
 
-    /* ── About Modal ── */
-    #about-modal {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.85);
-      z-index: 1000;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      backdrop-filter: blur(8px);
+    @media (max-width: 600px) {
+      #modal-footer { padding: 8px 12px; font-size: 11px; }
+      .modal-path { max-width: 25%; }
+      .modal-filename { max-width: 35%; }
     }
 
-    #about-modal.open { display: flex; animation: fadeIn 0.2s ease-out; }
+    /* ── PicoCSS-scoped dialogs ────────────────────────────────────────────── */
 
-    #about-content {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      max-width: 600px;
-      width: 100%;
-      max-height: 85dvh;
-      display: flex;
-      flex-direction: column;
-      position: relative;
-      box-shadow: 0 24px 48px rgba(0,0,0,0.5);
-      padding: 32px;
-      overflow-y: auto;
+    /* Override PicoCSS primary for the scoped sections */
+    .pico {
+      --pico-primary:        var(--primary);
+      --pico-primary-hover:  var(--primary-hover);
+      --pico-primary-focus:  rgba(88,166,255,0.25);
+      --pico-primary-inverse: #ffffff;
+      --pico-font-family:    -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      --pico-font-size:      14px;
     }
 
-    .about-section {
-      margin-bottom: 24px;
+    /* Size constraints on dialog articles */
+    dialog#settings-modal > article { max-width: 440px; }
+    dialog#about-modal    > article { max-width: 620px; }
+
+    /* Setting rows */
+    .setting-item { margin-bottom: 20px; }
+    .setting-item > label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
     }
 
+    .setting-hint {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 5px;
+      line-height: 1.5;
+    }
+
+    .setting-viewer-only {
+      padding: 10px 12px;
+      background: rgba(88,166,255,0.07);
+      border: 1px solid rgba(88,166,255,0.25);
+      border-radius: var(--radius);
+      margin-bottom: 20px;
+    }
+
+    /* About sections */
+    .about-section { margin-bottom: 20px; }
     .about-section h2 {
-      font-size: 16px;
+      font-size: 15px;
       color: var(--primary);
-      margin-bottom: 12px;
+      margin: 0 0 10px;
       display: flex;
       align-items: center;
       gap: 8px;
     }
 
-    .about-section p {
-      font-size: 14px;
-      line-height: 1.6;
-      color: var(--text-main);
-      margin-bottom: 8px;
-    }
+    /* Animations */
+    @keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+    dialog[open] > article { animation: fadeIn 0.18s ease-out; }
+    dialog#modal[open] > #modal-content { animation: fadeIn 0.18s ease-out; }
 
-    .about-section ul {
-      padding-left: 20px;
-      margin-bottom: 8px;
-    }
-
-    .about-section li {
-      font-size: 14px;
-      line-height: 1.6;
-      margin-bottom: 4px;
-    }
-
-    #about-close {
-      position: absolute;
-      top: 16px;
-      right: 16px;
-      background: transparent;
-      border: none;
-      color: var(--text-dim);
-      font-size: 20px;
-      cursor: pointer;
-    }
-
-    #about-close:hover { color: var(--text-main); }
-
-    @media (max-width: 600px) {
-      .brand h1 { font-size: 12px; }
-      button { padding: 6px 10px; font-size: 12px; }
-      #bottom-panel { padding: 10px; gap: 10px; }
-      #search-input { padding: 8px 32px 8px 10px; font-size: 13px; }
+    /* Light mode glass tweaks */
+    @media (prefers-color-scheme: light) {
+      nav#toolbar { box-shadow: 0 2px 16px rgba(0,0,0,0.10), 0 1px 0 rgba(255,255,255,0.9) inset; }
+      #bottom-panel { box-shadow: 0 2px 16px rgba(0,0,0,0.08); }
     }
   </style>
 </head>
 <body>
 
-<header>
-  <div class="brand">
-    <div style="display: flex; align-items: center; gap: 8px;">
-      <h1>Media Clusterer</h1>
-      <button id="about-btn" style="padding: 2px 6px; font-size: 14px; background: transparent; border: none; color: var(--text-dim); cursor: pointer;" title="About & Instructions">ⓘ</button>
-      <button id="settings-btn" style="padding: 2px 6px; font-size: 14px; background: transparent; border: none; color: var(--text-dim); cursor: pointer;" title="Settings">⚙️</button>
-    </div>
-    <div id="model-badge" style="font-size: 10px; color: var(--text-dim); background: var(--border); padding: 2px 6px; border-radius: 4px; display: flex; gap: 6px; align-items: center;">
-      <span id="device-badge">Local AI</span>
-      <span id="storage-badge" style="opacity: 0.6; border-left: 1px solid var(--text-dim); padding-left: 6px;"></span>
-      <span style="opacity: 0.6; border-left: 1px solid var(--text-dim); padding-left: 6px;" id="version-info"></span>
-    </div>
+<!-- ── Floating toolbar nav ──────────────────────────────────────────────── -->
+<nav id="toolbar">
+  <div class="tb-brand">
+    <span class="brand-title">MediaClusterer</span>
+    <button id="about-btn" class="icon-btn" title="About &amp; Instructions">ⓘ</button>
+    <button id="settings-btn" class="icon-btn" title="Settings">⚙️</button>
   </div>
-  <div class="controls">
-    <button id="load-model-btn" class="primary">
-      <span>📥</span> Load AI Models (~380 MB)
-    </button>
-    <button id="resume-btn" hidden disabled>
-      <span>🔄</span> Resume Session
-    </button>
-    <button id="open-btn" disabled title="Only compatible media files will be processed">
-      <span>📂</span> Open Media Folder
-    </button>
-    <button id="demo-btn" disabled title="Load 30 sample animal photos">
-      <span>🐾</span> Try Demo
-    </button>
-    <input type="file" id="file-input" multiple webkitdirectory accept="image/*,video/mp4,video/webm" hidden>
+  <div class="tb-actions">
+    <button id="load-model-btn" class="primary">📥 <span class="btn-label">Load AI Models (~380 MB)</span></button>
+    <button id="resume-btn" hidden disabled>🔄 <span class="btn-label">Resume Session</span></button>
+    <button id="open-btn" disabled title="Only compatible media files will be processed">📂 <span class="btn-label">Open Media</span></button>
+    <button id="demo-btn" disabled title="Load 30 sample animal photos">🐾 <span class="btn-label">Try Demo</span></button>
   </div>
-  <div class="controls" id="header-controls" style="display: none; margin-top: 4px;">
-    <button id="header-recenter-btn" disabled title="Recenter View" style="padding: 4px 8px; font-size: 12px;">⌖</button>
+  <div class="tb-meta" id="model-badge">
+    <span id="device-badge">Local AI</span>
+    <span id="storage-badge" style="display:none"></span>
+    <span id="version-info" style="display:none"></span>
   </div>
-  
-  <div id="progress-wrap"><div id="progress-bar"></div></div>
-  <div id="status">Loading library...</div>
-</header>
+  <input type="file" id="file-input" multiple webkitdirectory accept="image/*,video/mp4,video/webm" hidden>
+</nav>
 
-<div id="canvas-wrap">
-  <canvas id="canvas"></canvas>
+<!-- Progress + status row -->
+<div id="progress-wrap"><div id="progress-bar"></div></div>
+<div id="status">Loading library…</div>
+
+<!-- Floating recenter (shown when search panel hidden) -->
+<div id="header-controls" style="display:none">
+  <button id="header-recenter-btn" disabled title="Recenter View">⌖</button>
 </div>
 
-<div id="bottom-panel" style="display: none;">
+<!-- Full-viewport canvas -->
+<canvas id="canvas"></canvas>
+
+<!-- Floating bottom search panel -->
+<div id="bottom-panel" style="display:none">
   <div class="panel-row">
     <div id="search-wrap">
-      <input id="search-input" disabled placeholder="Describe photos or videos (e.g. 'surfing at sunset')">
+      <input id="search-input" type="search" disabled placeholder="Describe photos or videos (e.g. 'surfing at sunset')">
       <button id="search-clear-btn" hidden title="Clear search">✕</button>
     </div>
   </div>
-  <div class="panel-row" style="justify-content: space-between;">
-    <div class="utility-btns">
-      <button id="recenter-btn" disabled title="Recenter View">⌖ Recenter</button>
-      <button id="reset-btn" disabled title="Reset All Data">Reset</button>
-      <span id="cache-size" style="font-size: 11px; color: var(--text-dim); align-self: center;"></span>
-    </div>
-    <div id="stats" style="font-size: 11px; color: var(--text-dim);"></div>
+  <div class="panel-row bottom-controls">
+    <button id="recenter-btn" disabled title="Recenter View">⌖ Recenter</button>
+    <button id="reset-btn" disabled title="Reset All Data">Reset</button>
+    <span id="cache-size"></span>
+    <span id="stats"></span>
   </div>
 </div>
 
+<!-- Debug overlay -->
 <div id="debug-overlay" style="display:none; position:fixed; top:8px; right:8px; z-index:9999; background:rgba(0,0,0,0.88); color:#0f0; font:12px/1.6 monospace; padding:12px 16px; border-radius:8px; border:1px solid #0f04; max-width:340px; max-height:80vh; overflow-y:auto; white-space:pre;">
   <button id="debug-copy-btn" style="position:sticky;top:0;float:right;font-size:11px;padding:2px 8px;background:#0f02;border:1px solid #0f06;color:#0f0;border-radius:4px;cursor:pointer;margin-bottom:6px;">Copy</button>
 </div>
 
-<div id="modal">
+<!-- ── File viewer (native dialog, full-screen) ───────────────────────────── -->
+<dialog id="modal">
   <div id="modal-content">
-    <button id="modal-nav-up" class="modal-nav-btn" title="Up">▲</button>
-    <button id="modal-nav-left" class="modal-nav-btn" title="Left">◀</button>
+    <button id="modal-nav-up"    class="modal-nav-btn" title="Up">▲</button>
+    <button id="modal-nav-left"  class="modal-nav-btn" title="Left">◀</button>
     <button id="modal-nav-right" class="modal-nav-btn" title="Right">▶</button>
-    <button id="modal-nav-down" class="modal-nav-btn" title="Down">▼</button>
+    <button id="modal-nav-down"  class="modal-nav-btn" title="Down">▼</button>
     <button id="modal-close" title="Close">✕</button>
     <img id="modal-img" alt="Full view">
-    <video id="modal-video" controls loop style="width: 100%; flex: 1; min-height: 0; object-fit: contain; display: none; background: #000; border-radius: 12px 12px 0 0;"></video>
+    <video id="modal-video" controls loop style="width:100%;flex:1;min-height:0;object-fit:contain;display:none;background:#000;border-radius:12px 12px 0 0;"></video>
     <div id="modal-footer">
-      <span id="modal-up" class="modal-link" title="Up one level">↑</span>
+      <span id="modal-up"       class="modal-link" title="Up one level">↑</span>
       <span class="modal-sep"> · </span>
-      <span id="modal-path" class="modal-path"></span>
+      <span id="modal-path"     class="modal-path"></span>
       <span class="modal-sep"> · </span>
       <span id="modal-filename" class="modal-filename"></span>
       <span class="modal-sep"> · </span>
       <span id="modal-datetime" class="modal-datetime"></span>
       <span class="modal-sep"> · </span>
-      <span id="modal-meta" class="modal-meta"></span>
+      <span id="modal-meta"     class="modal-meta"></span>
     </div>
     <div id="modal-caption"></div>
   </div>
-</div>
+</dialog>
 
-<div id="about-modal" class="modal-overlay">
-  <div id="about-content" class="modal-box about-box">
-    <button id="about-close" class="close-x">✕</button>
-    
+<!-- ── About dialog (PicoCSS article) ───────────────────────────────────── -->
+<dialog id="about-modal">
+  <article class="pico">
+    <header>
+      <button id="about-close" rel="prev" aria-label="Close"></button>
+      <p><strong>📸 🎥 Media Clusterer</strong></p>
+    </header>
+
     <div class="about-section">
-      <h2>📸 🎥 Media Clusterer</h2>
-      <p>Visualize and search your photos & videos locally using AI. Everything runs in-browser — zero uploads, zero server.</p>
+      <p>Visualize and search your photos &amp; videos locally using AI. Everything runs in-browser — zero uploads, zero server.</p>
     </div>
 
     <div class="about-section">
       <h2>🧠 Built With</h2>
-      <ul style="list-style: none; padding: 0;">
-        <li>🤖 <a href="https://github.com/xenova/transformers.js" target="_blank" style="color: var(--primary); text-decoration: none;">Transformers.js</a> & <a href="https://www.nomic.ai/" target="_blank" style="color: var(--primary); text-decoration: none;">Nomic Embed</a> for AI</li>
-        <li>📊 <a href="https://github.com/saehm/DruidJS" target="_blank" style="color: var(--primary); text-decoration: none;">DruidJS</a> for projections (UMAP, t-SNE, PCA, etc.)</li>
+      <ul style="list-style:none;padding:0;">
+        <li>🤖 <a href="https://github.com/xenova/transformers.js" target="_blank">Transformers.js</a> &amp; <a href="https://www.nomic.ai/" target="_blank">Nomic Embed</a> for AI</li>
+        <li>📊 <a href="https://github.com/saehm/DruidJS" target="_blank">DruidJS</a> for projections (UMAP, t-SNE, PCA, etc.)</li>
         <li>⚡ WebGPU for GPU acceleration</li>
         <li>💾 IndexedDB for instant caching</li>
       </ul>
@@ -655,8 +702,8 @@
 
     <div class="about-section">
       <h2>🖱️ Controls</h2>
-      <ul style="list-style: none; padding: 0;">
-        <li><strong>Pan:</strong> Click & drag • <strong>Zoom:</strong> Scroll/pinch</li>
+      <ul style="list-style:none;padding:0;">
+        <li><strong>Pan:</strong> Click &amp; drag · <strong>Zoom:</strong> Scroll/pinch</li>
         <li><strong>Search:</strong> Type a description (requires text model)</li>
         <li><strong>Resume:</strong> Reload your last session</li>
       </ul>
@@ -664,110 +711,117 @@
 
     <div class="about-section">
       <h2>✅ Requirements</h2>
-      <ul style="list-style: none; padding: 0; font-size: 13px;">
+      <ul style="list-style:none;padding:0;font-size:13px;">
         <li>✓ Modern browser with <strong>WebGPU</strong> support (Chrome/Edge 113+)</li>
         <li>✓ GPU with ≥4GB VRAM recommended</li>
         <li>✓ ~380 MB for vision model + ~134 MB for text search (optional)</li>
-        <li>✓ <strong>Chrome AI</strong>: Chrome 138+ with <code>chrome://flags/#prompt-api-for-gemini-nano</code> enabled; uses 134 MB text model for embedding</li>
+        <li>✓ <strong>Chrome AI</strong>: Chrome 138+ with <code>chrome://flags/#prompt-api-for-gemini-nano</code> enabled</li>
         <li>✓ Media formats: JPG, PNG, WebP, MP4, WebM</li>
       </ul>
     </div>
 
-    <div style="text-align: center; margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px;">
-      <p style="font-size: 12px; color: var(--text-dim); margin-bottom: 8px;">
-        <a href="https://github.com/barakplasma/media-clusterer" target="_blank" style="color: var(--primary); text-decoration: none;">Source Code</a> • Built with ❤️ for Privacy
-      </p>
-    </div>
-  </div>
-</div>
+    <footer>
+      <small>
+        <a href="https://github.com/barakplasma/media-clusterer" target="_blank">Source Code</a>
+        · Built with ❤️ for Privacy
+      </small>
+    </footer>
+  </article>
+</dialog>
 
-<div id="settings-modal" class="modal-overlay">
-  <div id="settings-content" class="modal-box">
-    <button id="settings-close" class="close-x">✕</button>
-    <h2 style="color: var(--primary); margin-bottom: 24px; font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 12px;">⚙️ Settings</h2>
+<!-- ── Settings dialog (PicoCSS article) ────────────────────────────────── -->
+<dialog id="settings-modal">
+  <article class="pico">
+    <header>
+      <button id="settings-close" rel="prev" aria-label="Close"></button>
+      <p><strong>⚙️ Settings</strong></p>
+    </header>
 
-    <div class="setting-item" style="padding: 12px; background: rgba(88, 166, 255, 0.1); border: 1px solid var(--primary); border-radius: 8px;">
-      <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;">
-        <input type="checkbox" id="viewer-only-toggle"> <strong>Viewer Only Mode (No AI)</strong>
+    <div class="setting-viewer-only">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;margin:0;">
+        <input type="checkbox" id="viewer-only-toggle">
+        <strong>Viewer Only Mode (No AI)</strong>
       </label>
-      <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
+      <div class="setting-hint" style="margin-top:6px;">
         Skip AI model loading. Photos arranged in a grid by folder and date. Much faster, but no semantic search or smart clustering.
       </div>
     </div>
 
     <div class="setting-item">
       <label>Vision Model</label>
-      <select id="model-select" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; outline: none;">
+      <select id="model-select" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;">
         <option value="nomic">nomic-embed-vision (general · 380 MB)</option>
         <option value="sapiens2-fp16">Sapiens2-0.1B fp16 (human-centric · 229 MB)</option>
         <option value="sapiens2-int8">Sapiens2-0.1B int8 (human-centric · 116 MB)</option>
         <option value="sapiens2-fp32">Sapiens2-0.1B fp32 (human-centric · 458 MB)</option>
         <option value="chrome-ai">Chrome AI · Gemini Nano (built-in · 0 MB + 134 MB text)</option>
       </select>
-      <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">Sapiens2 is pretrained on 1B human images — better for photos of people. Chrome AI uses the browser's built-in Gemini Nano to describe images (Chrome 138+ only, requires <code>chrome://flags/#prompt-api-for-gemini-nano</code>). Takes effect on next model load. Switching requires a page reload.</div>
+      <div class="setting-hint">Sapiens2 is pretrained on 1B human images — better for photos of people. Chrome AI uses the browser's built-in Gemini Nano to describe images (Chrome 138+ only, requires <code>chrome://flags/#prompt-api-for-gemini-nano</code>). Takes effect on next model load. Switching requires a page reload.</div>
     </div>
 
     <div class="setting-item" id="chrome-ai-prompt-setting">
-      <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+      <label style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
         <span>Chrome AI Describe Prompt</span>
-        <button id="chrome-ai-prompt-reset" style="font-size: 11px; padding: 2px 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text-dim); border-radius: 4px; cursor: pointer;">Reset</button>
+        <button id="chrome-ai-prompt-reset" style="font-size:11px;padding:2px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text-dim);border-radius:4px;cursor:pointer;">Reset</button>
       </label>
-      <textarea id="chrome-ai-prompt" rows="4" style="width: 100%; margin-top: 6px; padding: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; font-size: 12px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
-      <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">The prompt sent to Gemini Nano to describe each image. Changes apply to new embeddings only (cached results are not re-processed). Only shown when Chrome AI is selected.</div>
+      <textarea id="chrome-ai-prompt" rows="4" style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;font-size:12px;resize:vertical;font-family:inherit;box-sizing:border-box;"></textarea>
+      <div class="setting-hint">The prompt sent to Gemini Nano to describe each image. Changes apply to new embeddings only. Only shown when Chrome AI is selected.</div>
     </div>
 
     <div class="setting-item">
-      <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+      <label style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
         <span>Random Sample Size</span>
-        <input type="number" id="random-sample-size" value="100" style="width: 72px; padding: 4px 6px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 4px; text-align: center;">
+        <input type="number" id="random-sample-size" value="100" style="width:72px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:4px;text-align:center;">
       </label>
-      <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">When a folder has more than this many files, load a random sample of that size. Set to 0 to load all files.</div>
+      <div class="setting-hint">When a folder has more than this many files, load a random sample of that size. Set to 0 to load all files.</div>
     </div>
 
     <div class="setting-item">
       <label>Thumbnail Density</label>
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 12px; color: var(--text-dim);">Tight</span>
-        <input type="range" id="density-slider" min="0.1" max="2.5" step="0.1" value="1.0" style="flex: 1;">
-        <span style="font-size: 12px; color: var(--text-dim);">Sparse</span>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:12px;color:var(--text-dim);">Tight</span>
+        <input type="range" id="density-slider" min="0.1" max="2.5" step="0.1" value="1.0" style="flex:1;accent-color:var(--primary);cursor:pointer;">
+        <span style="font-size:12px;color:var(--text-dim);">Sparse</span>
       </div>
     </div>
 
     <div class="setting-item">
       <label>Render Budget (FPS vs Quality)</label>
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 12px; color: var(--text-dim);">Fast</span>
-        <input type="range" id="draw-budget-slider" min="50" max="1000" step="50" value="400" style="flex: 1;">
-        <span style="font-size: 12px; color: var(--text-dim);">Best</span>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:12px;color:var(--text-dim);">Fast</span>
+        <input type="range" id="draw-budget-slider" min="50" max="1000" step="50" value="400" style="flex:1;accent-color:var(--primary);cursor:pointer;">
+        <span style="font-size:12px;color:var(--text-dim);">Best</span>
       </div>
     </div>
 
     <div class="setting-item">
-      <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;">
-        <input type="checkbox" id="enable-search-toggle"> Enable Text Search (requires 134MB model)
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="enable-search-toggle" style="width:16px;height:16px;accent-color:var(--primary);cursor:pointer;">
+        Enable Text Search (requires 134MB model)
       </label>
     </div>
 
     <div class="setting-item">
-      <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;">
-        <input type="checkbox" id="loop-toggle" checked> Loop Videos by Default
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="loop-toggle" checked style="width:16px;height:16px;accent-color:var(--primary);cursor:pointer;">
+        Loop Videos by Default
       </label>
     </div>
 
     <div class="setting-item">
-      <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+      <label style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
         <span>Embedding Batch Size</span>
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <input type="number" id="batch-size-slider" min="1" step="1" value="8" style="width: 56px; padding: 4px 6px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 4px; text-align: center;">
-          <button id="batch-size-auto-btn" style="font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); cursor: pointer;">Auto</button>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input type="number" id="batch-size-slider" min="1" step="1" value="8" style="width:56px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:4px;text-align:center;">
+          <button id="batch-size-auto-btn" style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text-dim);cursor:pointer;">Auto</button>
         </div>
       </label>
-      <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">Higher = faster embedding. ⚠️ Too high may crash on low-memory devices.</div>
+      <div class="setting-hint">Higher = faster embedding. ⚠️ Too high may crash on low-memory devices.</div>
     </div>
 
     <div class="setting-item">
       <label>Projection Method</label>
-      <select id="projection-select" style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text-main); border-radius: 6px; outline: none;">
+      <select id="projection-select" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;">
         <option value="UMAP">UMAP</option>
         <option value="TSNE">t-SNE</option>
         <option value="PCA">PCA</option>
@@ -779,64 +833,11 @@
       </select>
     </div>
 
-    <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); text-align: center;">
-      Settings persist automatically in your browser cache.
-    </div>
-  </div>
-</div>
-
-<style>
-  .modal-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.85);
-    z-index: 1000;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    backdrop-filter: blur(8px);
-  }
-  .modal-overlay.open { display: flex; animation: fadeIn 0.2s ease-out; }
-  .modal-box {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    max-width: 420px;
-    max-height: 90dvh;
-    overflow-y: auto;
-    width: 100%;
-    position: relative;
-    box-shadow: 0 24px 48px rgba(0,0,0,0.5);
-    padding: 32px;
-  }
-  .about-box { max-width: 600px; max-height: 85dvh; overflow-y: auto; }
-  .close-x {
-    position: absolute;
-    top: 16px;
-    right: 16px;
-    background: transparent;
-    border: none;
-    color: var(--text-dim);
-    font-size: 20px;
-    cursor: pointer;
-    transition: color 0.1s;
-  }
-  .close-x:hover { color: var(--text-main); }
-  .setting-item { margin-bottom: 24px; }
-  .setting-item label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 10px; color: var(--text-main); }
-  
-  input[type="range"] {
-    accent-color: var(--primary);
-    cursor: pointer;
-  }
-  input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--primary);
-    cursor: pointer;
-  }
-</style>
+    <footer>
+      <small>Settings persist automatically in your browser cache.</small>
+    </footer>
+  </article>
+</dialog>
 
 <script type="module" src="/src/app.ts"></script>
 </body>
