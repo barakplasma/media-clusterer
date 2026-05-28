@@ -245,9 +245,17 @@ function updateDeviceBadge() {
   }
 }
 
+function currentCachePrefix(): string {
+  const v = state.settings.modelVariant;
+  if (v === 'chrome-ai') return '@chrome-ai/';
+  if (!v.startsWith('sapiens2')) return '';
+  if (v === 'sapiens2-fp16') return '@sapiens2/';
+  return `@${v}/`;
+}
+
 async function refreshCacheSize() {
   try {
-    const { count } = await cacheStats();
+    const { count } = await cacheStats(currentCachePrefix());
     const text = count === 0 ? '' : `${count} embeddings`;
     if (cacheSizeEl) cacheSizeEl.textContent = text;
     if (storageBadgeEl) { storageBadgeEl.textContent = text; (storageBadgeEl as HTMLElement).style.display = text ? '' : 'none'; }

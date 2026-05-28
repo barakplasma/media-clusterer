@@ -119,9 +119,9 @@ export async function cachePutBatch(entries: [CacheKey, Float64Array][]): Promis
 }
 
 /**
- * Return count and total bytes of cached embeddings
+ * Return count and total bytes of cached embeddings, optionally filtered by key prefix.
  */
-export async function cacheStats(): Promise<{ count: number; bytes: number }> {
+export async function cacheStats(prefix?: string): Promise<{ count: number; bytes: number }> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
@@ -134,8 +134,11 @@ export async function cacheStats(): Promise<{ count: number; bytes: number }> {
     req.onsuccess = () => {
       const cursor = req.result;
       if (cursor) {
-        count++;
-        if (cursor.value instanceof Float64Array) bytes += cursor.value.byteLength;
+        const key = String(cursor.key);
+        if (!prefix || key.startsWith(prefix)) {
+          count++;
+          if (cursor.value instanceof Float64Array) bytes += cursor.value.byteLength;
+        }
         cursor.continue();
       } else {
         resolve({ count, bytes });
