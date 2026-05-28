@@ -96,7 +96,7 @@
       align-items: center;
       gap: 4px;
       width: max-content;
-      max-width: 96vw;
+      max-width: calc(100vw - 24px);
       padding: 5px 10px;
       border-radius: 9999px;
       border: 1px solid var(--border);
@@ -515,6 +515,23 @@
 
     .modal-meta { color: var(--text-dim); flex-shrink: 0; }
 
+    .modal-seq-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      border-radius: 6px;
+      width: 32px; height: 28px;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .modal-seq-btn:hover { background: var(--surface-hover); color: var(--primary); }
+    .modal-seq-btn:active { transform: scale(0.92); }
+
     #modal-caption {
       display: none;
       background: var(--surface);
@@ -664,6 +681,9 @@
     <img id="modal-img" alt="Full view">
     <video id="modal-video" controls loop style="width:100%;flex:1;min-height:0;object-fit:contain;display:none;background:#000;border-radius:12px 12px 0 0;"></video>
     <div id="modal-footer">
+      <button id="modal-prev-btn" class="modal-seq-btn" title="Previous (P)">&#x2039;</button>
+      <button id="modal-next-btn" class="modal-seq-btn" title="Next (N)">&#x203A;</button>
+      <span class="modal-sep" style="margin-right:4px;"> </span>
       <span id="modal-up"       class="modal-link" title="Up one level">↑</span>
       <span class="modal-sep"> · </span>
       <span id="modal-path"     class="modal-path"></span>
@@ -673,6 +693,10 @@
       <span id="modal-datetime" class="modal-datetime"></span>
       <span class="modal-sep"> · </span>
       <span id="modal-meta"     class="modal-meta"></span>
+      <span id="modal-gps-sep"  class="modal-sep" style="display:none"> · </span>
+      <a    id="modal-gps"      class="modal-link" target="_blank" rel="noopener" title="Open in OpenStreetMap" style="display:none"></a>
+      <span id="modal-exif-sep" class="modal-sep" style="display:none"> · </span>
+      <button id="modal-exif-btn" class="modal-link" style="display:none;background:none;border:none;padding:0;cursor:pointer;font:inherit;" title="Show EXIF details">EXIF ▸</button>
     </div>
     <div id="modal-caption"></div>
   </div>
@@ -803,6 +827,13 @@
 
     <div class="setting-item">
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="lazy-caption-toggle" style="width:16px;height:16px;accent-color:var(--primary);cursor:pointer;">
+        Generate captions when viewing images (requires Chrome AI)
+      </label>
+    </div>
+
+    <div class="setting-item">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
         <input type="checkbox" id="loop-toggle" checked style="width:16px;height:16px;accent-color:var(--primary);cursor:pointer;">
         Loop Videos by Default
       </label>
@@ -840,5 +871,19 @@
 </dialog>
 
 <script type="module" src="/src/app.ts"></script>
+
+<!-- ── EXIF detail dialog ──────────────────────────────────────────────────── -->
+<dialog id="exif-dialog" style="
+  background:var(--surface);color:var(--text-main);
+  border:1px solid var(--border);border-radius:12px;
+  padding:0;width:min(480px,94vw);max-height:80vh;
+  display:flex;flex-direction:column;overflow:hidden;
+">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);flex-shrink:0;">
+    <span style="font-weight:600;font-size:14px;">EXIF Data</span>
+    <button id="exif-dialog-close" style="background:none;border:none;color:var(--text-dim);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;">✕</button>
+  </div>
+  <div id="exif-dialog-body" style="overflow-y:auto;padding:14px 18px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;"></div>
+</dialog>
 </body>
 </html>

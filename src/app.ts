@@ -2,6 +2,8 @@
  * Main application logic for Media Clusterer
  */
 
+import './sentry';
+import exifr from '@modernized/exifr';
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
@@ -55,7 +57,6 @@ const THUMB_WORLD = 48;   // thumbnail size in world units
 const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const BATCH_SIZE = IS_MOBILE ? 4 : 16; // fallback before settings load
-const WRITE_BATCH = 20;
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const MAX_THUMBNAILS_CACHE = 2000; // Max decoded thumbnails to keep in memory (LRU)
 const MAX_FULL_IMAGES = 100; // Max full-res images to keep in memory (LRU)
@@ -89,6 +90,10 @@ const dom: DOMElements = {
   modalFilename: document.getElementById('modal-filename') as HTMLDivElement,
   modalDatetime: document.getElementById('modal-datetime') as HTMLDivElement,
   modalMeta: document.getElementById('modal-meta') as HTMLSpanElement,
+  modalGps: document.getElementById('modal-gps') as HTMLAnchorElement,
+  modalExifBtn: document.getElementById('modal-exif-btn') as HTMLButtonElement,
+  modalPrevBtn: document.getElementById('modal-prev-btn') as HTMLButtonElement,
+  modalNextBtn: document.getElementById('modal-next-btn') as HTMLButtonElement,
   searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
@@ -106,6 +111,7 @@ const dom: DOMElements = {
   enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
   viewerOnlyToggle: document.getElementById('viewer-only-toggle') as HTMLInputElement,
+  lazyCaptionToggle: document.getElementById('lazy-caption-toggle') as HTMLInputElement,
   batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
   batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
   randomSampleSizeInput: document.getElementById('random-sample-size') as HTMLInputElement,
@@ -139,6 +145,7 @@ const DEFAULT_SETTINGS: Settings = {
   randomSampleSize: 100,
   viewerOnly: false,
   modelVariant: 'sapiens2-fp16',
+  enableLazyCaption: false,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -184,8 +191,9 @@ let textExtractor: PipelineInstance | null = null;  // Text model (for search qu
 let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
-let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption generator (non-chrome-ai modes)
-let captionAbortController: AbortController | null = null; // Cancels in-flight lazy caption
+let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption for non-chrome-ai modes
+let captionAbortController: AbortController | null = null;   // Cancels in-flight lazy caption
+let captionDebounceTimer: ReturnType<typeof setTimeout> | null = null; // Debounce before starting AI
 let chromeAIAvailability: LanguageModelAvailability = 'unavailable'; // Set at page load
 let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
 
@@ -239,10 +247,8 @@ function updateDeviceBadge() {
 
 async function refreshCacheSize() {
   try {
-    const { count, bytes } = await cacheStats();
-    const mb = bytes / (1024 * 1024);
-    const display = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
-    const text = count === 0 ? '' : `${count} embeddings · ${display}`;
+    const { count } = await cacheStats();
+    const text = count === 0 ? '' : `${count} embeddings`;
     if (cacheSizeEl) cacheSizeEl.textContent = text;
     if (storageBadgeEl) { storageBadgeEl.textContent = text; (storageBadgeEl as HTMLElement).style.display = text ? '' : 'none'; }
   } catch {
@@ -1081,7 +1087,7 @@ async function loadModel(signal?: AbortSignal) {
     state.phase = 'model_ready';
     setProgress(0);
     dom.loadModelBtn.hidden = true;
-    dom.modelSelect.disabled = true;
+    dom.modelSelect.disabled = false;
     dom.openBtn.disabled = false;
     dom.openBtn.classList.add('primary');
     dom.demoBtn.disabled = false;
@@ -1116,7 +1122,7 @@ async function loadModel(signal?: AbortSignal) {
     state.phase = 'model_ready';
     setProgress(0);
     dom.loadModelBtn.hidden = true;
-    dom.modelSelect.disabled = true;
+    dom.modelSelect.disabled = false;
     dom.openBtn.disabled = false;
     dom.openBtn.classList.add('primary');
     dom.demoBtn.disabled = false;
@@ -1371,7 +1377,6 @@ async function embedAll(files: PhotoFile[]) {
           for (let m = 0; m < descs.length; m++) {
             const description = descs[m];
             const f = batch[missIndices[m]];
-            // Store caption indexed by global file index for modal display
             state.captions[i + missIndices[m]] = description;
             try { localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description); } catch (_) {}
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
@@ -1400,11 +1405,9 @@ async function embedAll(files: PhotoFile[]) {
       }
     }
 
-    let didFlush = false;
-    if (writeQueue.length >= WRITE_BATCH) {
+    if (writeQueue.length > 0) {
       await cachePutBatch(writeQueue);
       writeQueue.length = 0;
-      didFlush = true;
     }
 
     const done = Math.min(i + batchSize, files.length);
@@ -1425,9 +1428,10 @@ async function embedAll(files: PhotoFile[]) {
       const partialVecs = vectors.slice(0, done);
       const nNeigh = Math.max(2, Math.min(15, done - 1));
       runProjection(partialVecs, 'PCA', nNeigh, { silent: true })
-        .then(rawPts => {
+        .then(rawPts => spreadPointsAsync(rawPts))
+        .then(spreadPts => {
           if (state.phase === 'embedding') {
-            state.points = rawPts as unknown as Point[];
+            state.points = spreadPts;
             resizeCanvas();
             if (isFirst) fitCamera();
             scheduleRender();
@@ -1440,10 +1444,6 @@ async function embedAll(files: PhotoFile[]) {
     setStatus(`Embedding ${done} / ${files.length} images…${fromCache}`);
     setProgress(10 + (done / files.length) * 80); // 10% to 90%
     await yieldMain();
-  }
-
-  if (writeQueue.length > 0) {
-    await cachePutBatch(writeQueue);
   }
 
   refreshCacheSize();
@@ -1843,7 +1843,7 @@ dom.canvas.addEventListener('pointerup', (e) => {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) lastPinchDist = 0;
 
-  if (wasSingleTap && state.phase === 'done' && state.points.length) {
+  if (wasSingleTap && state.points.length) {
     const { cx, cy } = pointerPos(e);
     const wx = (cx - dom.canvas.width / 2) / camera.scale + camera.x;
     const wy = (cy - dom.canvas.height / 2) / camera.scale + camera.y;
@@ -2076,14 +2076,48 @@ const openFileModal = (index: number) => {
     dom.modalVideo.onloadedmetadata = updateSizeInfo;
   }
 
-  // Cancel any in-flight lazy caption from a previous modal open
+  // EXIF: full parse lazily; result feeds footer GPS and detail dialog
+  const gpsSep = document.getElementById('modal-gps-sep') as HTMLSpanElement;
+  const exifSep = document.getElementById('modal-exif-sep') as HTMLSpanElement;
+  const applyExif = (exif: Record<string, unknown> | null) => {
+    const lat = exif?.latitude as number | undefined;
+    const lon = exif?.longitude as number | undefined;
+    if (typeof lat === 'number' && typeof lon === 'number') {
+      dom.modalGps.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+      dom.modalGps.href = `https://www.openstreetmap.org/?mlat=${lat.toFixed(5)}&mlon=${lon.toFixed(5)}&zoom=15`;
+      dom.modalGps.style.display = '';
+      gpsSep.style.display = '';
+    } else {
+      dom.modalGps.style.display = 'none';
+      gpsSep.style.display = 'none';
+    }
+    const hasExif = exif && Object.keys(exif).length > 0;
+    dom.modalExifBtn.style.display = hasExif ? '' : 'none';
+    exifSep.style.display = hasExif ? '' : 'none';
+  };
+
+  if (f.exifData !== undefined) {
+    applyExif(f.exifData);
+  } else {
+    applyExif(null);
+    exifr.parse(f.file, { gps: true, exif: true, iptc: false, xmp: false, icc: false, jfif: false })
+      .then(exif => {
+        f.exifData = exif ?? null;
+        f.gps = (typeof exif?.latitude === 'number' && typeof exif?.longitude === 'number')
+          ? { latitude: exif.latitude as number, longitude: exif.longitude as number } : null;
+        if (state.activeFileIndex === index) applyExif(f.exifData ?? null);
+      }).catch(() => { f.exifData = null; f.gps = null; });
+  }
+
+  // Cancel any in-flight lazy caption and pending debounce from a previous modal open
   captionAbortController?.abort();
   captionAbortController = null;
+  if (captionDebounceTimer !== null) { clearTimeout(captionDebounceTimer); captionDebounceTimer = null; }
 
-  // Pre-populate from localStorage so captions survive page reload for all modes
+  // Warm from localStorage so captions survive page reload in all modes
   if (!state.captions[index]) {
-    const cached = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
-    if (cached) state.captions[index] = cached;
+    const stored = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
+    if (stored) state.captions[index] = stored;
   }
 
   const caption = state.captions[index] ?? null;
@@ -2091,23 +2125,34 @@ const openFileModal = (index: number) => {
     dom.modalCaption.textContent = caption;
     dom.modalCaption.style.display = 'block';
     dom.modalFooter.style.borderRadius = '0';
-  } else if (chromeAIAvailability !== 'unavailable' && state.settings.modelVariant !== 'chrome-ai') {
-    // Lazy caption: Chrome AI is available but we're in a different embedding mode
-    dom.modalCaption.textContent = 'Generating caption…';
-    dom.modalCaption.style.display = 'block';
-    dom.modalFooter.style.borderRadius = '0';
-    if (!lazyCaptionManager) lazyCaptionManager = new ChromeAISessionManager();
+  } else if (state.settings.enableLazyCaption && chromeAIAvailability !== 'unavailable') {
+    // Hide until the debounce fires — no flash when quickly flipping images
+    dom.modalCaption.style.display = 'none';
+    dom.modalFooter.style.borderRadius = '';
+
     const ac = new AbortController();
     captionAbortController = ac;
     const captureIndex = index;
     const captureFile = f;
-    (async () => {
+
+    captionDebounceTimer = setTimeout(async () => {
+      captionDebounceTimer = null;
+      if (ac.signal.aborted) return;
+
+      // Show placeholder now that the user has paused on this image
+      dom.modalCaption.textContent = 'Generating caption…';
+      dom.modalCaption.style.display = 'block';
+      dom.modalFooter.style.borderRadius = '0';
+
       try {
+        if (!lazyCaptionManager) lazyCaptionManager = new ChromeAISessionManager();
         const thumb = state.thumbnails[captureIndex];
         const img = thumb
           ? await createImageBitmap(thumb)
           : await createImageBitmap(captureFile.file, { resizeWidth: 128, resizeQuality: 'medium' });
-        const desc = await lazyCaptionManager!.describe(img, getChromeAIPrompt(), ac.signal);
+        if (ac.signal.aborted) { img.close(); return; }
+        const desc = await lazyCaptionManager.describe(img, getChromeAIPrompt(), ac.signal);
+        img.close();
         if (ac.signal.aborted) return;
         state.captions[captureIndex] = desc;
         try { localStorage.setItem(`@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`, desc); } catch (_) {}
@@ -2120,7 +2165,7 @@ const openFileModal = (index: number) => {
           dom.modalFooter.style.borderRadius = '';
         }
       }
-    })();
+    }, 400);
   } else {
     dom.modalCaption.style.display = 'none';
     dom.modalFooter.style.borderRadius = '';
@@ -2148,6 +2193,7 @@ dom.modal.addEventListener('close', () => {
   dom.modalVideo.pause();
   dom.modalVideo.src = '';
   state.activeFileIndex = null;
+  if (captionDebounceTimer !== null) { clearTimeout(captionDebounceTimer); captionDebounceTimer = null; }
   captionAbortController?.abort();
   captionAbortController = null;
 });
@@ -2158,6 +2204,71 @@ dom.modalClose.addEventListener('click', closeModal);
 dom.modal.addEventListener('click', (e) => {
   if (e.target === dom.modal) closeModal();
 });
+
+// ── EXIF detail dialog ───────────────────────────────────────────────────────
+const exifDialog = document.getElementById('exif-dialog') as HTMLDialogElement;
+const exifDialogBody = document.getElementById('exif-dialog-body') as HTMLDivElement;
+const exifDialogClose = document.getElementById('exif-dialog-close') as HTMLButtonElement;
+
+const EXIF_LABELS: Record<string, string> = {
+  Make: 'Camera Make', Model: 'Camera Model', LensModel: 'Lens',
+  FNumber: 'Aperture', ExposureTime: 'Shutter Speed', ISO: 'ISO',
+  FocalLength: 'Focal Length', FocalLengthIn35mmFormat: '35mm Equiv.',
+  DateTimeOriginal: 'Date Taken', CreateDate: 'Date Created',
+  ImageWidth: 'Width', ImageHeight: 'Height', Orientation: 'Orientation',
+  Flash: 'Flash', WhiteBalance: 'White Balance', ExposureMode: 'Exposure Mode',
+  ExposureProgram: 'Exposure Program', MeteringMode: 'Metering Mode',
+  ColorSpace: 'Color Space', Software: 'Software',
+  Artist: 'Artist', Copyright: 'Copyright',
+  latitude: 'Latitude', longitude: 'Longitude',
+};
+
+function formatExifValue(key: string, val: unknown): string {
+  if (val === null || val === undefined) return '';
+  if (key === 'FNumber') return `f/${val}`;
+  if (key === 'ExposureTime') {
+    const s = val as number;
+    return s < 1 ? `1/${Math.round(1 / s)}s` : `${s}s`;
+  }
+  if (key === 'FocalLength' || key === 'FocalLengthIn35mmFormat') return `${val}mm`;
+  if (key === 'latitude' || key === 'longitude') return (val as number).toFixed(6);
+  if (val instanceof Date) return val.toLocaleString();
+  return String(val);
+}
+
+dom.modalExifBtn.addEventListener('click', () => {
+  const idx = state.activeFileIndex;
+  if (idx === null) return;
+  const exif = state.files[idx]?.exifData;
+  if (!exif) return;
+
+  exifDialogBody.innerHTML = '';
+  const dl = document.createElement('dl');
+  dl.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0;';
+
+  for (const [key, label] of Object.entries(EXIF_LABELS)) {
+    if (!(key in exif) || exif[key] === null || exif[key] === undefined) continue;
+    const formatted = formatExifValue(key, exif[key]);
+    if (!formatted) continue;
+    const dt = document.createElement('dt');
+    dt.style.cssText = 'color:var(--text-dim);white-space:nowrap;';
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.style.cssText = 'margin:0;color:var(--text-main);word-break:break-all;';
+    dd.textContent = formatted;
+    dl.append(dt, dd);
+  }
+
+  if (!dl.children.length) {
+    exifDialogBody.textContent = 'No recognised EXIF fields found.';
+  } else {
+    exifDialogBody.appendChild(dl);
+  }
+  exifDialog.showModal();
+});
+
+exifDialogClose.addEventListener('click', () => exifDialog.close());
+exifDialog.addEventListener('click', (e) => { if (e.target === exifDialog) exifDialog.close(); });
 
 // ── Settings ────────────────────────────────────────────────────────────────
 const saveSettings = () => {
@@ -2173,6 +2284,7 @@ if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projection
 dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
+dom.lazyCaptionToggle.checked = state.settings.enableLazyCaption;
 dom.modelSelect.value = state.settings.modelVariant;
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
@@ -2299,15 +2411,12 @@ dom.enableSearchToggle.addEventListener('change', async () => {
 });
 
 dom.modelSelect.addEventListener('change', () => {
-  if (extractor || sapiens2Session || chromeAIManager) {
-    // Model already loaded — revert and inform user
-    dom.modelSelect.value = state.settings.modelVariant;
-    setStatus('Model already loaded. Reload the page to switch models.');
-    return;
-  }
   state.settings.modelVariant = dom.modelSelect.value as ModelVariant;
   saveSettings();
   updateChromeAIPromptVisibility();
+  if (extractor || sapiens2Session || chromeAIManager) {
+    window.location.reload();
+  }
 });
 
 dom.densitySlider.addEventListener('input', async () => {
@@ -2357,6 +2466,11 @@ dom.randomSampleSizeInput.addEventListener('input', () => {
 
 dom.loopToggle.addEventListener('change', () => {
   state.settings.loopVideos = dom.loopToggle.checked;
+  saveSettings();
+});
+
+dom.lazyCaptionToggle.addEventListener('change', () => {
+  state.settings.enableLazyCaption = dom.lazyCaptionToggle.checked;
   saveSettings();
 });
 
@@ -2616,9 +2730,6 @@ dom.resumeBtn.addEventListener('click', async () => {
     }
 
     state.thumbnails = initThumbnails(matched);
-    if (state.settings.modelVariant === 'chrome-ai') {
-      state.captions = matched.map(f => localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`));
-    }
     state.phase = 'done';
     resizeCanvas();
     fitCamera();
@@ -2760,6 +2871,29 @@ function navigateCanvas(dir: 'left' | 'right' | 'up' | 'down') {
   }
 }
 
+function navigateSequential(delta: 1 | -1) {
+  if (!state.points.length) return;
+  let currentIndex = state.activeFileIndex ?? state.lastViewedIndex;
+  if (currentIndex === null) {
+    let minD = Infinity;
+    for (let i = 0; i < state.points.length; i++) {
+      const dx = state.points[i][0] - camera.x, dy = state.points[i][1] - camera.y;
+      const d = dx * dx + dy * dy;
+      if (d < minD) { minD = d; currentIndex = i; }
+    }
+  }
+  if (currentIndex === null) return;
+  const sorted = Array.from({ length: state.files.length }, (_, i) => i)
+    .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
+  const pos = sorted.indexOf(currentIndex);
+  if (pos === -1) return;
+  const nextPos = (pos + delta + sorted.length) % sorted.length;
+  openFileModal(sorted[nextPos]);
+}
+
+dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1));
+dom.modalNextBtn.addEventListener('click', () => navigateSequential(1));
+
 document.addEventListener('keydown', (e) => {
   if (e.key === '`') {
     const open = debugOverlay.style.display === 'none';
@@ -2791,39 +2925,9 @@ document.addEventListener('keydown', (e) => {
 
   // n/p keys for sequential next/previous (in datetime order)
   const key = e.key.toLowerCase();
-  if ((key === 'n' || key === 'p') && state.phase === 'done' && state.files.length > 0 && document.activeElement?.tagName !== 'INPUT') {
+  if ((key === 'n' || key === 'p') && state.points.length > 0 && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')) {
     e.preventDefault();
-
-    // Determine current index
-    let currentIndex = state.activeFileIndex ?? state.lastViewedIndex;
-    if (currentIndex === null) {
-      // Find index closest to camera center
-      const pts = state.points;
-      let minD = Infinity;
-      for (let i = 0; i < pts.length; i++) {
-        const dx = pts[i][0] - camera.x;
-        const dy = pts[i][1] - camera.y;
-        const d = dx * dx + dy * dy;
-        if (d < minD) { minD = d; currentIndex = i; }
-      }
-    }
-
-    if (currentIndex !== null) {
-      // Get indices sorted by datetime (oldest first)
-      const sortedIndices = Array.from({ length: state.files.length }, (_, i) => i)
-        .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
-
-      // Find current position in datetime order
-      const currentPos = sortedIndices.indexOf(currentIndex);
-      if (currentPos !== -1) {
-        // Move to next/previous in datetime order
-        const nextPos = key === 'n'
-	  ? (currentPos + 1) % sortedIndices.length
-	  : (currentPos - 1 + sortedIndices.length) % sortedIndices.length;
-	const nextIndex = sortedIndices[nextPos];
-	openFileModal(nextIndex);
-      }
-    }
+    navigateSequential(key === 'n' ? 1 : -1);
   }
 });
 
