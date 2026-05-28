@@ -1339,6 +1339,10 @@ async function embedAll(files: PhotoFile[]) {
       if (cached[bi]) {
         vectors[i + bi] = cached[bi]!;
         cacheHits++;
+        if (isChromeAI) {
+          const f = batch[bi];
+          state.captions[i + bi] = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
+        }
       }
     }
 
@@ -1367,6 +1371,7 @@ async function embedAll(files: PhotoFile[]) {
             const description = descs[m];
             const f = batch[missIndices[m]];
             state.captions[i + missIndices[m]] = description;
+            try { localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description); } catch (_) {}
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
             const output = await textExtractor(`search_document: ${description}`, { pooling: 'mean', normalize: true });
             extracted.push(extractVector(output));
