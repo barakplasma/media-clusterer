@@ -185,6 +185,9 @@ let textExtractor: PipelineInstance | null = null;  // Text model (for search qu
 let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
+let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption for non-chrome-ai modes
+let captionAbortController: AbortController | null = null;   // Cancels in-flight lazy caption
+let captionDebounceTimer: ReturnType<typeof setTimeout> | null = null; // Debounce before starting AI
 let chromeAIAvailability: LanguageModelAvailability = 'unavailable'; // Set at page load
 let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
 
@@ -2073,11 +2076,63 @@ const openFileModal = (index: number) => {
     dom.modalVideo.onloadedmetadata = updateSizeInfo;
   }
 
+  // Cancel any in-flight lazy caption and pending debounce from a previous modal open
+  captionAbortController?.abort();
+  captionAbortController = null;
+  if (captionDebounceTimer !== null) { clearTimeout(captionDebounceTimer); captionDebounceTimer = null; }
+
+  // Warm from localStorage so captions survive page reload in all modes
+  if (!state.captions[index]) {
+    const stored = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
+    if (stored) state.captions[index] = stored;
+  }
+
   const caption = state.captions[index] ?? null;
   if (caption) {
     dom.modalCaption.textContent = caption;
     dom.modalCaption.style.display = 'block';
     dom.modalFooter.style.borderRadius = '0';
+  } else if (chromeAIAvailability !== 'unavailable') {
+    // Hide until the debounce fires — no flash when quickly flipping images
+    dom.modalCaption.style.display = 'none';
+    dom.modalFooter.style.borderRadius = '';
+
+    const ac = new AbortController();
+    captionAbortController = ac;
+    const captureIndex = index;
+    const captureFile = f;
+
+    captionDebounceTimer = setTimeout(async () => {
+      captionDebounceTimer = null;
+      if (ac.signal.aborted) return;
+
+      // Show placeholder now that the user has paused on this image
+      dom.modalCaption.textContent = 'Generating caption…';
+      dom.modalCaption.style.display = 'block';
+      dom.modalFooter.style.borderRadius = '0';
+
+      try {
+        if (!lazyCaptionManager) lazyCaptionManager = new ChromeAISessionManager();
+        const thumb = state.thumbnails[captureIndex];
+        const img = thumb
+          ? await createImageBitmap(thumb)
+          : await createImageBitmap(captureFile.file, { resizeWidth: 128, resizeQuality: 'medium' });
+        if (ac.signal.aborted) { img.close(); return; }
+        const desc = await lazyCaptionManager.describe(img, getChromeAIPrompt(), ac.signal);
+        img.close();
+        if (ac.signal.aborted) return;
+        state.captions[captureIndex] = desc;
+        try { localStorage.setItem(`@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`, desc); } catch (_) {}
+        if (state.activeFileIndex === captureIndex) {
+          dom.modalCaption.textContent = desc;
+        }
+      } catch {
+        if (!ac.signal.aborted && state.activeFileIndex === captureIndex) {
+          dom.modalCaption.style.display = 'none';
+          dom.modalFooter.style.borderRadius = '';
+        }
+      }
+    }, 400);
   } else {
     dom.modalCaption.style.display = 'none';
     dom.modalFooter.style.borderRadius = '';
@@ -2105,6 +2160,9 @@ dom.modal.addEventListener('close', () => {
   dom.modalVideo.pause();
   dom.modalVideo.src = '';
   state.activeFileIndex = null;
+  if (captionDebounceTimer !== null) { clearTimeout(captionDebounceTimer); captionDebounceTimer = null; }
+  captionAbortController?.abort();
+  captionAbortController = null;
 });
 
 dom.modalClose.addEventListener('click', closeModal);
