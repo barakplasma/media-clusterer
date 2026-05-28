@@ -2,6 +2,7 @@
  * Main application logic for Media Clusterer
  */
 
+import './sentry';
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
