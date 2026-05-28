@@ -12,6 +12,7 @@ export interface PhotoFile {
   lastModified: number;
   file: File;
   objectURL: string | null;
+  gps?: { latitude: number; longitude: number } | null; // null = parsed but no data
 }
 
 /** 2D point in world space */
@@ -90,6 +91,7 @@ export interface DOMElements {
   modalFilename: HTMLDivElement;
   modalDatetime: HTMLDivElement;
   modalMeta: HTMLSpanElement;
+  modalGps: HTMLAnchorElement;
   searchWrap: HTMLDivElement;
   searchInput: HTMLInputElement;
   searchClearBtn: HTMLButtonElement;

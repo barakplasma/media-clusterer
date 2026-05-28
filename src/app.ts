@@ -3,6 +3,7 @@
  */
 
 import './sentry';
+import exifr from 'exifr';
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
@@ -89,6 +90,7 @@ const dom: DOMElements = {
   modalFilename: document.getElementById('modal-filename') as HTMLDivElement,
   modalDatetime: document.getElementById('modal-datetime') as HTMLDivElement,
   modalMeta: document.getElementById('modal-meta') as HTMLSpanElement,
+  modalGps: document.getElementById('modal-gps') as HTMLAnchorElement,
   searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
@@ -2069,6 +2071,32 @@ const openFileModal = (index: number) => {
     dom.modalImg.onload = updateSizeInfo;
   } else {
     dom.modalVideo.onloadedmetadata = updateSizeInfo;
+  }
+
+  // GPS: read lazily from EXIF and cache on the PhotoFile object
+  const gpsSep = document.getElementById('modal-gps-sep') as HTMLSpanElement;
+  const showGps = (gps: { latitude: number; longitude: number } | null) => {
+    if (gps) {
+      const lat = gps.latitude.toFixed(5);
+      const lon = gps.longitude.toFixed(5);
+      dom.modalGps.textContent = `${lat}, ${lon}`;
+      dom.modalGps.href = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=15`;
+      dom.modalGps.style.display = '';
+      gpsSep.style.display = '';
+    } else {
+      dom.modalGps.style.display = 'none';
+      gpsSep.style.display = 'none';
+    }
+  };
+
+  if (f.gps !== undefined) {
+    showGps(f.gps);
+  } else {
+    showGps(null);
+    exifr.gps(f.file).then(gps => {
+      f.gps = gps ?? null;
+      if (state.activeFileIndex === index) showGps(f.gps);
+    }).catch(() => { f.gps = null; });
   }
 
   // Cancel any in-flight lazy caption and pending debounce from a previous modal open
