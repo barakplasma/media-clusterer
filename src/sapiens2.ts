@@ -81,6 +81,12 @@ async function loadModelBuffer(
     } catch { /* Cache API unavailable (private browsing, etc.) — fall through */ }
   }
 
+  // Request durable storage before writing a large model — on Android Chrome
+  // without this the browser may evict Cache Storage entries freely.
+  if (navigator.storage?.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
+
   const buffer = await downloadWithProgress(cfg.url, (pct) => onProgress?.(pct, false), signal);
 
   // Persist to cache in the background — don't block session creation.
@@ -89,7 +95,9 @@ async function loadModelBuffer(
       .then(cache => cache.put(cfg.url, new Response(buffer.slice(0), {
         headers: { 'Content-Type': 'application/octet-stream' },
       })))
-      .catch(() => {}); // best-effort; failure just means next visit re-downloads
+      .catch((err) => {
+        console.warn('Sapiens2 model cache write failed (quota?):', err);
+      });
   }
 
   return { buffer, fromCache: false };

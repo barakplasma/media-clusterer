@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Media Clusterer — Local AI</title>
   <meta name="description" content="Cluster and search your photos and videos locally using AI — no uploads, no server, fully private. Runs Nomic Embed Vision embeddings in-browser via WebGPU.">
   <meta property="og:type" content="website">
@@ -210,7 +210,7 @@
     /* ── Progress bar ──────────────────────────────────────────────────────── */
     #progress-wrap {
       position: fixed;
-      top: 56px;
+      top: max(56px, calc(env(safe-area-inset-top) + 44px));
       left: 50%;
       transform: translateX(-50%);
       width: min(360px, 88vw);
@@ -231,7 +231,7 @@
     /* ── Status text ───────────────────────────────────────────────────────── */
     #status {
       position: fixed;
-      top: 63px;
+      top: max(63px, calc(env(safe-area-inset-top) + 51px));
       left: 50%;
       transform: translateX(-50%);
       z-index: 99;
