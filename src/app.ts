@@ -2799,7 +2799,7 @@ document.addEventListener('keydown', (e) => {
 
   // n/p keys for sequential next/previous (in datetime order)
   const key = e.key.toLowerCase();
-  if ((key === 'n' || key === 'p') && state.phase === 'done' && state.files.length > 0 && document.activeElement?.tagName !== 'INPUT') {
+  if ((key === 'n' || key === 'p') && state.points.length > 0 && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')) {
     e.preventDefault();
 
     // Determine current index
