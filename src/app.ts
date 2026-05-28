@@ -1423,9 +1423,10 @@ async function embedAll(files: PhotoFile[]) {
       const partialVecs = vectors.slice(0, done);
       const nNeigh = Math.max(2, Math.min(15, done - 1));
       runProjection(partialVecs, 'PCA', nNeigh, { silent: true })
-        .then(rawPts => {
+        .then(rawPts => spreadPointsAsync(rawPts))
+        .then(spreadPts => {
           if (state.phase === 'embedding') {
-            state.points = rawPts as unknown as Point[];
+            state.points = spreadPts;
             resizeCanvas();
             if (isFirst) fitCamera();
             scheduleRender();
