@@ -211,6 +211,18 @@ const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
 const setProgress = (pct: number) => { dom.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`; };
 const yieldMain = () => new Promise(resolve => setTimeout(resolve, 0));
 
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+function showToast(message: string, level: 'info' | 'warn' | 'error' = 'info', durationMs = 5000) {
+  const el = document.getElementById('toast')!;
+  el.textContent = message;
+  el.className = `visible ${level === 'info' ? '' : level}`.trim();
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.classList.remove('visible');
+    toastTimer = null;
+  }, durationMs);
+}
+
 const cacheSizeEl = document.getElementById('cache-size');
 const deviceBadgeEl = document.getElementById('device-badge');
 const storageBadgeEl = document.getElementById('storage-badge');
@@ -1386,7 +1398,7 @@ async function embedAll(files: PhotoFile[]) {
             const description = descs[m];
             const f = batch[missIndices[m]];
             state.captions[i + missIndices[m]] = description;
-            try { localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description); } catch (_) {}
+            try { localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description); } catch (_) { console.warn('Caption cache full'); }
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
             const output = await textExtractor(`search_document: ${description}`, { pooling: 'mean', normalize: true });
             extracted.push(extractVector(output));
@@ -1529,7 +1541,7 @@ async function processFiles(files: PhotoFile[]) {
       localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
       localStorage.setItem('po_clusters', JSON.stringify([])); // No semantic clusters in viewer mode
       localStorage.setItem('po_viewerMode', 'true'); // Flag for resume handler
-    } catch (_) { /* quota exceeded */ }
+    } catch (_) { showToast('Session state couldn\'t be saved — browser storage is full. Results are visible but won\'t be resumable.', 'warn'); }
 
     dom.openBtn.disabled = false;
     return;
@@ -1576,7 +1588,7 @@ async function processFiles(files: PhotoFile[]) {
       localStorage.setItem('po_fileKeys', JSON.stringify(state.fileKeys));
       localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
       localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
-    } catch (_) { /* quota exceeded */ }
+    } catch (_) { showToast('Session state couldn\'t be saved — browser storage is full. Results are visible but won\'t be resumable.', 'warn'); }
 
   } catch (err) {
     console.error(err);
@@ -2163,7 +2175,7 @@ const openFileModal = (index: number) => {
         img.close();
         if (ac.signal.aborted) return;
         state.captions[captureIndex] = desc;
-        try { localStorage.setItem(`@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`, desc); } catch (_) {}
+        try { localStorage.setItem(`@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`, desc); } catch (_) { console.warn('Caption cache full'); }
         if (state.activeFileIndex === captureIndex) {
           dom.modalCaption.textContent = desc;
         }
@@ -2540,7 +2552,7 @@ if (dom.projectionSelect) {
         try {
           localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
           localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
-        } catch (_) {}
+        } catch (_) { showToast('Session state couldn\'t be saved — browser storage is full.', 'warn'); }
 
         fitCamera();
         scheduleRender();
@@ -2592,7 +2604,10 @@ if (_savedKeys) {
     const n = JSON.parse(_savedKeys).length;
     dom.resumeBtn.hidden = false;
     dom.resumeBtn.innerHTML = `🔄 <span class="btn-label">Resume last session (${n} images)</span>`;
-  } catch (_) { localStorage.clear(); }
+  } catch (_) {
+    localStorage.clear();
+    showToast('Previous session data was corrupted and has been cleared.', 'warn');
+  }
 }
 
 dom.loadModelBtn.addEventListener('click', async () => {

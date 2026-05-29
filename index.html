@@ -243,6 +243,34 @@
       text-align: center;
     }
 
+    /* ── Toast notification ─────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%) translateY(12px);
+      z-index: 9000;
+      background: color-mix(in srgb, var(--surface) 95%, transparent);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-size: 13px;
+      color: var(--text-main);
+      max-width: min(360px, calc(100vw - 32px));
+      box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    #toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+      pointer-events: auto;
+    }
+    #toast.warn { border-left-color: #f59e0b; }
+    #toast.error { border-left-color: #ef4444; }
+
     /* ── Header recenter (floating, bottom-right, when search disabled) ──── */
     #header-controls {
       position: fixed;
@@ -667,6 +695,8 @@
 </div>
 
 <!-- Debug overlay -->
+<div id="toast"></div>
+
 <div id="debug-overlay" style="display:none; position:fixed; top:8px; right:8px; z-index:9999; background:rgba(0,0,0,0.88); color:#0f0; font:12px/1.6 monospace; padding:12px 16px; border-radius:8px; border:1px solid #0f04; max-width:340px; max-height:80vh; overflow-y:auto; white-space:pre;">
   <button id="debug-copy-btn" style="position:sticky;top:0;float:right;font-size:11px;padding:2px 8px;background:#0f02;border:1px solid #0f06;color:#0f0;border-radius:4px;cursor:pointer;margin-bottom:6px;">Copy</button>
 </div>
