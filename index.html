@@ -748,9 +748,9 @@
     <div class="about-section">
       <h2>🧠 Built With</h2>
       <ul style="list-style:none;padding:0;">
-        <li>🤖 <a href="https://github.com/xenova/transformers.js" target="_blank">Transformers.js</a> &amp; <a href="https://www.nomic.ai/" target="_blank">Nomic Embed</a> for AI</li>
+        <li>🤖 <a href="https://github.com/huggingface/transformers.js" target="_blank">Transformers.js</a> (<a href="https://huggingface.co/docs/transformers.js/guides/webgpu" target="_blank">WebGPU guide</a>) &amp; <a href="https://www.nomic.ai/" target="_blank">Nomic Embed</a> for AI</li>
         <li>📊 <a href="https://github.com/saehm/DruidJS" target="_blank">DruidJS</a> for projections (UMAP, t-SNE, PCA, etc.)</li>
-        <li>⚡ WebGPU for GPU acceleration</li>
+        <li>⚡ <a href="https://webgpureport.org/" target="_blank">WebGPU</a> for GPU acceleration</li>
         <li>💾 IndexedDB for instant caching</li>
       </ul>
     </div>
@@ -893,6 +893,14 @@
         <option value="SAMMON">Sammon</option>
         <option value="TriMap">TriMap</option>
       </select>
+    </div>
+
+    <div class="setting-item">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="do-not-track-toggle" style="width:16px;height:16px;accent-color:var(--primary);cursor:pointer;">
+        Do Not Track (disable error reporting)
+      </label>
+      <div class="setting-hint">When enabled, no errors are sent to BugSink. Takes effect after page reload.</div>
     </div>
 
     <footer>
