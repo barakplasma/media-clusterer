@@ -2,7 +2,7 @@
  * Main application logic for Media Clusterer
  */
 
-import './sentry';
+import { captureException } from './sentry';
 import exifr from '@modernized/exifr';
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
@@ -259,7 +259,8 @@ async function refreshCacheSize() {
     const text = count === 0 ? '' : `${count} embeddings`;
     if (cacheSizeEl) cacheSizeEl.textContent = text;
     if (storageBadgeEl) { storageBadgeEl.textContent = text; (storageBadgeEl as HTMLElement).style.display = text ? '' : 'none'; }
-  } catch {
+  } catch (err) {
+    captureException(err);
     if (cacheSizeEl) cacheSizeEl.textContent = '';
     if (storageBadgeEl) { storageBadgeEl.textContent = ''; (storageBadgeEl as HTMLElement).style.display = 'none'; }
   }
@@ -534,6 +535,7 @@ async function searchImages(query: string) {
       if (dom.statsEl) dom.statsEl.textContent = statusMsg;
     }
   } catch (err) {
+    captureException(err);
     console.error('Search failed:', err);
     setStatus('Search failed. Check console.');
   } finally {
@@ -1406,6 +1408,7 @@ async function embedAll(files: PhotoFile[]) {
           writeQueue.push([keys[bi], vectors[idx]]);
         }
       } catch (err) {
+        captureException(err);
         console.warn('Batch inference failed, filling zeros:', (err as Error).message);
         for (const bi of missIndices) {
           vectors[i + bi] = new Float64Array(768);
@@ -1579,6 +1582,7 @@ async function processFiles(files: PhotoFile[]) {
     } catch (_) { /* quota exceeded */ }
 
   } catch (err) {
+    captureException(err);
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
   } finally {
@@ -1600,6 +1604,7 @@ async function run(dirHandle: DirectoryHandle, basePath: string = '') {
     // Update URL to show current folder (clears any filter state)
     updateURL({ type: 'folder', path: basePath });
   } catch (err) {
+    captureException(err);
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
     dom.openBtn.disabled = false;
@@ -2549,6 +2554,7 @@ if (dom.projectionSelect) {
         setStatus(`${state.files.length} media files — tap to view · ${k} clusters`);
         if (dom.statsEl) dom.statsEl.textContent = finalMsg;
       } catch (err) {
+        captureException(err);
         console.error('Reprojection error:', err);
         setStatus(`Reprojection failed: ${(err as Error).message}`);
       } finally {
@@ -2655,6 +2661,7 @@ dom.demoBtn.addEventListener('click', async () => {
       dom.demoBtn.disabled = false;
     }
   } catch (e) {
+    captureException(e);
     console.error('Demo load error:', e);
     setStatus('Error loading demo images');
     dom.demoBtn.disabled = false;
