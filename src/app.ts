@@ -9,6 +9,12 @@ import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
 import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2';
+import {
+  modelDownloadUrls,
+  buildUploadCache,
+  normalizeHost,
+  isDownloadError,
+} from './modelFallback';
 import { getChromeAIAvailability, ChromeAISessionManager, DEFAULT_DESCRIBE_PROMPT } from './chromeAI';
 import type { LanguageModelAvailability } from './chromeAI';
 import {
@@ -49,6 +55,14 @@ import type {
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 env.cacheDir = 'models';
+
+// Point Transformers.js at an alternative HuggingFace-compatible host when the
+// user has configured one (corporate proxy / Artifactory). Called at startup
+// and whenever the setting changes via the download-fallback modal.
+function applyModelEnv() {
+  const host = normalizeHost(state.settings.customModelHost);
+  env.remoteHost = host || 'https://huggingface.co';
+}
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'heic', 'heif']);
@@ -124,6 +138,15 @@ const dom: DOMElements = {
   chromeAIPromptInput: document.getElementById('chrome-ai-prompt') as HTMLTextAreaElement,
   chromeAIPromptReset: document.getElementById('chrome-ai-prompt-reset') as HTMLButtonElement,
   chromeAIPromptSetting: document.getElementById('chrome-ai-prompt-setting') as HTMLDivElement,
+  customModelHostInput: document.getElementById('custom-model-host') as HTMLInputElement,
+  modelFallbackModal: document.getElementById('model-fallback-modal') as HTMLDialogElement,
+  modelFallbackClose: document.getElementById('model-fallback-close') as HTMLButtonElement,
+  modelFallbackUrls: document.getElementById('model-fallback-urls') as HTMLUListElement,
+  modelFallbackFile: document.getElementById('model-fallback-file') as HTMLInputElement,
+  modelFallbackFileHint: document.getElementById('model-fallback-file-hint') as HTMLDivElement,
+  modelFallbackHost: document.getElementById('model-fallback-host') as HTMLInputElement,
+  modelFallbackCancel: document.getElementById('model-fallback-cancel') as HTMLButtonElement,
+  modelFallbackRetry: document.getElementById('model-fallback-retry') as HTMLButtonElement,
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
@@ -193,6 +216,9 @@ let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
 let modelDevice: 'webgpu' | 'cpu' | null = null;
 let modelFallbackReason: Sapiens2FallbackReason | undefined;
+// Set by the download-fallback modal when the user uploads a Sapiens2 .onnx;
+// consumed on the next loadModelOnce() and then cleared.
+let pendingSapiens2Buffer: ArrayBuffer | null = null;
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
 let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption for non-chrome-ai modes
@@ -263,8 +289,10 @@ function updateDeviceBadge() {
     deviceBadgeEl.textContent = 'WebGPU';
     deviceBadgeEl.style.color = '#4ade80';
   } else if (modelDevice === 'cpu') {
-    deviceBadgeEl.textContent = 'CPU';
+    deviceBadgeEl.innerHTML =
+      'CPU · <a href="https://webgpureport.org/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">check WebGPU</a>';
     deviceBadgeEl.style.color = '#fb923c';
+    deviceBadgeEl.title = 'WebGPU not available — running on CPU (slower). Open webgpureport.org to check your GPU support.';
   } else {
     deviceBadgeEl.textContent = 'Local AI';
     deviceBadgeEl.style.color = '';
@@ -2437,6 +2465,7 @@ dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
 dom.lazyCaptionToggle.checked = state.settings.enableLazyCaption;
 dom.doNotTrackToggle.checked = state.settings.doNotTrack;
+dom.customModelHostInput.value = state.settings.customModelHost;
 dom.modelSelect.value = state.settings.modelVariant;
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
@@ -2629,6 +2658,13 @@ dom.lazyCaptionToggle.addEventListener('change', () => {
 dom.doNotTrackToggle.addEventListener('change', () => {
   state.settings.doNotTrack = dom.doNotTrackToggle.checked;
   saveSettings();
+});
+
+dom.customModelHostInput.addEventListener('change', () => {
+  state.settings.customModelHost = normalizeHost(dom.customModelHostInput.value);
+  dom.customModelHostInput.value = state.settings.customModelHost;
+  saveSettings();
+  applyModelEnv();
 });
 
 dom.viewerOnlyToggle.addEventListener('change', async () => {

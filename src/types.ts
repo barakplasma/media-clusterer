@@ -45,6 +45,7 @@ export interface Settings {
   modelVariant: ModelVariant; // Vision embedding model to use
   enableLazyCaption: boolean; // Generate captions on modal open via Chrome AI (off by default)
   doNotTrack: boolean;       // Disable BugSink error reporting (default false)
+  customModelHost: string;   // Alternative HuggingFace-compatible host (corporate proxy/mirror); '' = huggingface.co
 }
 
 /** Application state */
