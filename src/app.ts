@@ -148,6 +148,7 @@ const DEFAULT_SETTINGS: Settings = {
   modelVariant: 'sapiens2-fp16',
   enableLazyCaption: false,
   doNotTrack: false,
+  customModelHost: '',
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -1044,8 +1045,8 @@ async function runProjection(vectors: Float64Array[], method: ProjectionMethod, 
 }
 
 // ── Model singleton ──────────────────────────────────────────────────────────
-async function loadModel(signal?: AbortSignal) {
-  if (extractor || sapiens2Session || chromeAIManager) return;
+async function loadModelOnce(signal?: AbortSignal) {
+  applyModelEnv();
   state.phase = 'loading_model';
   setStatus('Loading model…');
   setProgress(0);
@@ -1136,21 +1137,19 @@ async function loadModel(signal?: AbortSignal) {
 
   if (state.settings.modelVariant.startsWith('sapiens2')) {
     const sapiens2Variant = state.settings.modelVariant.split('-')[1] as Sapiens2Variant;
-    try {
-      const result = await loadSapiens2(sapiens2Variant, (pct, fromCache) => {
-        setProgress(pct);
-        setStatus(fromCache
-          ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
-          : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`);
-      }, signal);
-      sapiens2Session = result.session;
-      modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
-      modelFallbackReason = result.fallbackReason;
-    } catch (err) {
-      setStatus('Failed to load Sapiens2 model.');
-      dom.loadModelBtn.hidden = false;
-      throw err;
-    }
+    const result = await loadSapiens2(sapiens2Variant, (pct, fromCache) => {
+      setProgress(pct);
+      setStatus(fromCache
+        ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
+        : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`);
+    }, signal, {
+      host: state.settings.customModelHost,
+      uploadedBuffer: pendingSapiens2Buffer ?? undefined,
+    });
+    pendingSapiens2Buffer = null;
+    sapiens2Session = result.session;
+    modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
+    modelFallbackReason = result.fallbackReason;
     updateDeviceBadge();
     setProgress(100);
     state.phase = 'model_ready';
@@ -1196,14 +1195,8 @@ async function loadModel(signal?: AbortSignal) {
     console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
     setStatus('WebGPU unavailable — using CPU (slower)…');
     loaded.clear();
-    try {
-      extractor = await tryLoad('wasm');
-      modelDevice = 'cpu';
-    } catch (wasmErr) {
-      setStatus('Failed to load model. Your browser may not support WebGPU or WASM.');
-      dom.loadModelBtn.hidden = false;
-      throw wasmErr;
-    }
+    extractor = await tryLoad('wasm');
+    modelDevice = 'cpu';
   }
   updateDeviceBadge();
   setProgress(100);
@@ -1252,6 +1245,113 @@ async function loadModel(signal?: AbortSignal) {
     setStatus('Model ready — resume or open a folder.');
   } else {
     setStatus('Model ready — open a folder to start.');
+  }
+}
+
+// ── Model download fallback (offline / corporate proxy) ──────────────────────
+interface FallbackChoice {
+  host?: string;                  // alternative HuggingFace-compatible host (may be '')
+  sapiensBuffer?: ArrayBuffer;    // uploaded single .onnx (Sapiens2)
+  uploadFiles?: Map<string, File>; // uploaded model folder (Transformers.js)
+}
+
+// Show the recovery modal after a download failure. Resolves with the user's
+// choice, or null if they cancelled.
+function showModelFallbackModal(variant: string): Promise<FallbackChoice | null> {
+  const isSapiens = variant.startsWith('sapiens2');
+
+  // Visible, copy/curl-friendly direct links (always against the canonical Hub).
+  const urls = modelDownloadUrls(variant, {
+    includeText: variant === 'nomic' && state.settings.enableTextSearch,
+  });
+  dom.modelFallbackUrls.innerHTML = urls
+    .map((u) => `<li>🔗 <a href="${u}" target="_blank" rel="noopener">${u}</a></li>`)
+    .join('');
+
+  // Single .onnx for Sapiens2; whole model folder for Transformers.js repos.
+  if (isSapiens) {
+    dom.modelFallbackFile.accept = '.onnx';
+    dom.modelFallbackFile.removeAttribute('webkitdirectory');
+    dom.modelFallbackFile.multiple = false;
+    dom.modelFallbackFileHint.textContent = 'Select the single .onnx file listed above.';
+  } else {
+    dom.modelFallbackFile.removeAttribute('accept');
+    dom.modelFallbackFile.setAttribute('webkitdirectory', '');
+    dom.modelFallbackFile.multiple = true;
+    dom.modelFallbackFileHint.textContent =
+      'Select the downloaded model folder (must contain config.json and the onnx/ folder).';
+  }
+  dom.modelFallbackFile.value = '';
+  dom.modelFallbackHost.value = state.settings.customModelHost || '';
+  dom.modelFallbackModal.showModal();
+
+  return new Promise((resolve) => {
+    const finish = (choice: FallbackChoice | null) => {
+      dom.modelFallbackModal.close();
+      dom.modelFallbackRetry.onclick = null;
+      dom.modelFallbackCancel.onclick = null;
+      dom.modelFallbackClose.onclick = null;
+      dom.modelFallbackModal.oncancel = null;
+      resolve(choice);
+    };
+
+    dom.modelFallbackRetry.onclick = async () => {
+      const choice: FallbackChoice = { host: dom.modelFallbackHost.value.trim() };
+      const files = dom.modelFallbackFile.files;
+      if (files && files.length) {
+        if (isSapiens) {
+          choice.sapiensBuffer = await files[0].arrayBuffer();
+        } else {
+          const map = new Map<string, File>();
+          for (let i = 0; i < files.length; i++) {
+            map.set(files[i].webkitRelativePath || files[i].name, files[i]);
+          }
+          choice.uploadFiles = map;
+        }
+      }
+      finish(choice);
+    };
+    dom.modelFallbackCancel.onclick = () => finish(null);
+    dom.modelFallbackClose.onclick = () => finish(null);
+    dom.modelFallbackModal.oncancel = () => finish(null); // Esc key
+  });
+}
+
+function applyFallbackChoice(choice: FallbackChoice) {
+  if (choice.host !== undefined) {
+    state.settings.customModelHost = normalizeHost(choice.host);
+    saveSettings();
+    applyModelEnv();
+  }
+  if (choice.sapiensBuffer) pendingSapiens2Buffer = choice.sapiensBuffer;
+  if (choice.uploadFiles) {
+    // Feed the uploaded files to Transformers.js via a custom Web Cache.
+    (env as unknown as { useCustomCache: boolean }).useCustomCache = true;
+    (env as unknown as { customCache: unknown }).customCache = buildUploadCache(choice.uploadFiles);
+  }
+}
+
+// Load the model, retrying through the fallback modal on download failures.
+async function loadModel(signal?: AbortSignal) {
+  if (extractor || sapiens2Session || chromeAIManager) return;
+  while (true) {
+    try {
+      await loadModelOnce(signal);
+      return;
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError') throw err;
+      if (isDownloadError(err)) {
+        const choice = await showModelFallbackModal(state.settings.modelVariant);
+        if (choice) {
+          applyFallbackChoice(choice);
+          continue; // retry with the new host / uploaded files
+        }
+      }
+      setStatus(`Failed to load model: ${(err as Error).message}`);
+      dom.loadModelBtn.hidden = false;
+      dom.loadModelBtn.disabled = false;
+      throw err;
+    }
   }
 }
 
