@@ -182,19 +182,37 @@ export async function loadSapiens2(
     logSeverityLevel: 3,
   };
 
-  try {
-    const session = await ort.InferenceSession.create(modelBuffer, {
-      ...sessionOpts,
-      executionProviders: ['webgpu'],
-    });
-    return { session, device: 'webgpu', fromCache };
-  } catch {
-    const session = await ort.InferenceSession.create(modelBuffer, {
-      ...sessionOpts,
-      executionProviders: ['wasm'],
-    });
-    return { session, device: 'wasm', fromCache };
+  const webgpuOk = await (async () => {
+    const gpu = (navigator as any).gpu;
+    if (!gpu) return false;
+    try {
+      const adapter = await gpu.requestAdapter();
+      if (!adapter) return false;
+      // Skip WebGPU when the model exceeds the device's per-binding storage
+      // buffer limit — ORT binds the full weight tensor as one buffer, so
+      // exceeding the limit produces unrecoverable WebGPU validation errors
+      // that are not catchable via try/catch (they fire on the GPU timeline).
+      return modelBuffer.byteLength <= adapter.limits.maxStorageBufferBindingSize;
+    } catch {
+      return false;
+    }
+  })();
+
+  if (webgpuOk) {
+    try {
+      const session = await ort.InferenceSession.create(modelBuffer, {
+        ...sessionOpts,
+        executionProviders: ['webgpu'],
+      });
+      return { session, device: 'webgpu', fromCache };
+    } catch { /* fall through to WASM */ }
   }
+
+  const session = await ort.InferenceSession.create(modelBuffer, {
+    ...sessionOpts,
+    executionProviders: ['wasm'],
+  });
+  return { session, device: 'wasm', fromCache };
 }
 
 /**
