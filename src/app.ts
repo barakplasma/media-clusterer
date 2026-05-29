@@ -112,6 +112,7 @@ const dom: DOMElements = {
   projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
   viewerOnlyToggle: document.getElementById('viewer-only-toggle') as HTMLInputElement,
   lazyCaptionToggle: document.getElementById('lazy-caption-toggle') as HTMLInputElement,
+  doNotTrackToggle: document.getElementById('do-not-track-toggle') as HTMLInputElement,
   batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
   batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
   randomSampleSizeInput: document.getElementById('random-sample-size') as HTMLInputElement,
@@ -146,6 +147,7 @@ const DEFAULT_SETTINGS: Settings = {
   viewerOnly: false,
   modelVariant: 'sapiens2-fp16',
   enableLazyCaption: false,
+  doNotTrack: false,
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -2334,6 +2336,7 @@ dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
 dom.lazyCaptionToggle.checked = state.settings.enableLazyCaption;
+dom.doNotTrackToggle.checked = state.settings.doNotTrack;
 dom.modelSelect.value = state.settings.modelVariant;
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
@@ -2520,6 +2523,11 @@ dom.loopToggle.addEventListener('change', () => {
 
 dom.lazyCaptionToggle.addEventListener('change', () => {
   state.settings.enableLazyCaption = dom.lazyCaptionToggle.checked;
+  saveSettings();
+});
+
+dom.doNotTrackToggle.addEventListener('change', () => {
+  state.settings.doNotTrack = dom.doNotTrackToggle.checked;
   saveSettings();
 });
 

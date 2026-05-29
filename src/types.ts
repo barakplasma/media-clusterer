@@ -44,6 +44,7 @@ export interface Settings {
   viewerOnly: boolean;  // Skip AI models, arrange by folder/date instead
   modelVariant: ModelVariant; // Vision embedding model to use
   enableLazyCaption: boolean; // Generate captions on modal open via Chrome AI (off by default)
+  doNotTrack: boolean;       // Disable BugSink error reporting (default false)
 }
 
 /** Application state */
@@ -114,6 +115,7 @@ export interface DOMElements {
   projectionSelect: HTMLSelectElement;
   viewerOnlyToggle: HTMLInputElement;
   lazyCaptionToggle: HTMLInputElement;
+  doNotTrackToggle: HTMLInputElement;
   batchSizeInput: HTMLInputElement;
   batchSizeAutoBtn: HTMLButtonElement;
   randomSampleSizeInput: HTMLInputElement;
