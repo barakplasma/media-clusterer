@@ -2,7 +2,7 @@
  * Main application logic for Media Clusterer
  */
 
-import { captureException } from './sentry';
+import './sentry';
 import exifr from '@modernized/exifr';
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
@@ -260,7 +260,6 @@ async function refreshCacheSize() {
     if (cacheSizeEl) cacheSizeEl.textContent = text;
     if (storageBadgeEl) { storageBadgeEl.textContent = text; (storageBadgeEl as HTMLElement).style.display = text ? '' : 'none'; }
   } catch (err) {
-    captureException(err);
     if (cacheSizeEl) cacheSizeEl.textContent = '';
     if (storageBadgeEl) { storageBadgeEl.textContent = ''; (storageBadgeEl as HTMLElement).style.display = 'none'; }
   }
@@ -474,7 +473,7 @@ function lazyDecodeThumbnail(idx: number) {
   if (VIDEO_EXTS.has(ext)) {
     videoFrameLimit(() => extractVideoFrame(f.file))
       .then(result => { if (!result) thumbFailed.add(idx); done(result); })
-      .catch(() => { thumbFailed.add(idx); done(null); });
+      .catch((err) => { thumbFailed.add(idx); done(null); });
   } else {
     createImageBitmap(f.file, { resizeWidth: 96, resizeQuality: 'low' })
       .then(done).catch(() => done(null));
@@ -535,7 +534,6 @@ async function searchImages(query: string) {
       if (dom.statsEl) dom.statsEl.textContent = statusMsg;
     }
   } catch (err) {
-    captureException(err);
     console.error('Search failed:', err);
     setStatus('Search failed. Check console.');
   } finally {
@@ -1408,7 +1406,6 @@ async function embedAll(files: PhotoFile[]) {
           writeQueue.push([keys[bi], vectors[idx]]);
         }
       } catch (err) {
-        captureException(err);
         console.warn('Batch inference failed, filling zeros:', (err as Error).message);
         for (const bi of missIndices) {
           vectors[i + bi] = new Float64Array(768);
@@ -1448,7 +1445,7 @@ async function embedAll(files: PhotoFile[]) {
             scheduleRender();
           }
         })
-        .catch(() => {})
+        .catch((err) => { console.error('Progressive projection failed:', err); })
         .finally(() => { progressiveProjectionRunning = false; });
     }
     const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
@@ -1582,7 +1579,6 @@ async function processFiles(files: PhotoFile[]) {
     } catch (_) { /* quota exceeded */ }
 
   } catch (err) {
-    captureException(err);
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
   } finally {
@@ -1604,7 +1600,6 @@ async function run(dirHandle: DirectoryHandle, basePath: string = '') {
     // Update URL to show current folder (clears any filter state)
     updateURL({ type: 'folder', path: basePath });
   } catch (err) {
-    captureException(err);
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
     dom.openBtn.disabled = false;
@@ -2119,7 +2114,7 @@ const openFileModal = (index: number) => {
         f.gps = (typeof exif?.latitude === 'number' && typeof exif?.longitude === 'number')
           ? { latitude: exif.latitude as number, longitude: exif.longitude as number } : null;
         if (state.activeFileIndex === index) applyExif(f.exifData ?? null);
-      }).catch(() => { f.exifData = null; f.gps = null; });
+      }).catch((err) => { console.warn('EXIF parse failed:', err); f.exifData = null; f.gps = null; });
   }
 
   // Cancel any in-flight lazy caption and pending debounce from a previous modal open
@@ -2554,7 +2549,6 @@ if (dom.projectionSelect) {
         setStatus(`${state.files.length} media files — tap to view · ${k} clusters`);
         if (dom.statsEl) dom.statsEl.textContent = finalMsg;
       } catch (err) {
-        captureException(err);
         console.error('Reprojection error:', err);
         setStatus(`Reprojection failed: ${(err as Error).message}`);
       } finally {
@@ -2661,7 +2655,6 @@ dom.demoBtn.addEventListener('click', async () => {
       dom.demoBtn.disabled = false;
     }
   } catch (e) {
-    captureException(e);
     console.error('Demo load error:', e);
     setStatus('Error loading demo images');
     dom.demoBtn.disabled = false;
