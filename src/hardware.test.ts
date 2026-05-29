@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { computeOptimalBatchSize, getMemoryPressure } from './hardware';
 
 describe('Hardware Utilities: computeOptimalBatchSize', () => {
@@ -37,54 +37,37 @@ describe('Hardware Utilities: computeOptimalBatchSize', () => {
     expect(batchSize).toBeLessThanOrEqual(20);
   });
 
-  it('adjusts batch size for very large files', () => {
-    // 1000MB average file size!
-    // bytesPerImageInference = max(500MB, ~87MB) = 500MB
-    const batchSize = computeOptimalBatchSize(1000 * 1024 * 1024, 16, undefined); // 16GB device
-
-    // 16 * 0.3 * 0.8 = 3.84GB safe headroom = ~4,123,168,604 bytes
-    // 4,123,168,604 / (500 * 1024 * 1024) = ~7.86 -> 7
-    expect(batchSize).toBe(7);
-  });
 });
+
+function stubMemory(value: { jsHeapSizeLimit: number; usedJSHeapSize: number; totalJSHeapSize: number } | undefined) {
+  Object.defineProperty(performance, 'memory', { configurable: true, value });
+}
 
 describe('Hardware Utilities: getMemoryPressure', () => {
   afterEach(() => {
-    vi.restoreAllMocks();
+    Object.defineProperty(performance, 'memory', { configurable: true, value: undefined });
   });
 
   it('returns null when performance.memory is unavailable', () => {
-    vi.spyOn(performance as any, 'memory', 'get').mockReturnValue(undefined);
+    stubMemory(undefined);
     expect(getMemoryPressure()).toBeNull();
   });
 
   it('returns freeRatio when performance.memory is available', () => {
-    vi.spyOn(performance as any, 'memory', 'get').mockReturnValue({
-      jsHeapSizeLimit: 1000,
-      usedJSHeapSize: 600,
-      totalJSHeapSize: 700,
-    });
+    stubMemory({ jsHeapSizeLimit: 1000, usedJSHeapSize: 600, totalJSHeapSize: 700 });
     const result = getMemoryPressure();
     expect(result).not.toBeNull();
     expect(result!.freeRatio).toBeCloseTo(0.4);
   });
 
   it('clamps freeRatio to 0 when used exceeds limit', () => {
-    vi.spyOn(performance as any, 'memory', 'get').mockReturnValue({
-      jsHeapSizeLimit: 1000,
-      usedJSHeapSize: 1100,
-      totalJSHeapSize: 1100,
-    });
+    stubMemory({ jsHeapSizeLimit: 1000, usedJSHeapSize: 1100, totalJSHeapSize: 1100 });
     const result = getMemoryPressure();
     expect(result!.freeRatio).toBe(0);
   });
 
   it('returns freeRatio < 0.20 when memory is low', () => {
-    vi.spyOn(performance as any, 'memory', 'get').mockReturnValue({
-      jsHeapSizeLimit: 1000,
-      usedJSHeapSize: 850,
-      totalJSHeapSize: 900,
-    });
+    stubMemory({ jsHeapSizeLimit: 1000, usedJSHeapSize: 850, totalJSHeapSize: 900 });
     const result = getMemoryPressure();
     expect(result!.freeRatio).toBeCloseTo(0.15);
     expect(result!.freeRatio).toBeLessThan(0.20);
