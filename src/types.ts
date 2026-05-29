@@ -149,6 +149,7 @@ export interface Pipeline {
 declare global {
   const __GIT_BRANCH__: string;
   const __GIT_COMMIT__: string;
+  const __APP_VERSION__: string;
   interface Window {
     showDirectoryPicker?: (options?: {
       mode: 'read' | 'readwrite';
