@@ -154,11 +154,18 @@ async function decodeBitmap(src: File | ImageBitmap): Promise<{ bmp: ImageBitmap
  * Load a Sapiens2 ONNX model. Tries WebGPU first, falls back to WASM.
  * The model is cached in the browser's Cache API after the first download.
  */
+export type Sapiens2FallbackReason =
+  | 'no-webgpu'       // navigator.gpu absent
+  | 'no-adapter'      // requestAdapter() returned null
+  | 'vram-limit'      // adapter maxStorageBufferBindingSize < model size
+  | 'device-error'    // requestDevice() threw
+  | 'session-error';  // InferenceSession.create() threw on WebGPU
+
 export async function loadSapiens2(
   variant: Sapiens2Variant = 'fp16',
   onProgress?: Sapiens2ProgressCallback,
   signal?: AbortSignal,
-): Promise<{ session: Sapiens2Session; device: 'webgpu' | 'wasm'; fromCache: boolean }> {
+): Promise<{ session: Sapiens2Session; device: 'webgpu' | 'wasm'; fromCache: boolean; fallbackReason?: Sapiens2FallbackReason }> {
   ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
   ort.env.logLevel = 'error';
   // Use as many threads as the browser allows.
@@ -188,38 +195,42 @@ export async function loadSapiens2(
   // requesting the adapter's own maxStorageBufferBindingSize we get whatever
   // the GPU actually supports (often 2 GB+ on desktop), then hand it to ORT
   // before the first session is created.
-  const gpuDevice = await (async () => {
-    const gpu = (navigator as any).gpu;
-    if (!gpu) return null;
+  let fallbackReason: Sapiens2FallbackReason | undefined;
+
+  const gpuDevice = await (async (): Promise<GPUDevice | null> => {
+    if (!navigator.gpu) { fallbackReason = 'no-webgpu'; return null; }
+    let adapter: GPUAdapter | null;
     try {
-      const adapter = await gpu.requestAdapter();
-      if (!adapter) return null;
-      const maxStorageBufferBindingSize = adapter.limits.maxStorageBufferBindingSize;
-      return await adapter.requestDevice({
-        requiredLimits: { maxStorageBufferBindingSize },
-      });
-    } catch {
+      adapter = await navigator.gpu.requestAdapter();
+    } catch { fallbackReason = 'no-adapter'; return null; }
+    if (!adapter) { fallbackReason = 'no-adapter'; return null; }
+    const maxStorageBufferBindingSize = adapter.limits.maxStorageBufferBindingSize;
+    if (maxStorageBufferBindingSize < modelBuffer.byteLength) {
+      fallbackReason = 'vram-limit';
       return null;
     }
+    try {
+      return await adapter.requestDevice({ requiredLimits: { maxStorageBufferBindingSize } });
+    } catch { fallbackReason = 'device-error'; return null; }
   })();
 
   if (gpuDevice) {
     try {
       // ort.env.webgpu.device must be set before the first WebGPU session.
-      (ort.env.webgpu as any).device = gpuDevice;
+      ort.env.webgpu.device = gpuDevice;
       const session = await ort.InferenceSession.create(modelBuffer, {
         ...sessionOpts,
         executionProviders: ['webgpu'],
       });
       return { session, device: 'webgpu', fromCache };
-    } catch { /* fall through to WASM */ }
+    } catch { fallbackReason = 'session-error'; }
   }
 
   const session = await ort.InferenceSession.create(modelBuffer, {
     ...sessionOpts,
     executionProviders: ['wasm'],
   });
-  return { session, device: 'wasm', fromCache };
+  return { session, device: 'wasm', fromCache, fallbackReason };
 }
 
 /**

@@ -8,7 +8,7 @@ import { pipeline, env, RawImage } from '@huggingface/transformers';
 import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
-import type { Sapiens2Session, Sapiens2Variant } from './sapiens2';
+import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2';
 import { getChromeAIAvailability, ChromeAISessionManager, DEFAULT_DESCRIBE_PROMPT } from './chromeAI';
 import type { LanguageModelAvailability } from './chromeAI';
 import {
@@ -188,7 +188,8 @@ const camera: Camera = { x: 0, y: 0, scale: 1 };
 // ── Model singleton ──────────────────────────────────────────────────────────
 let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
-let modelDevice: 'webgpu' | 'cpu' | null = null;   // Actual device used for vision model
+let modelDevice: 'webgpu' | 'cpu' | null = null;
+let modelFallbackReason: Sapiens2FallbackReason | undefined;
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
 let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption for non-chrome-ai modes
@@ -237,9 +238,19 @@ function updateDeviceBadge() {
     const threads = navigator.hardwareConcurrency || 1;
     const mt = typeof SharedArrayBuffer !== 'undefined';
     const variant = state.settings.modelVariant.split('-')[1] ?? 'fp16';
-    const label = modelDevice === 'webgpu' ? `Sapiens2·${variant} · WebGPU`
-                : mt ? `Sapiens2·${variant} · ${threads}T`
-                : `Sapiens2·${variant} · CPU`;
+    let label: string;
+    if (modelDevice === 'webgpu') {
+      label = `Sapiens2·${variant} · WebGPU`;
+    } else {
+      const reason = modelFallbackReason === 'vram-limit'  ? 'VRAM limit'
+                   : modelFallbackReason === 'no-webgpu'   ? 'no WebGPU'
+                   : modelFallbackReason === 'no-adapter'  ? 'no GPU'
+                   : modelFallbackReason === 'device-error' ? 'GPU error'
+                   : modelFallbackReason === 'session-error' ? 'GPU error'
+                   : null;
+      const suffix = reason ? ` · WASM (${reason})` : mt ? ` · ${threads}T` : ' · CPU';
+      label = `Sapiens2·${variant}${suffix}`;
+    }
     deviceBadgeEl.textContent = label;
     deviceBadgeEl.style.color = modelDevice === 'webgpu' ? '#4ade80' : '#fb923c';
   } else if (chromeAIManager) {
@@ -1132,6 +1143,7 @@ async function loadModel(signal?: AbortSignal) {
       }, signal);
       sapiens2Session = result.session;
       modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
+      modelFallbackReason = result.fallbackReason;
     } catch (err) {
       setStatus('Failed to load Sapiens2 model.');
       dom.loadModelBtn.hidden = false;
