@@ -107,10 +107,13 @@ export function isDownloadError(err: unknown): boolean {
   if (!err) return false;
   const e = err as Error;
   if (e.name === 'AbortError') return false;
-  if (e.name === 'TypeError') return true; // fetch() network failure
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+  // Match by message, not by `TypeError` name: a bare TypeError is just as
+  // likely a programming bug during compute as a fetch() network failure.
+  // 'failed to fetch' (Chrome/Firefox) and 'load failed' (Safari) are the
+  // fetch network-error messages.
   const m = (e.message || '').toLowerCase();
-  return /download failed|failed to fetch|network ?error|could not locate|unauthorized|err_|http error|status (4|5)\d\d|getaddrinfo|enotfound|\b(403|404|429|500|502|503|504)\b/.test(
+  return /download failed|failed to fetch|load failed|network ?error|could not locate|unauthorized|err_|http error|status (4|5)\d\d|getaddrinfo|enotfound|\b(403|404|429|500|502|503|504)\b/.test(
     m,
   );
 }

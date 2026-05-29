@@ -1165,16 +1165,22 @@ async function loadModelOnce(signal?: AbortSignal) {
 
   if (state.settings.modelVariant.startsWith('sapiens2')) {
     const sapiens2Variant = state.settings.modelVariant.split('-')[1] as Sapiens2Variant;
-    const result = await loadSapiens2(sapiens2Variant, (pct, fromCache) => {
-      setProgress(pct);
-      setStatus(fromCache
-        ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
-        : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`);
-    }, signal, {
-      host: state.settings.customModelHost,
-      uploadedBuffer: pendingSapiens2Buffer ?? undefined,
-    });
-    pendingSapiens2Buffer = null;
+    let result: Awaited<ReturnType<typeof loadSapiens2>>;
+    try {
+      result = await loadSapiens2(sapiens2Variant, (pct, fromCache) => {
+        setProgress(pct);
+        setStatus(fromCache
+          ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
+          : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`);
+      }, signal, {
+        host: state.settings.customModelHost,
+        uploadedBuffer: pendingSapiens2Buffer ?? undefined,
+      });
+    } finally {
+      // Always release the uploaded buffer — even if loading threw — so it
+      // isn't held in memory or silently reused on the next attempt.
+      pendingSapiens2Buffer = null;
+    }
     sapiens2Session = result.session;
     modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
     modelFallbackReason = result.fallbackReason;
@@ -1320,24 +1326,37 @@ function showModelFallbackModal(variant: string): Promise<FallbackChoice | null>
       dom.modelFallbackCancel.onclick = null;
       dom.modelFallbackClose.onclick = null;
       dom.modelFallbackModal.oncancel = null;
+      dom.modelFallbackRetry.disabled = false;
+      dom.modelFallbackCancel.disabled = false;
       resolve(choice);
     };
 
     dom.modelFallbackRetry.onclick = async () => {
-      const choice: FallbackChoice = { host: dom.modelFallbackHost.value.trim() };
-      const files = dom.modelFallbackFile.files;
-      if (files && files.length) {
-        if (isSapiens) {
-          choice.sapiensBuffer = await files[0].arrayBuffer();
-        } else {
-          const map = new Map<string, File>();
-          for (let i = 0; i < files.length; i++) {
-            map.set(files[i].webkitRelativePath || files[i].name, files[i]);
+      // Reading uploaded files is async — disable both buttons so a double-click
+      // can't trigger redundant file reads or a second finish() call.
+      dom.modelFallbackRetry.disabled = true;
+      dom.modelFallbackCancel.disabled = true;
+      try {
+        const choice: FallbackChoice = { host: dom.modelFallbackHost.value.trim() };
+        const files = dom.modelFallbackFile.files;
+        if (files && files.length) {
+          if (isSapiens) {
+            choice.sapiensBuffer = await files[0].arrayBuffer();
+          } else {
+            const map = new Map<string, File>();
+            for (let i = 0; i < files.length; i++) {
+              map.set(files[i].webkitRelativePath || files[i].name, files[i]);
+            }
+            choice.uploadFiles = map;
           }
-          choice.uploadFiles = map;
         }
+        finish(choice);
+      } catch (err) {
+        // File read failed — re-enable so the user can try again.
+        dom.modelFallbackRetry.disabled = false;
+        dom.modelFallbackCancel.disabled = false;
+        showToast(`Couldn't read the uploaded file: ${(err as Error).message}`, 'error');
       }
-      finish(choice);
     };
     dom.modelFallbackCancel.onclick = () => finish(null);
     dom.modelFallbackClose.onclick = () => finish(null);
@@ -1362,6 +1381,12 @@ function applyFallbackChoice(choice: FallbackChoice) {
 // Load the model, retrying through the fallback modal on download failures.
 async function loadModel(signal?: AbortSignal) {
   if (extractor || sapiens2Session || chromeAIManager) return;
+  // Clear any custom upload cache from a previous run — env is a global
+  // singleton, so a stale cache would otherwise keep serving old files when the
+  // user switches models or starts a new session. A fresh upload re-sets it
+  // inside the retry loop below via applyFallbackChoice().
+  (env as unknown as { useCustomCache: boolean }).useCustomCache = false;
+  (env as unknown as { customCache: unknown }).customCache = null;
   while (true) {
     try {
       await loadModelOnce(signal);

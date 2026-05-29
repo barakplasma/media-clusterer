@@ -97,8 +97,11 @@ describe('buildUploadCache', () => {
 });
 
 describe('isDownloadError', () => {
-  it('treats network TypeErrors as download errors', () => {
+  it('matches the Chrome/Firefox fetch network message', () => {
     expect(isDownloadError(new TypeError('Failed to fetch'))).toBe(true);
+  });
+  it('matches the Safari fetch network message', () => {
+    expect(isDownloadError(new TypeError('Load failed'))).toBe(true);
   });
   it('matches our sapiens2 download error message', () => {
     expect(isDownloadError(new Error('Sapiens2 download failed: 404'))).toBe(true);
@@ -113,5 +116,10 @@ describe('isDownloadError', () => {
   });
   it('does not flag generic compute errors', () => {
     expect(isDownloadError(new Error('WebGPU device lost'))).toBe(false);
+  });
+  it('does not flag a bare TypeError from a programming bug', () => {
+    // e.g. "x is not a function" / "Cannot read properties of undefined"
+    expect(isDownloadError(new TypeError('foo.bar is not a function'))).toBe(false);
+    expect(isDownloadError(new TypeError("Cannot read properties of undefined (reading 'run')"))).toBe(false);
   });
 });
