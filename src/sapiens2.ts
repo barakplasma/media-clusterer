@@ -195,7 +195,6 @@ export async function loadSapiens2(
       const adapter = await gpu.requestAdapter();
       if (!adapter) return null;
       const maxStorageBufferBindingSize = adapter.limits.maxStorageBufferBindingSize;
-      if (modelBuffer.byteLength > maxStorageBufferBindingSize) return null;
       return await adapter.requestDevice({
         requiredLimits: { maxStorageBufferBindingSize },
       });
