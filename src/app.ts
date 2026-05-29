@@ -9,6 +9,12 @@ import * as druid from '@saehrimnir/druidjs';
 import pLimit from 'p-limit';
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
 import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2';
+import {
+  modelDownloadUrls,
+  buildUploadCache,
+  normalizeHost,
+  isDownloadError,
+} from './modelFallback';
 import { getChromeAIAvailability, ChromeAISessionManager, DEFAULT_DESCRIBE_PROMPT } from './chromeAI';
 import type { LanguageModelAvailability } from './chromeAI';
 import {
@@ -49,6 +55,14 @@ import type {
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 env.cacheDir = 'models';
+
+// Point Transformers.js at an alternative HuggingFace-compatible host when the
+// user has configured one (corporate proxy / Artifactory). Called at startup
+// and whenever the setting changes via the download-fallback modal.
+function applyModelEnv() {
+  const host = normalizeHost(state.settings.customModelHost);
+  env.remoteHost = host || 'https://huggingface.co';
+}
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'heic', 'heif']);
@@ -124,6 +138,15 @@ const dom: DOMElements = {
   chromeAIPromptInput: document.getElementById('chrome-ai-prompt') as HTMLTextAreaElement,
   chromeAIPromptReset: document.getElementById('chrome-ai-prompt-reset') as HTMLButtonElement,
   chromeAIPromptSetting: document.getElementById('chrome-ai-prompt-setting') as HTMLDivElement,
+  customModelHostInput: document.getElementById('custom-model-host') as HTMLInputElement,
+  modelFallbackModal: document.getElementById('model-fallback-modal') as HTMLDialogElement,
+  modelFallbackClose: document.getElementById('model-fallback-close') as HTMLButtonElement,
+  modelFallbackUrls: document.getElementById('model-fallback-urls') as HTMLUListElement,
+  modelFallbackFile: document.getElementById('model-fallback-file') as HTMLInputElement,
+  modelFallbackFileHint: document.getElementById('model-fallback-file-hint') as HTMLDivElement,
+  modelFallbackHost: document.getElementById('model-fallback-host') as HTMLInputElement,
+  modelFallbackCancel: document.getElementById('model-fallback-cancel') as HTMLButtonElement,
+  modelFallbackRetry: document.getElementById('model-fallback-retry') as HTMLButtonElement,
   };
 
   // ── Version Info ─────────────────────────────────────────────────────────────
@@ -148,6 +171,7 @@ const DEFAULT_SETTINGS: Settings = {
   modelVariant: 'sapiens2-fp16',
   enableLazyCaption: false,
   doNotTrack: false,
+  customModelHost: '',
 };
 
 const savedSettings = localStorage.getItem('mc_settings');
@@ -192,6 +216,9 @@ let extractor: PipelineInstance | null = null;      // Vision model (for images)
 let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
 let modelDevice: 'webgpu' | 'cpu' | null = null;
 let modelFallbackReason: Sapiens2FallbackReason | undefined;
+// Set by the download-fallback modal when the user uploads a Sapiens2 .onnx;
+// consumed on the next loadModelOnce() and then cleared.
+let pendingSapiens2Buffer: ArrayBuffer | null = null;
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
 let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption for non-chrome-ai modes
@@ -262,8 +289,10 @@ function updateDeviceBadge() {
     deviceBadgeEl.textContent = 'WebGPU';
     deviceBadgeEl.style.color = '#4ade80';
   } else if (modelDevice === 'cpu') {
-    deviceBadgeEl.textContent = 'CPU';
+    deviceBadgeEl.innerHTML =
+      'CPU · <a href="https://webgpureport.org/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">check WebGPU</a>';
     deviceBadgeEl.style.color = '#fb923c';
+    deviceBadgeEl.title = 'WebGPU not available — running on CPU (slower). Open webgpureport.org to check your GPU support.';
   } else {
     deviceBadgeEl.textContent = 'Local AI';
     deviceBadgeEl.style.color = '';
@@ -1044,8 +1073,8 @@ async function runProjection(vectors: Float64Array[], method: ProjectionMethod, 
 }
 
 // ── Model singleton ──────────────────────────────────────────────────────────
-async function loadModel(signal?: AbortSignal) {
-  if (extractor || sapiens2Session || chromeAIManager) return;
+async function loadModelOnce(signal?: AbortSignal) {
+  applyModelEnv();
   state.phase = 'loading_model';
   setStatus('Loading model…');
   setProgress(0);
@@ -1136,21 +1165,25 @@ async function loadModel(signal?: AbortSignal) {
 
   if (state.settings.modelVariant.startsWith('sapiens2')) {
     const sapiens2Variant = state.settings.modelVariant.split('-')[1] as Sapiens2Variant;
+    let result: Awaited<ReturnType<typeof loadSapiens2>>;
     try {
-      const result = await loadSapiens2(sapiens2Variant, (pct, fromCache) => {
+      result = await loadSapiens2(sapiens2Variant, (pct, fromCache) => {
         setProgress(pct);
         setStatus(fromCache
           ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
           : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`);
-      }, signal);
-      sapiens2Session = result.session;
-      modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
-      modelFallbackReason = result.fallbackReason;
-    } catch (err) {
-      setStatus('Failed to load Sapiens2 model.');
-      dom.loadModelBtn.hidden = false;
-      throw err;
+      }, signal, {
+        host: state.settings.customModelHost,
+        uploadedBuffer: pendingSapiens2Buffer ?? undefined,
+      });
+    } finally {
+      // Always release the uploaded buffer — even if loading threw — so it
+      // isn't held in memory or silently reused on the next attempt.
+      pendingSapiens2Buffer = null;
     }
+    sapiens2Session = result.session;
+    modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
+    modelFallbackReason = result.fallbackReason;
     updateDeviceBadge();
     setProgress(100);
     state.phase = 'model_ready';
@@ -1196,14 +1229,8 @@ async function loadModel(signal?: AbortSignal) {
     console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
     setStatus('WebGPU unavailable — using CPU (slower)…');
     loaded.clear();
-    try {
-      extractor = await tryLoad('wasm');
-      modelDevice = 'cpu';
-    } catch (wasmErr) {
-      setStatus('Failed to load model. Your browser may not support WebGPU or WASM.');
-      dom.loadModelBtn.hidden = false;
-      throw wasmErr;
-    }
+    extractor = await tryLoad('wasm');
+    modelDevice = 'cpu';
   }
   updateDeviceBadge();
   setProgress(100);
@@ -1252,6 +1279,132 @@ async function loadModel(signal?: AbortSignal) {
     setStatus('Model ready — resume or open a folder.');
   } else {
     setStatus('Model ready — open a folder to start.');
+  }
+}
+
+// ── Model download fallback (offline / corporate proxy) ──────────────────────
+interface FallbackChoice {
+  host?: string;                  // alternative HuggingFace-compatible host (may be '')
+  sapiensBuffer?: ArrayBuffer;    // uploaded single .onnx (Sapiens2)
+  uploadFiles?: Map<string, File>; // uploaded model folder (Transformers.js)
+}
+
+// Show the recovery modal after a download failure. Resolves with the user's
+// choice, or null if they cancelled.
+function showModelFallbackModal(variant: string): Promise<FallbackChoice | null> {
+  const isSapiens = variant.startsWith('sapiens2');
+
+  // Visible, copy/curl-friendly direct links (always against the canonical Hub).
+  const urls = modelDownloadUrls(variant, {
+    includeText: variant === 'nomic' && state.settings.enableTextSearch,
+  });
+  dom.modelFallbackUrls.innerHTML = urls
+    .map((u) => `<li>🔗 <a href="${u}" target="_blank" rel="noopener">${u}</a></li>`)
+    .join('');
+
+  // Single .onnx for Sapiens2; whole model folder for Transformers.js repos.
+  if (isSapiens) {
+    dom.modelFallbackFile.accept = '.onnx';
+    dom.modelFallbackFile.removeAttribute('webkitdirectory');
+    dom.modelFallbackFile.multiple = false;
+    dom.modelFallbackFileHint.textContent = 'Select the single .onnx file listed above.';
+  } else {
+    dom.modelFallbackFile.removeAttribute('accept');
+    dom.modelFallbackFile.setAttribute('webkitdirectory', '');
+    dom.modelFallbackFile.multiple = true;
+    dom.modelFallbackFileHint.textContent =
+      'Select the downloaded model folder (must contain config.json and the onnx/ folder).';
+  }
+  dom.modelFallbackFile.value = '';
+  dom.modelFallbackHost.value = state.settings.customModelHost || '';
+  dom.modelFallbackModal.showModal();
+
+  return new Promise((resolve) => {
+    const finish = (choice: FallbackChoice | null) => {
+      dom.modelFallbackModal.close();
+      dom.modelFallbackRetry.onclick = null;
+      dom.modelFallbackCancel.onclick = null;
+      dom.modelFallbackClose.onclick = null;
+      dom.modelFallbackModal.oncancel = null;
+      dom.modelFallbackRetry.disabled = false;
+      dom.modelFallbackCancel.disabled = false;
+      resolve(choice);
+    };
+
+    dom.modelFallbackRetry.onclick = async () => {
+      // Reading uploaded files is async — disable both buttons so a double-click
+      // can't trigger redundant file reads or a second finish() call.
+      dom.modelFallbackRetry.disabled = true;
+      dom.modelFallbackCancel.disabled = true;
+      try {
+        const choice: FallbackChoice = { host: dom.modelFallbackHost.value.trim() };
+        const files = dom.modelFallbackFile.files;
+        if (files && files.length) {
+          if (isSapiens) {
+            choice.sapiensBuffer = await files[0].arrayBuffer();
+          } else {
+            const map = new Map<string, File>();
+            for (let i = 0; i < files.length; i++) {
+              map.set(files[i].webkitRelativePath || files[i].name, files[i]);
+            }
+            choice.uploadFiles = map;
+          }
+        }
+        finish(choice);
+      } catch (err) {
+        // File read failed — re-enable so the user can try again.
+        dom.modelFallbackRetry.disabled = false;
+        dom.modelFallbackCancel.disabled = false;
+        showToast(`Couldn't read the uploaded file: ${(err as Error).message}`, 'error');
+      }
+    };
+    dom.modelFallbackCancel.onclick = () => finish(null);
+    dom.modelFallbackClose.onclick = () => finish(null);
+    dom.modelFallbackModal.oncancel = () => finish(null); // Esc key
+  });
+}
+
+function applyFallbackChoice(choice: FallbackChoice) {
+  if (choice.host !== undefined) {
+    state.settings.customModelHost = normalizeHost(choice.host);
+    saveSettings();
+    applyModelEnv();
+  }
+  if (choice.sapiensBuffer) pendingSapiens2Buffer = choice.sapiensBuffer;
+  if (choice.uploadFiles) {
+    // Feed the uploaded files to Transformers.js via a custom Web Cache.
+    (env as unknown as { useCustomCache: boolean }).useCustomCache = true;
+    (env as unknown as { customCache: unknown }).customCache = buildUploadCache(choice.uploadFiles);
+  }
+}
+
+// Load the model, retrying through the fallback modal on download failures.
+async function loadModel(signal?: AbortSignal) {
+  if (extractor || sapiens2Session || chromeAIManager) return;
+  // Clear any custom upload cache from a previous run — env is a global
+  // singleton, so a stale cache would otherwise keep serving old files when the
+  // user switches models or starts a new session. A fresh upload re-sets it
+  // inside the retry loop below via applyFallbackChoice().
+  (env as unknown as { useCustomCache: boolean }).useCustomCache = false;
+  (env as unknown as { customCache: unknown }).customCache = null;
+  while (true) {
+    try {
+      await loadModelOnce(signal);
+      return;
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError') throw err;
+      if (isDownloadError(err)) {
+        const choice = await showModelFallbackModal(state.settings.modelVariant);
+        if (choice) {
+          applyFallbackChoice(choice);
+          continue; // retry with the new host / uploaded files
+        }
+      }
+      setStatus(`Failed to load model: ${(err as Error).message}`);
+      dom.loadModelBtn.hidden = false;
+      dom.loadModelBtn.disabled = false;
+      throw err;
+    }
   }
 }
 
@@ -2337,6 +2490,7 @@ dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
 dom.lazyCaptionToggle.checked = state.settings.enableLazyCaption;
 dom.doNotTrackToggle.checked = state.settings.doNotTrack;
+dom.customModelHostInput.value = state.settings.customModelHost;
 dom.modelSelect.value = state.settings.modelVariant;
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
@@ -2529,6 +2683,13 @@ dom.lazyCaptionToggle.addEventListener('change', () => {
 dom.doNotTrackToggle.addEventListener('change', () => {
   state.settings.doNotTrack = dom.doNotTrackToggle.checked;
   saveSettings();
+});
+
+dom.customModelHostInput.addEventListener('change', () => {
+  state.settings.customModelHost = normalizeHost(dom.customModelHostInput.value);
+  dom.customModelHostInput.value = state.settings.customModelHost;
+  saveSettings();
+  applyModelEnv();
 });
 
 dom.viewerOnlyToggle.addEventListener('change', async () => {

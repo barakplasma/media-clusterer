@@ -45,6 +45,7 @@ export interface Settings {
   modelVariant: ModelVariant; // Vision embedding model to use
   enableLazyCaption: boolean; // Generate captions on modal open via Chrome AI (off by default)
   doNotTrack: boolean;       // Disable BugSink error reporting (default false)
+  customModelHost: string;   // Alternative HuggingFace-compatible host (corporate proxy/mirror); '' = huggingface.co
 }
 
 /** Application state */
@@ -127,6 +128,15 @@ export interface DOMElements {
   chromeAIPromptInput: HTMLTextAreaElement;
   chromeAIPromptReset: HTMLButtonElement;
   chromeAIPromptSetting: HTMLDivElement;
+  customModelHostInput: HTMLInputElement;
+  modelFallbackModal: HTMLDialogElement;
+  modelFallbackClose: HTMLButtonElement;
+  modelFallbackUrls: HTMLUListElement;
+  modelFallbackFile: HTMLInputElement;
+  modelFallbackFileHint: HTMLDivElement;
+  modelFallbackHost: HTMLInputElement;
+  modelFallbackCancel: HTMLButtonElement;
+  modelFallbackRetry: HTMLButtonElement;
 }
 
 /** IndexedDB cache entry */
