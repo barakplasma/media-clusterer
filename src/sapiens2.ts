@@ -182,24 +182,32 @@ export async function loadSapiens2(
     logSeverityLevel: 3,
   };
 
-  const webgpuOk = await (async () => {
+  // Try to pre-create a WebGPU device with the adapter's actual hardware limits.
+  // ORT's default device uses the WebGPU spec minimum (128 MB storage buffer
+  // binding size), which is too small for the fp16 model (~228 MB). By
+  // requesting the adapter's own maxStorageBufferBindingSize we get whatever
+  // the GPU actually supports (often 2 GB+ on desktop), then hand it to ORT
+  // before the first session is created.
+  const gpuDevice = await (async () => {
     const gpu = (navigator as any).gpu;
-    if (!gpu) return false;
+    if (!gpu) return null;
     try {
       const adapter = await gpu.requestAdapter();
-      if (!adapter) return false;
-      // Skip WebGPU when the model exceeds the device's per-binding storage
-      // buffer limit — ORT binds the full weight tensor as one buffer, so
-      // exceeding the limit produces unrecoverable WebGPU validation errors
-      // that are not catchable via try/catch (they fire on the GPU timeline).
-      return modelBuffer.byteLength <= adapter.limits.maxStorageBufferBindingSize;
+      if (!adapter) return null;
+      const maxStorageBufferBindingSize = adapter.limits.maxStorageBufferBindingSize;
+      if (modelBuffer.byteLength > maxStorageBufferBindingSize) return null;
+      return await adapter.requestDevice({
+        requiredLimits: { maxStorageBufferBindingSize },
+      });
     } catch {
-      return false;
+      return null;
     }
   })();
 
-  if (webgpuOk) {
+  if (gpuDevice) {
     try {
+      // ort.env.webgpu.device must be set before the first WebGPU session.
+      (ort.env.webgpu as any).device = gpuDevice;
       const session = await ort.InferenceSession.create(modelBuffer, {
         ...sessionOpts,
         executionProviders: ['webgpu'],
