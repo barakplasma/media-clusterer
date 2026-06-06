@@ -493,6 +493,7 @@ function lazyDecodeThumbnail(idx: number) {
   if (thumbDecoding.has(idx) || state.thumbnails[idx] || thumbFailed.has(idx)) return;
   thumbDecoding.add(idx);
   const f = state.files[idx];
+  if (!f) { thumbDecoding.delete(idx); return; }
 
   // Create objectURL lazily if needed (for large folders, don't create all upfront)
   if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
@@ -944,6 +945,7 @@ function render() {
 
         // Ensure objectURL exists
         const f = state.files[i];
+        if (!f) continue;
         if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
 
         fullImg = new Image();
@@ -1661,6 +1663,11 @@ async function processFiles(files: PhotoFile[]) {
   thumbDecoding.clear();
   thumbFailed.clear();
   thumbnailLRU.clear();
+
+  // Clear points immediately so render() exits early while state.files is being replaced.
+  // Without this, a render triggered during async embedding would iterate old point indices
+  // against the new (possibly shorter) files array, causing objectURL access on undefined.
+  state.points = [];
 
   state.files = files;
 
