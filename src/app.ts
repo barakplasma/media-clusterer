@@ -2139,6 +2139,7 @@ dom.searchClearBtn.addEventListener('click', () => {
 
 const openFileModal = (index: number) => {
   const f = state.files[index];
+  if (!f) return;
   const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
 
   if (VIDEO_EXTS.has(ext)) {
