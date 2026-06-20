@@ -42,6 +42,7 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         id: deploy
+        continue-on-error: true
         run: |
           OUTPUT=$(npx wrangler pages deploy dist --project-name media-clusterer --branch "$DEPLOY_BRANCH" 2>&1)
           echo "$OUTPUT"
@@ -55,7 +56,7 @@ jobs:
           DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
       - name: Comment on PR with deployment URL
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.deploy.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
