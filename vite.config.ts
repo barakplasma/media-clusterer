@@ -30,6 +30,10 @@ const excludeOrtWasm = {
 };
 
 export default defineConfig({
+  // GitHub Pages serves this project site under /media-clusterer/, so the build
+  // for that target sets BASE_PATH. Cloudflare Pages (and local dev) serve from
+  // the root, where BASE_PATH is unset and base falls back to '/'.
+  base: process.env.BASE_PATH || '/',
   define: {
     __GIT_BRANCH__: JSON.stringify(gitBranch),
     __GIT_COMMIT__: JSON.stringify(gitCommit),

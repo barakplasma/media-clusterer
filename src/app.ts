@@ -2154,7 +2154,10 @@ const openFileModal = (index: number) => {
     dom.modalVideo.pause();
     dom.modalVideo.src = '';
     dom.modalImg.style.display = 'block';
-    dom.modalImg.src = f.objectURL || '';
+    // Ensure objectURL exists (created lazily during thumbnail decode); without
+    // this, navigating (n/p) to an image not yet rendered on-canvas shows blank.
+    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
+    dom.modalImg.src = f.objectURL;
   }
 
   // Populate modal footer with metadata
@@ -3111,12 +3114,35 @@ function navigateSequential(delta: 1 | -1) {
     }
   }
   if (currentIndex === null) return;
-  const sorted = Array.from({ length: state.files.length }, (_, i) => i)
-    .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
-  const pos = sorted.indexOf(currentIndex);
+
+  // Viewer mode already arranges state.files in visual order (folder then date),
+  // so currentIndex is also its position — step directly in O(1), no sort/alloc.
+  if (state.settings.viewerOnly) {
+    const len = state.files.length;
+    openFileModal((currentIndex + delta + len) % len);
+    return;
+  }
+
+  // AI mode: step in chronological (lastModified) order. Cache the sorted order
+  // and rebuild it only when the state.files reference changes, so repeated n/p
+  // presses don't re-sort on every step.
+  const order = getChronologicalOrder();
+  const pos = order.indexOf(currentIndex);
   if (pos === -1) return;
-  const nextPos = (pos + delta + sorted.length) % sorted.length;
-  openFileModal(sorted[nextPos]);
+  const nextPos = (pos + delta + order.length) % order.length;
+  openFileModal(order[nextPos]);
+}
+
+let chronologicalOrderCache: number[] | null = null;
+let chronologicalOrderFilesRef: PhotoFile[] | null = null;
+function getChronologicalOrder(): number[] {
+  if (chronologicalOrderCache && chronologicalOrderFilesRef === state.files) {
+    return chronologicalOrderCache;
+  }
+  chronologicalOrderFilesRef = state.files;
+  chronologicalOrderCache = Array.from({ length: state.files.length }, (_, i) => i)
+    .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
+  return chronologicalOrderCache;
 }
 
 dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1));
