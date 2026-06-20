@@ -3114,17 +3114,35 @@ function navigateSequential(delta: 1 | -1) {
     }
   }
   if (currentIndex === null) return;
+
   // Viewer mode already arranges state.files in visual order (folder then date),
-  // so step through that order directly. In AI mode state.files is in directory
-  // order, so fall back to chronological (lastModified) stepping.
-  const order = state.settings.viewerOnly
-    ? Array.from({ length: state.files.length }, (_, i) => i)
-    : Array.from({ length: state.files.length }, (_, i) => i)
-        .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
+  // so currentIndex is also its position — step directly in O(1), no sort/alloc.
+  if (state.settings.viewerOnly) {
+    const len = state.files.length;
+    openFileModal((currentIndex + delta + len) % len);
+    return;
+  }
+
+  // AI mode: step in chronological (lastModified) order. Cache the sorted order
+  // and rebuild it only when the state.files reference changes, so repeated n/p
+  // presses don't re-sort on every step.
+  const order = getChronologicalOrder();
   const pos = order.indexOf(currentIndex);
   if (pos === -1) return;
   const nextPos = (pos + delta + order.length) % order.length;
   openFileModal(order[nextPos]);
+}
+
+let chronologicalOrderCache: number[] | null = null;
+let chronologicalOrderFilesRef: PhotoFile[] | null = null;
+function getChronologicalOrder(): number[] {
+  if (chronologicalOrderCache && chronologicalOrderFilesRef === state.files) {
+    return chronologicalOrderCache;
+  }
+  chronologicalOrderFilesRef = state.files;
+  chronologicalOrderCache = Array.from({ length: state.files.length }, (_, i) => i)
+    .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
+  return chronologicalOrderCache;
 }
 
 dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1));
