@@ -21,6 +21,7 @@ import {
   l2normalize,
   extractVector,
   extractBatchedVectors,
+  makeCacheKey,
 } from './embeddings';
 import {
   openDB,
@@ -1434,6 +1435,35 @@ async function resizeForEmbedding(file: File): Promise<RawImage | null> {
   }
 }
 
+// Batch-read cached embeddings using the folder-independent key (basename based),
+// falling back to the legacy full-path key for entries written by older builds.
+// Returns the vectors aligned to `files`, the new keys (for writing fresh misses),
+// and any [newKey, vector] pairs that should be migrated to the new key format so
+// future parent/child opens hit directly.
+async function readCachedEmbeddings(
+  files: PhotoFile[],
+  cachePrefix: string,
+): Promise<{ keys: CacheKey[]; cached: (Float64Array | null)[]; migrate: [CacheKey, Float64Array][] }> {
+  const keys = files.map(f => `${cachePrefix}${makeCacheKey(f)}` as CacheKey);
+  const cached = await cacheGetBatch(keys);
+  const migrate: [CacheKey, Float64Array][] = [];
+
+  // Only files with a path prefix can differ from the legacy full-path key.
+  const legacyIdx = files
+    .map((f, i) => (!cached[i] && f.name.includes('/')) ? i : -1)
+    .filter(i => i >= 0);
+  if (legacyIdx.length > 0) {
+    const legacyKeys = legacyIdx.map(i =>
+      `${cachePrefix}${files[i].name}:${files[i].size}:${files[i].lastModified}` as CacheKey);
+    const legacy = await cacheGetBatch(legacyKeys);
+    for (let m = 0; m < legacyIdx.length; m++) {
+      const v = legacy[m];
+      if (v) { cached[legacyIdx[m]] = v; migrate.push([keys[legacyIdx[m]], v]); }
+    }
+  }
+  return { keys, cached, migrate };
+}
+
 // ── Embedding loop ───────────────────────────────────────────────────────────
 async function embedAll(files: PhotoFile[]) {
   state.phase = 'embedding';
@@ -1455,10 +1485,11 @@ async function embedAll(files: PhotoFile[]) {
 
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, Math.min(i + batchSize, files.length));
-    const keys = batch.map(f => `${cachePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
 
-    // One IDB transaction for the whole batch
-    const cached = await cacheGetBatch(keys);
+    // One IDB transaction for the whole batch, with legacy-key fallback so
+    // embeddings cached by older builds (full-path keys) are reused and migrated.
+    const { keys, cached, migrate } = await readCachedEmbeddings(batch, cachePrefix);
+    if (migrate.length > 0) writeQueue.push(...migrate);
 
     // Resolve inputs for cache misses
     const missIndices: number[] = [];
@@ -2951,8 +2982,8 @@ dom.resumeBtn.addEventListener('click', async () => {
         : !state.settings.modelVariant.startsWith('sapiens2') ? ''
         : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
         : `@${state.settings.modelVariant}/`;
-      const keys = matched.map(f => `${resumePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
-      const cachedVectors = await cacheGetBatch(keys);
+      const { cached: cachedVectors, migrate } = await readCachedEmbeddings(matched, resumePrefix);
+      if (migrate.length > 0) await cachePutBatch(migrate);
       state.vectors = cachedVectors.map(v => v || new Float64Array(768));
       if (state.vectors.length > 0) {
         state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
