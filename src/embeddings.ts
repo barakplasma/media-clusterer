@@ -105,8 +105,16 @@ export function extractBatchedVectors(output: PipelineOutput, batchSize: number)
 }
 
 /**
- * Create cache key from file metadata
+ * Create a folder-independent cache key from file metadata.
+ *
+ * An embedding depends only on the file's contents, not on which directory the
+ * user happened to open. `file.name` carries the path relative to the opened
+ * root, so the same physical file gets a different name when opened via a parent
+ * vs. a child folder (e.g. "trip/a.jpg" vs "a.jpg"). Keying on the basename plus
+ * size + lastModified makes the cache hit regardless of folder scope. The
+ * size + lastModified pair keeps distinct files with the same basename apart.
  */
 export function makeCacheKey(file: { name: string; size: number; lastModified: number }): string {
-  return `${file.name}:${file.size}:${file.lastModified}`;
+  const basename = file.name.split('/').pop() || file.name;
+  return `${basename}:${file.size}:${file.lastModified}`;
 }
