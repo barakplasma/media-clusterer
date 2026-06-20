@@ -1445,21 +1445,29 @@ async function readCachedEmbeddings(
   cachePrefix: string,
 ): Promise<{ keys: CacheKey[]; cached: (Float64Array | null)[]; migrate: [CacheKey, Float64Array][] }> {
   const keys = files.map(f => `${cachePrefix}${makeCacheKey(f)}` as CacheKey);
-  const cached = await cacheGetBatch(keys);
+
+  // Query new and legacy keys in a single IDB transaction. Legacy keys only
+  // differ for files inside a subfolder (basename !== full path), so we only
+  // append those — keeping the extra reads minimal while avoiding a second
+  // transaction per batch (which matters when batchSize is 1, e.g. Sapiens2).
+  const queryKeys = [...keys];
+  const legacyForFile: number[] = []; // queryKeys index -> file index
+  files.forEach((f, i) => {
+    if (f.name.includes('/')) {
+      legacyForFile[queryKeys.length] = i;
+      queryKeys.push(`${cachePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    }
+  });
+
+  const results = await cacheGetBatch(queryKeys);
+  const cached = results.slice(0, files.length);
   const migrate: [CacheKey, Float64Array][] = [];
 
-  // Only files with a path prefix can differ from the legacy full-path key.
-  const legacyIdx = files
-    .map((f, i) => (!cached[i] && f.name.includes('/')) ? i : -1)
-    .filter(i => i >= 0);
-  if (legacyIdx.length > 0) {
-    const legacyKeys = legacyIdx.map(i =>
-      `${cachePrefix}${files[i].name}:${files[i].size}:${files[i].lastModified}` as CacheKey);
-    const legacy = await cacheGetBatch(legacyKeys);
-    for (let m = 0; m < legacyIdx.length; m++) {
-      const v = legacy[m];
-      if (v) { cached[legacyIdx[m]] = v; migrate.push([keys[legacyIdx[m]], v]); }
-    }
+  for (let q = files.length; q < results.length; q++) {
+    const i = legacyForFile[q];
+    if (i === undefined || cached[i]) continue; // new key already hit
+    const v = results[q];
+    if (v) { cached[i] = v; migrate.push([keys[i], v]); } // migrate to new key
   }
   return { keys, cached, migrate };
 }
