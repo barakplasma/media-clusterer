@@ -41,6 +41,7 @@ import {
 } from './compute';
 import '@picocss/pico/css/pico.conditional.min.css';
 import { computeOptimalBatchSize, getMemoryPressure } from './hardware';
+import { embedBatchAdaptive, createAdaptiveBatcher } from './batching';
 import type {
   AppState,
   Camera,
@@ -1283,8 +1284,10 @@ async function embedAll(files: PhotoFile[]) {
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
   const isChromeAI = state.settings.modelVariant === 'chrome-ai';
-  // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel session speedup
-  const batchSize = isChromeAI ? 2 : isSapiens2 ? 1 : state.settings.batchSize;
+  // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel
+  // session speedup. The transformers path adapts: the working batch size
+  // halves after a GPU failure and creeps back up after sustained successes.
+  const batcher = createAdaptiveBatcher(state.settings.batchSize);
   // Separate cache namespace per variant so vectors don't collide across models.
   // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
   const cachePrefix = isChromeAI ? '@chrome-ai/'
@@ -1292,7 +1295,8 @@ async function embedAll(files: PhotoFile[]) {
     : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
     : `@${state.settings.modelVariant}/`;
 
-  for (let i = 0; i < files.length; i += batchSize) {
+  for (let i = 0; i < files.length;) {
+    const batchSize = isChromeAI ? 2 : isSapiens2 ? 1 : batcher.size;
     const batch = files.slice(i, Math.min(i + batchSize, files.length));
 
     // One IDB transaction for the whole batch, with legacy-key fallback so
@@ -1384,6 +1388,10 @@ async function embedAll(files: PhotoFile[]) {
 
     // Run inference for cache misses
     if (missInputs.length > 0) {
+      // Inputs that failed even alone get a zero vector in RAM for this
+      // session but must NOT be written to the cache — a cached zero would
+      // permanently poison that file's embedding.
+      const failedInputs = new Set<File | RawImage | ImageBitmap>();
       try {
         let extracted: Float32Array[];
         if (isSapiens2) {
@@ -1414,17 +1422,39 @@ async function embedAll(files: PhotoFile[]) {
           }
         } else {
           if (!extractor) throw new Error('Extractor not loaded');
-          const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
-          extracted = missInputs.length === 1
-            ? [extractVector(output)]
-            : extractBatchedVectors(output, missInputs.length);
+          const ex = extractor;
+          // On failure (typically GPU OOM) bisect the batch and retry, so a
+          // whole batch is never zero-filled because of one bad input or a
+          // transient memory spike.
+          extracted = await embedBatchAdaptive(
+            missInputs,
+            async (chunk) => {
+              const output = await ex(chunk.length === 1 ? chunk[0] : chunk, { pooling: 'mean', normalize: true });
+              const vecs = chunk.length === 1
+                ? [extractVector(output)]
+                : extractBatchedVectors(output, chunk.length);
+              batcher.recordSuccess();
+              return vecs;
+            },
+            (input, err) => {
+              failedInputs.add(input);
+              console.warn('Embedding failed for one file, using zero vector:', (err as Error).message);
+              return new Float32Array(768);
+            },
+            (len, err) => {
+              batcher.recordFailure();
+              console.warn(`Inference failed at batch size ${len}, retrying smaller (working size now ${batcher.size}):`, (err as Error).message);
+            },
+          );
         }
 
         for (let m = 0; m < missIndices.length; m++) {
           const bi = missIndices[m];
           const idx = i + bi;
           vectors[idx] = extracted[m];
-          writeQueue.push([keys[bi], vectors[idx]]);
+          if (!failedInputs.has(missInputs[m])) {
+            writeQueue.push([keys[bi], vectors[idx]]);
+          }
         }
       } catch (err) {
         console.warn('Batch inference failed, filling zeros:', (err as Error).message);
@@ -1439,7 +1469,7 @@ async function embedAll(files: PhotoFile[]) {
       writeQueue.length = 0;
     }
 
-    const done = Math.min(i + batchSize, files.length);
+    const done = i + batch.length;
 
     if (done < PROGRESSIVE_MIN) {
       // Too few vectors for projection — show a simple grid
@@ -1481,6 +1511,7 @@ async function embedAll(files: PhotoFile[]) {
       return vectors.slice(0, done);
     }
 
+    i = done;
     await yieldMain();
   }
 
