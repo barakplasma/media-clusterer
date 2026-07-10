@@ -11,6 +11,13 @@ export const THUMB_WORLD = 48; // thumbnail size in world units
 /** Yield to the event loop so long computations don't block rendering/input. */
 const defaultYield = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
+// How long a compute loop may hold the main thread before yielding. ~12ms
+// keeps a 60fps frame budget breathable while yielding far less often than a
+// fixed every-N-iterations rule on small inputs.
+const YIELD_BUDGET_MS = 12;
+const now: () => number =
+  typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
+
 export async function kmeansAsync(
   points: number[][],
   k: number,
@@ -29,6 +36,7 @@ export async function kmeansAsync(
   const centroids = idx.slice(0, k).map(i => [points[i][0], points[i][1]]);
   const labels = new Int32Array(n);
 
+  let lastYield = now();
   for (let iter = 0; iter < maxIter; iter++) {
     let changed = false;
     for (let i = 0; i < n; i++) {
@@ -42,7 +50,10 @@ export async function kmeansAsync(
       if (labels[i] !== best) { labels[i] = best; changed = true; }
     }
 
-    if (iter % 10 === 0) await yieldFn();
+    if (now() - lastYield > YIELD_BUDGET_MS) {
+      await yieldFn();
+      lastYield = now();
+    }
     if (!changed) break;
 
     const sx = new Float64Array(k), sy = new Float64Array(k), cnt = new Int32Array(k);
@@ -80,40 +91,61 @@ export async function spreadPointsAsync(
   const r = Math.max(maxX - cx, maxY - cy) || 1;
 
   const vsize = Math.sqrt(n) * THUMB_WORLD * 1.4 * density;
-  const pts: [number, number][] = projectedPoints.map(([x, y]) => [(x - cx) / r * vsize, (y - cy) / r * vsize]);
+  // Flat typed arrays instead of an array of [x, y] tuples: the relaxation
+  // loop touches every coordinate 60 times, and tuple arrays were the main
+  // source of GC pressure here.
+  const xs = new Float64Array(n);
+  const ys = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    xs[i] = (projectedPoints[i][0] - cx) / r * vsize;
+    ys[i] = (projectedPoints[i][1] - cy) / r * vsize;
+  }
 
   const CELL = THUMB_WORLD * 2 * density;
+  const invCell = 1 / CELL;
+  // Numeric grid keys: cell coordinates stay well under 1e5, so gx*200003+gy
+  // is collision-free and avoids allocating a string per point per iteration.
+  const GRID_STRIDE = 200003;
+  const grid = new Map<number, number[]>();
+  let lastYield = now();
   for (let iter = 0; iter < 60; iter++) {
-    const grid = new Map<string, number[]>();
+    grid.clear();
     for (let i = 0; i < n; i++) {
-      const gx = Math.floor(pts[i][0] / CELL), gy = Math.floor(pts[i][1] / CELL);
-      const key = `${gx},${gy}`;
-      if (!grid.has(key)) grid.set(key, []);
-      grid.get(key)!.push(i);
+      const key = Math.floor(xs[i] * invCell) * GRID_STRIDE + Math.floor(ys[i] * invCell);
+      const bucket = grid.get(key);
+      if (bucket) bucket.push(i);
+      else grid.set(key, [i]);
     }
     let moved = false;
     for (let i = 0; i < n; i++) {
-      const gx = Math.floor(pts[i][0] / CELL), gy = Math.floor(pts[i][1] / CELL);
+      const gx = Math.floor(xs[i] * invCell), gy = Math.floor(ys[i] * invCell);
       for (let dgx = -1; dgx <= 1; dgx++) for (let dgy = -1; dgy <= 1; dgy++) {
-        for (const j of (grid.get(`${gx + dgx},${gy + dgy}`) ?? [])) {
+        const bucket = grid.get((gx + dgx) * GRID_STRIDE + (gy + dgy));
+        if (!bucket) continue;
+        for (const j of bucket) {
           if (j <= i) continue;
-          const dx = pts[j][0] - pts[i][0], dy = pts[j][1] - pts[i][1];
+          const dx = xs[j] - xs[i], dy = ys[j] - ys[i];
           const d2 = dx * dx + dy * dy;
           if (d2 < THUMB_WORLD * THUMB_WORLD && d2 > 0) {
             const dist = Math.sqrt(d2);
             const push = (THUMB_WORLD - dist) / 2 + 0.1;
             const nx = dx / dist, ny = dy / dist;
-            pts[i][0] -= nx * push; pts[i][1] -= ny * push;
-            pts[j][0] += nx * push; pts[j][1] += ny * push;
+            xs[i] -= nx * push; ys[i] -= ny * push;
+            xs[j] += nx * push; ys[j] += ny * push;
             moved = true;
           }
         }
       }
     }
-    if (iter % 5 === 0) await yieldFn();
+    if (now() - lastYield > YIELD_BUDGET_MS) {
+      await yieldFn();
+      lastYield = now();
+    }
     if (!moved) break;
   }
-  return pts as Point[];
+  const out: Point[] = new Array(n);
+  for (let i = 0; i < n; i++) out[i] = [xs[i], ys[i]];
+  return out;
 }
 
 /**
@@ -215,6 +247,30 @@ export function searchByCosine(
   return { indices, scores };
 }
 
+/**
+ * Hoare quickselect: partition `order` so its first `k` entries are the ones
+ * with the smallest `keys` values (unordered within the partition).
+ */
+function selectSmallest(order: Int32Array, keys: Float64Array, k: number): void {
+  let left = 0;
+  let right = order.length - 1;
+  while (right > left) {
+    const pivot = keys[order[(left + right) >> 1]];
+    let i = left, j = right;
+    while (i <= j) {
+      while (keys[order[i]] < pivot) i++;
+      while (keys[order[j]] > pivot) j--;
+      if (i <= j) {
+        const t = order[i]; order[i] = order[j]; order[j] = t;
+        i++; j--;
+      }
+    }
+    if (k - 1 <= j) right = j;
+    else if (k - 1 >= i) left = i;
+    else break;
+  }
+}
+
 export interface ViewCamera {
   x: number;
   y: number;
@@ -252,18 +308,32 @@ export function cullAndPrioritize(
   }
 
   if (visibleIndices.length > budget) {
-    visibleIndices.sort((a, b) => {
-      // Search results always first
-      if (rank) {
-        const ra = rank[a], rb = rank[b];
-        if (ra < 20 || rb < 20) return ra - rb;
+    // Precompute one key per visible point: top-20 search results first (by
+    // rank, shifted below any possible distance), everything else by squared
+    // distance to the camera center. Then quickselect the best `budget`
+    // instead of sorting all visible points — O(m) instead of O(m log m).
+    const m = visibleIndices.length;
+    const keys = new Float64Array(m);
+    for (let p = 0; p < m; p++) {
+      const i = visibleIndices[p];
+      if (rank && rank[i] < 20) {
+        // -1e15 sorts below any real squared distance while staying small
+        // enough that integer ranks survive f64 rounding (ULP at 1e15 is 0.125)
+        keys[p] = rank[i] - 1e15;
+      } else {
+        const dx = pts[i][0] - camera.x;
+        const dy = pts[i][1] - camera.y;
+        keys[p] = dx * dx + dy * dy;
       }
-      // Then by distance to camera center
-      const da = (pts[a][0] - camera.x)**2 + (pts[a][1] - camera.y)**2;
-      const db = (pts[b][1] - camera.y)**2 + (pts[b][1] - camera.y)**2;
-      return da - db;
-    });
-    visibleIndices.length = budget;
+    }
+    const order = new Int32Array(m);
+    for (let p = 0; p < m; p++) order[p] = p;
+    selectSmallest(order, keys, budget);
+    const head = Array.from(order.subarray(0, budget));
+    head.sort((a, b) => keys[a] - keys[b]);
+    const out = new Array<number>(budget);
+    for (let p = 0; p < budget; p++) out[p] = visibleIndices[head[p]];
+    return out;
   }
 
   return visibleIndices;
