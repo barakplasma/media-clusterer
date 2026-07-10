@@ -242,8 +242,11 @@ const getChromeAIPrompt = () => localStorage.getItem(CHROME_AI_PROMPT_KEY) ?? DE
 // Progressive projection state
 let progressiveProjectionRunning = false;
 let lastProgressiveCount = 0;
-const PROGRESSIVE_MIN = 3;      // min vectors before first progressive projection
-const PROGRESSIVE_INTERVAL = 3; // kick off projection every N new vectors
+let lastProgressiveTime = 0;
+const PROGRESSIVE_MIN = 3;       // min vectors before first progressive projection
+const PROGRESSIVE_MIN_MS = 2500; // min time between progressive projections — a
+                                 // per-N-vectors trigger meant PCA + spread ran
+                                 // near-continuously over the whole embed phase
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
@@ -1281,6 +1284,7 @@ async function embedAll(files: PhotoFile[]) {
   let cacheHits = 0;
   const writeQueue: [CacheKey, Float32Array][] = [];
   lastProgressiveCount = 0;
+  lastProgressiveTime = 0;
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
   const isChromeAI = state.settings.modelVariant === 'chrome-ai';
@@ -1480,9 +1484,14 @@ async function embedAll(files: PhotoFile[]) {
       ]) as Point[];
       fitCamera();
       scheduleRender();
-    } else if (!progressiveProjectionRunning && done - lastProgressiveCount >= PROGRESSIVE_INTERVAL) {
+    } else if (
+      !progressiveProjectionRunning &&
+      done > lastProgressiveCount &&
+      (lastProgressiveCount === 0 || performance.now() - lastProgressiveTime >= PROGRESSIVE_MIN_MS)
+    ) {
       const isFirst = lastProgressiveCount === 0; // first progressive projection → fit camera
       lastProgressiveCount = done;
+      lastProgressiveTime = performance.now();
       progressiveProjectionRunning = true;
       const partialVecs = vectors.slice(0, done);
       const nNeigh = Math.max(2, Math.min(15, done - 1));
