@@ -1277,6 +1277,16 @@ async function readCachedEmbeddings(
   return { keys, cached, migrate };
 }
 
+// Human-readable ETA from a seconds estimate, e.g. "~3m 20s left".
+function formatEta(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '';
+  if (seconds < 90) return `~${Math.max(1, Math.round(seconds))}s left`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  if (m < 60) return `~${m}m ${s}s left`;
+  return `~${Math.floor(m / 60)}h ${m % 60}m left`;
+}
+
 // ── Embedding loop ───────────────────────────────────────────────────────────
 async function embedAll(files: PhotoFile[]) {
   state.phase = 'embedding';
@@ -1285,6 +1295,7 @@ async function embedAll(files: PhotoFile[]) {
   const writeQueue: [CacheKey, Float32Array][] = [];
   lastProgressiveCount = 0;
   lastProgressiveTime = 0;
+  const embedStart = performance.now();
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
   const isChromeAI = state.settings.modelVariant === 'chrome-ai';
@@ -1509,7 +1520,13 @@ async function embedAll(files: PhotoFile[]) {
         .finally(() => { progressiveProjectionRunning = false; });
     }
     const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
-    setStatus(`Embedding ${done} / ${files.length} images…${fromCache}`);
+    // Overall rate self-corrects as cache-hit bursts fade; only show the ETA
+    // once a few seconds have passed so early estimates aren't nonsense.
+    const elapsedSec = (performance.now() - embedStart) / 1000;
+    const eta = elapsedSec > 3 && done > 0
+      ? ` · ${(done / elapsedSec).toFixed(1)}/s · ${formatEta((files.length - done) * elapsedSec / done)}`
+      : '';
+    setStatus(`Embedding ${done} / ${files.length} images…${eta}${fromCache}`);
     setProgress(10 + (done / files.length) * 80); // 10% to 90%
 
     const pressure = getMemoryPressure();
@@ -1633,13 +1650,16 @@ async function processFiles(files: PhotoFile[]) {
     const nNeighbors = Math.max(2, Math.min(15, files.length - 1));
     const rawPoints = await runProjection(vectors, state.settings.projectionMethod, nNeighbors);
     state.rawPoints = rawPoints;
+    setProgress(94);
 
+    setStatus('Clustering…');
     const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(files.length / 2))));
-    state.clusters = await kmeansAsync(rawPoints, k);
+    state.clusters = await kmeansAsync(rawPoints, k, 60, undefined, f => setProgress(94 + f * 2));
 
     state.phase = 'done';
     resizeCanvas();
-    state.points = await spreadPointsAsync(rawPoints, state.settings.density);
+    setStatus('Arranging layout…');
+    state.points = await spreadPointsAsync(rawPoints, state.settings.density, undefined, f => setProgress(96 + f * 4));
     fitCamera();
     scheduleRender();
     setProgress(100);
@@ -2628,11 +2648,13 @@ if (dom.projectionSelect) {
         const rawPoints = await runProjection(state.vectors, state.settings.projectionMethod, nNeighbors);
         state.rawPoints = rawPoints;
         
+        setStatus('Clustering…');
         const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(state.files.length / 2))));
         state.clusters = await kmeansAsync(rawPoints, k);
-        
+
+        setStatus('Arranging layout…');
         state.points = await spreadPointsAsync(rawPoints, state.settings.density);
-        
+
         try {
           localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
           localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
@@ -2826,8 +2848,19 @@ dom.resumeBtn.addEventListener('click', async () => {
         : !state.settings.modelVariant.startsWith('sapiens2') ? ''
         : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
         : `@${state.settings.modelVariant}/`;
-      const { cached: cachedVectors, migrate } = await readCachedEmbeddings(matched, resumePrefix);
-      if (migrate.length > 0) await cachePutBatch(migrate);
+      // Chunked reads so large folders show progress instead of a frozen bar,
+      // and the main thread gets a breather between IDB transactions.
+      const RESUME_CHUNK = 500;
+      const cachedVectors: (Float32Array | null)[] = [];
+      for (let c = 0; c < matched.length; c += RESUME_CHUNK) {
+        const chunk = matched.slice(c, c + RESUME_CHUNK);
+        const { cached, migrate } = await readCachedEmbeddings(chunk, resumePrefix);
+        if (migrate.length > 0) await cachePutBatch(migrate);
+        cachedVectors.push(...cached);
+        setStatus(`Restoring embeddings… ${Math.min(c + RESUME_CHUNK, matched.length)} / ${matched.length}`);
+        setProgress(10 + (cachedVectors.length / matched.length) * 85);
+        await yieldMain();
+      }
       state.vectors = cachedVectors.map(v => v || new Float32Array(768));
       dom.searchInput.disabled = false;
     }

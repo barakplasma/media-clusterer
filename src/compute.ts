@@ -23,6 +23,7 @@ export async function kmeansAsync(
   k: number,
   maxIter = 60,
   yieldFn: () => Promise<void> = defaultYield,
+  onProgress?: (fraction: number) => void,
 ): Promise<Int32Array> {
   const n = points.length;
   if (n === 0) return new Int32Array(0);
@@ -51,6 +52,7 @@ export async function kmeansAsync(
     }
 
     if (now() - lastYield > YIELD_BUDGET_MS) {
+      onProgress?.(iter / maxIter);
       await yieldFn();
       lastYield = now();
     }
@@ -66,6 +68,7 @@ export async function kmeansAsync(
       if (cnt[j]) { centroids[j][0] = sx[j] / cnt[j]; centroids[j][1] = sy[j] / cnt[j]; }
     }
   }
+  onProgress?.(1);
   return labels;
 }
 
@@ -77,6 +80,7 @@ export async function spreadPointsAsync(
   projectedPoints: number[][],
   density: number,
   yieldFn: () => Promise<void> = defaultYield,
+  onProgress?: (fraction: number) => void,
 ): Promise<Point[]> {
   const n = projectedPoints.length;
   if (n === 0) return [];
@@ -138,11 +142,13 @@ export async function spreadPointsAsync(
       }
     }
     if (now() - lastYield > YIELD_BUDGET_MS) {
+      onProgress?.(iter / 60);
       await yieldFn();
       lastYield = now();
     }
     if (!moved) break;
   }
+  onProgress?.(1);
   const out: Point[] = new Array(n);
   for (let i = 0; i < n; i++) out[i] = [xs[i], ys[i]];
   return out;
