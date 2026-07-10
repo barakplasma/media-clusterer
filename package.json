@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
+    "bench": "vitest bench --run",
     "type-check": "tsc --noEmit",
     "deploy": "npm run build && wrangler pages deploy dist --project-name media-clusterer",
     "prepare": "husky"

@@ -52,7 +52,7 @@ export interface Settings {
 export interface AppState {
   phase: Phase;
   files: PhotoFile[];
-  vectors: Float64Array[];
+  vectors: Float32Array[];
   points: Point[];
   rawPoints: number[][] | null;
   clusters: Int32Array | null;
@@ -63,7 +63,6 @@ export interface AppState {
   searchScores: Float32Array | null;
   fileKeys?: string[];
   settings: Settings;
-  hnsw?: any;
   activeFileIndex: number | null;
   lastViewedIndex: number | null;
   currentDirHandle: FileSystemDirectoryHandle | null;

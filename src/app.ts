@@ -31,8 +31,18 @@ import {
   cacheStats,
 } from './db';
 import { getNextImageInDirection } from './spatial';
+import {
+  THUMB_WORLD,
+  kmeansAsync,
+  spreadPointsAsync,
+  generateMetadataBasedLayout,
+  cullAndPrioritize,
+  searchByCosine,
+  formatEta,
+} from './compute';
 import '@picocss/pico/css/pico.conditional.min.css';
 import { computeOptimalBatchSize, getMemoryPressure } from './hardware';
+import { embedBatchAdaptive, createAdaptiveBatcher } from './batching';
 import type {
   AppState,
   Camera,
@@ -68,7 +78,6 @@ function applyModelEnv() {
 // ── Constants ────────────────────────────────────────────────────────────────
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'heic', 'heif']);
 const VIDEO_EXTS = new Set(['mp4', 'webm']);
-const THUMB_WORLD = 48;   // thumbnail size in world units
 const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const BATCH_SIZE = IS_MOBILE ? 4 : 16; // fallback before settings load
@@ -234,8 +243,11 @@ const getChromeAIPrompt = () => localStorage.getItem(CHROME_AI_PROMPT_KEY) ?? DE
 // Progressive projection state
 let progressiveProjectionRunning = false;
 let lastProgressiveCount = 0;
-const PROGRESSIVE_MIN = 3;      // min vectors before first progressive projection
-const PROGRESSIVE_INTERVAL = 3; // kick off projection every N new vectors
+let lastProgressiveTime = 0;
+const PROGRESSIVE_MIN = 3;       // min vectors before first progressive projection
+const PROGRESSIVE_MIN_MS = 2500; // min time between progressive projections — a
+                                 // per-N-vectors trigger meant PCA + spread ran
+                                 // near-continuously over the whole embed phase
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
@@ -537,17 +549,17 @@ function lazyDecodeThumbnail(idx: number) {
 }
 
 // ── Text embedding (uses text model with search_query prefix) ────────────────
-async function embedText(text: string): Promise<Float64Array> {
+async function embedText(text: string): Promise<Float32Array> {
   if (!textExtractor) throw new Error('Text model not loaded');
 
   // Add required task prefix for nomic-embed-text
   const prefixed = `search_query: ${text}`;
   const output = await textExtractor(prefixed, { pooling: 'mean', normalize: true });
 
-  return Float64Array.from(output.data);
+  return Float32Array.from(output.data);
 }
 
-// ── Text search using DruidJS HNSW ───────────────────────────────────────────
+// ── Text search (exact cosine scan over normalized vectors) ─────────────────
 async function searchImages(query: string) {
   if (!query.trim() || !state.vectors.length) {
     state.searchResults = null;
@@ -564,80 +576,20 @@ async function searchImages(query: string) {
     const queryVector = await embedText(query);
     state.searchQuery = query;
 
-    if (!state.hnsw && state.vectors.length > 0) {
-      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
-    }
+    const { indices, scores } = searchByCosine(queryVector, state.vectors);
+    state.searchScores = scores;
+    state.searchResults = indices;
 
-    if (state.hnsw) {
-      const k = state.vectors.length;
-      const results = state.hnsw.search(queryVector, k);
-
-      const scores = new Float32Array(state.vectors.length);
-      const indices = new Int32Array(results.length);
-
-      for (let i = 0; i < results.length; i++) {
-        const { index, distance } = results[i];
-        indices[i] = index;
-        scores[index] = 1 - distance;
-      }
-
-      state.searchScores = scores;
-      state.searchResults = indices;
-
-      const topScore = scores[indices[0]] ?? 0;
-      const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
-      setStatus(statusMsg);
-      if (dom.statsEl) dom.statsEl.textContent = statusMsg;
-    }
+    const topScore = scores[indices[0]] ?? 0;
+    const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
+    setStatus(statusMsg);
+    if (dom.statsEl) dom.statsEl.textContent = statusMsg;
   } catch (err) {
     console.error('Search failed:', err);
     setStatus('Search failed. Check console.');
   } finally {
     dom.searchWrap.classList.remove('loading');
   }
-}
-
-// ── k-means (runs on 2D UMAP output) ─────────────────────────────────────────
-async function kmeansAsync(points: number[][], k: number, maxIter = 60): Promise<Int32Array> {
-  const n = points.length;
-  if (n === 0) return new Int32Array(0);
-  k = Math.min(k, n);
-
-  const idx = Array.from({ length: n }, (_, i) => i);
-  for (let i = n - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [idx[i], idx[j]] = [idx[j], idx[i]];
-  }
-  const centroids = idx.slice(0, k).map(i => [points[i][0], points[i][1]]);
-  const labels = new Int32Array(n);
-
-  for (let iter = 0; iter < maxIter; iter++) {
-    let changed = false;
-    for (let i = 0; i < n; i++) {
-      let best = 0, bestD = Infinity;
-      const px = points[i][0], py = points[i][1];
-      for (let j = 0; j < k; j++) {
-        const dx = px - centroids[j][0], dy = py - centroids[j][1];
-        const d = dx * dx + dy * dy;
-        if (d < bestD) { bestD = d; best = j; }
-      }
-      if (labels[i] !== best) { labels[i] = best; changed = true; }
-    }
-
-    if (iter % 10 === 0) await yieldMain();
-    if (!changed) break;
-
-    const sx = new Float64Array(k), sy = new Float64Array(k), cnt = new Int32Array(k);
-    for (let i = 0; i < n; i++) {
-      sx[labels[i]] += points[i][0];
-      sy[labels[i]] += points[i][1];
-      cnt[labels[i]]++;
-    }
-    for (let j = 0; j < k; j++) {
-      if (cnt[j]) { centroids[j][0] = sx[j] / cnt[j]; centroids[j][1] = sy[j] / cnt[j]; }
-    }
-  }
-  return labels;
 }
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
@@ -654,128 +606,6 @@ const videoFrameLimit = pLimit(4);
 function resizeCanvas() {
   dom.canvas.width = window.innerWidth || 800;
   dom.canvas.height = window.innerHeight || 600;
-}
-
-async function spreadPointsAsync(projectedPoints: number[][]): Promise<Point[]> {
-  const n = projectedPoints.length;
-  if (n === 0) return [];
-
-  // Normalize to zero-centered unit space
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const [x, y] of projectedPoints) {
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (y < minY) minY = y; if (y > maxY) maxY = y;
-  }
-  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  const r = Math.max(maxX - cx, maxY - cy) || 1;
-
-  const vsize = Math.sqrt(n) * THUMB_WORLD * 1.4 * state.settings.density;
-  const pts: [number, number][] = projectedPoints.map(([x, y]) => [(x - cx) / r * vsize, (y - cy) / r * vsize]);
-
-  const CELL = THUMB_WORLD * 2 * state.settings.density;
-  for (let iter = 0; iter < 60; iter++) {
-    const grid = new Map<string, number[]>();
-    for (let i = 0; i < n; i++) {
-      const gx = Math.floor(pts[i][0] / CELL), gy = Math.floor(pts[i][1] / CELL);
-      const key = `${gx},${gy}`;
-      if (!grid.has(key)) grid.set(key, []);
-      grid.get(key)!.push(i);
-    }
-    let moved = false;
-    for (let i = 0; i < n; i++) {
-      const gx = Math.floor(pts[i][0] / CELL), gy = Math.floor(pts[i][1] / CELL);
-      for (let dgx = -1; dgx <= 1; dgx++) for (let dgy = -1; dgy <= 1; dgy++) {
-        for (const j of (grid.get(`${gx + dgx},${gy + dgy}`) ?? [])) {
-          if (j <= i) continue;
-          const dx = pts[j][0] - pts[i][0], dy = pts[j][1] - pts[i][1];
-          const d2 = dx * dx + dy * dy;
-          if (d2 < THUMB_WORLD * THUMB_WORLD && d2 > 0) {
-            const dist = Math.sqrt(d2);
-            const push = (THUMB_WORLD - dist) / 2 + 0.1;
-            const nx = dx / dist, ny = dy / dist;
-            pts[i][0] -= nx * push; pts[i][1] -= ny * push;
-            pts[j][0] += nx * push; pts[j][1] += ny * push;
-            moved = true;
-          }
-        }
-      }
-    }
-    if (iter % 5 === 0) await yieldMain();
-    if (!moved) break;
-  }
-  return pts as Point[];
-}
-
-/**
- * Generate grid-based 2D coordinates from folder structure and datetime.
- * Creates a "folder clusters" layout:
- * - Folders arranged in a horizontal grid
- * - Within each folder, photos arranged by date (vertical time flow)
- * - Almost grid-like for predictable navigation
- */
-function generateMetadataBasedLayout(files: PhotoFile[]): Point[] {
-  if (files.length === 0) return [];
-
-  // Group files by folder path
-  const folderGroups = new Map<string, Array<{ index: number; lastModified: number }>>();
-  for (let i = 0; i < files.length; i++) {
-    const pathParts = files[i].name.split('/');
-    const folder = pathParts.slice(0, -1).join('/') || '(root)';
-    if (!folderGroups.has(folder)) {
-      folderGroups.set(folder, []);
-    }
-    folderGroups.get(folder)!.push({ index: i, lastModified: files[i].lastModified });
-  }
-
-  // Sort each group by date and collect folders in sorted order
-  const sortedFolders: Array<{ folder: string; files: Array<{ index: number; lastModified: number }> }> = [];
-  for (const [folder, fileGroup] of folderGroups) {
-    fileGroup.sort((a, b) => a.lastModified - b.lastModified);
-    sortedFolders.push({ folder, files: fileGroup });
-  }
-  sortedFolders.sort((a, b) => a.folder.localeCompare(b.folder));
-
-  // Calculate grid dimensions - first find max files per column across all folders
-  const numFolders = sortedFolders.length;
-  const foldersPerRow = Math.ceil(Math.sqrt(numFolders * 1.5)); // Slightly wider grid
-  let maxFilesPerCol = 0;
-  for (const { files: folderFiles } of sortedFolders) {
-    const filesPerCol = Math.ceil(Math.sqrt(folderFiles.length));
-    if (filesPerCol > maxFilesPerCol) maxFilesPerCol = filesPerCol;
-  }
-  const folderGridWidth = foldersPerRow * THUMB_WORLD * (maxFilesPerCol + 1); // Space based on largest folder
-  const fileGridSize = THUMB_WORLD * 1.5; // Space between files in a folder
-
-  const points: Point[] = new Array(files.length) as Point[];
-
-  for (let folderIdx = 0; folderIdx < sortedFolders.length; folderIdx++) {
-    const { files: folderFiles } = sortedFolders[folderIdx];
-
-    // Folder position in the grid
-    const folderCol = folderIdx % foldersPerRow;
-    const folderRow = Math.floor(folderIdx / foldersPerRow);
-    const folderOffsetX = folderCol * folderGridWidth;
-    const folderOffsetY = folderRow * folderGridWidth;
-
-    // Files within this folder - also in a grid
-    const numFiles = folderFiles.length;
-    const filesPerCol = Math.ceil(Math.sqrt(numFiles));
-
-    for (let i = 0; i < folderFiles.length; i++) {
-      const { index } = folderFiles[i];
-
-      // Position within folder grid (time flows downward)
-      const fileCol = i % filesPerCol;
-      const fileRow = Math.floor(i / filesPerCol);
-
-      const x = folderOffsetX + fileCol * fileGridSize;
-      const y = folderOffsetY + fileRow * fileGridSize;
-
-      points[index] = [x, y];
-    }
-  }
-
-  return points;
 }
 
 function fitCamera() {
@@ -810,7 +640,6 @@ function resetAll() {
   state.searchResults = null;
   state.searchQuery = '';
   state.searchScores = null;
-  state.hnsw = undefined;
   state.activeFileIndex = null;
   state.lastViewedIndex = null;
   localStorage.removeItem('po_fileKeys');
@@ -872,34 +701,11 @@ function render() {
     }
   }
 
-  // Frustum culling and visible list
-  const visibleIndices: number[] = [];
-  for (let i = 0; i < pts.length; i++) {
-    const sx = (pts[i][0] - camera.x) * s + cxW;
-    const sy = (pts[i][1] - camera.y) * s + cyW;
-
-    if (sx + half >= 0 && sx - half <= dom.canvas.width &&
-      sy + half >= 0 && sy - half <= dom.canvas.height) {
-      visibleIndices.push(i);
-    }
-  }
-
-  // Prioritize drawing: search results first, then by distance to center
-  const budget = state.settings.drawBudget;
-  if (visibleIndices.length > budget) {
-    visibleIndices.sort((a, b) => {
-      // Search results always first
-      if (state.searchResults) {
-        const ra = rank[a], rb = rank[b];
-        if (ra < 20 || rb < 20) return ra - rb;
-      }
-      // Then by distance to camera center
-      const da = (pts[a][0] - camera.x)**2 + (pts[a][1] - camera.y)**2;
-      const db = (pts[b][1] - camera.y)**2 + (pts[b][1] - camera.y)**2;
-      return da - db;
-    });
-    visibleIndices.length = budget;
-  }
+  // Frustum culling + draw prioritization (search results first, then center distance)
+  const visibleIndices = cullAndPrioritize(
+    pts, camera, dom.canvas.width, dom.canvas.height, half,
+    state.searchResults ? rank : null, state.settings.drawBudget,
+  );
 
   for (const i of visibleIndices) {
     const sx = (pts[i][0] - camera.x) * s + cxW;
@@ -1029,12 +835,12 @@ function render() {
 }
 
 // ── Projection ───────────────────────────────────────────────────────────────
-async function runProjection(vectors: Float64Array[], method: ProjectionMethod, nNeighbors: number, { silent = false } = {}): Promise<number[][]> {
+async function runProjection(vectors: Float32Array[], method: ProjectionMethod, nNeighbors: number, { silent = false } = {}): Promise<number[][]> {
   try {
     if (!silent) setStatus(`Projecting with ${method}…`);
-    // Druid expects data as Array of Arrays or a Matrix
-    const data = vectors.map(v => Array.from(v));
-    const matrix = druid.Matrix.from(data);
+    // Druid accepts Float64Array rows directly; copy each f32 row to f64
+    // transiently instead of materializing a number[][] of the whole dataset.
+    const matrix = druid.Matrix.from(vectors.map(v => Float64Array.from(v)));
     let result: druid.Matrix;
 
     // Small yield to allow UI update
@@ -1443,7 +1249,7 @@ async function resizeForEmbedding(file: File): Promise<RawImage | null> {
 async function readCachedEmbeddings(
   files: PhotoFile[],
   cachePrefix: string,
-): Promise<{ keys: CacheKey[]; cached: (Float64Array | null)[]; migrate: [CacheKey, Float64Array][] }> {
+): Promise<{ keys: CacheKey[]; cached: (Float32Array | null)[]; migrate: [CacheKey, Float32Array][] }> {
   const keys = files.map(f => `${cachePrefix}${makeCacheKey(f)}` as CacheKey);
 
   // Query new and legacy keys in a single IDB transaction. Legacy keys only
@@ -1461,7 +1267,7 @@ async function readCachedEmbeddings(
 
   const results = await cacheGetBatch(queryKeys);
   const cached = results.slice(0, files.length);
-  const migrate: [CacheKey, Float64Array][] = [];
+  const migrate: [CacheKey, Float32Array][] = [];
 
   for (let q = files.length; q < results.length; q++) {
     const i = legacyForFile[q];
@@ -1475,15 +1281,19 @@ async function readCachedEmbeddings(
 // ── Embedding loop ───────────────────────────────────────────────────────────
 async function embedAll(files: PhotoFile[]) {
   state.phase = 'embedding';
-  const vectors = new Array<Float64Array>(files.length);
+  const vectors = new Array<Float32Array>(files.length);
   let cacheHits = 0;
-  const writeQueue: [CacheKey, Float64Array][] = [];
+  const writeQueue: [CacheKey, Float32Array][] = [];
   lastProgressiveCount = 0;
+  lastProgressiveTime = 0;
+  const embedStart = performance.now();
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
   const isChromeAI = state.settings.modelVariant === 'chrome-ai';
-  // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel session speedup
-  const batchSize = isChromeAI ? 2 : isSapiens2 ? 1 : state.settings.batchSize;
+  // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel
+  // session speedup. The transformers path adapts: the working batch size
+  // halves after a GPU failure and creeps back up after sustained successes.
+  const batcher = createAdaptiveBatcher(state.settings.batchSize);
   // Separate cache namespace per variant so vectors don't collide across models.
   // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
   const cachePrefix = isChromeAI ? '@chrome-ai/'
@@ -1491,7 +1301,8 @@ async function embedAll(files: PhotoFile[]) {
     : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
     : `@${state.settings.modelVariant}/`;
 
-  for (let i = 0; i < files.length; i += batchSize) {
+  for (let i = 0; i < files.length;) {
+    const batchSize = isChromeAI ? 2 : isSapiens2 ? 1 : batcher.size;
     const batch = files.slice(i, Math.min(i + batchSize, files.length));
 
     // One IDB transaction for the whole batch, with legacy-key fallback so
@@ -1562,7 +1373,7 @@ async function embedAll(files: PhotoFile[]) {
           missInputs.push(resized);
         } else {
           // Cannot resize — use zero vector rather than risking OOM with full-res
-          vectors[i + bi] = new Float64Array(768);
+          vectors[i + bi] = new Float32Array(768);
           return;
         }
       }
@@ -1583,6 +1394,10 @@ async function embedAll(files: PhotoFile[]) {
 
     // Run inference for cache misses
     if (missInputs.length > 0) {
+      // Inputs that failed even alone get a zero vector in RAM for this
+      // session but must NOT be written to the cache — a cached zero would
+      // permanently poison that file's embedding.
+      const failedInputs = new Set<File | RawImage | ImageBitmap>();
       try {
         let extracted: Float32Array[];
         if (isSapiens2) {
@@ -1613,22 +1428,44 @@ async function embedAll(files: PhotoFile[]) {
           }
         } else {
           if (!extractor) throw new Error('Extractor not loaded');
-          const output = await extractor(missInputs.length === 1 ? missInputs[0] : missInputs, { pooling: 'mean', normalize: true });
-          extracted = missInputs.length === 1
-            ? [extractVector(output)]
-            : extractBatchedVectors(output, missInputs.length);
+          const ex = extractor;
+          // On failure (typically GPU OOM) bisect the batch and retry, so a
+          // whole batch is never zero-filled because of one bad input or a
+          // transient memory spike.
+          extracted = await embedBatchAdaptive(
+            missInputs,
+            async (chunk) => {
+              const output = await ex(chunk.length === 1 ? chunk[0] : chunk, { pooling: 'mean', normalize: true });
+              const vecs = chunk.length === 1
+                ? [extractVector(output)]
+                : extractBatchedVectors(output, chunk.length);
+              batcher.recordSuccess();
+              return vecs;
+            },
+            (input, err) => {
+              failedInputs.add(input);
+              console.warn('Embedding failed for one file, using zero vector:', (err as Error).message);
+              return new Float32Array(768);
+            },
+            (len, err) => {
+              batcher.recordFailure();
+              console.warn(`Inference failed at batch size ${len}, retrying smaller (working size now ${batcher.size}):`, (err as Error).message);
+            },
+          );
         }
 
         for (let m = 0; m < missIndices.length; m++) {
           const bi = missIndices[m];
           const idx = i + bi;
-          vectors[idx] = Float64Array.from(extracted[m]);
-          writeQueue.push([keys[bi], vectors[idx]]);
+          vectors[idx] = extracted[m];
+          if (!failedInputs.has(missInputs[m])) {
+            writeQueue.push([keys[bi], vectors[idx]]);
+          }
         }
       } catch (err) {
         console.warn('Batch inference failed, filling zeros:', (err as Error).message);
         for (const bi of missIndices) {
-          vectors[i + bi] = new Float64Array(768);
+          vectors[i + bi] = new Float32Array(768);
         }
       }
     }
@@ -1638,7 +1475,7 @@ async function embedAll(files: PhotoFile[]) {
       writeQueue.length = 0;
     }
 
-    const done = Math.min(i + batchSize, files.length);
+    const done = i + batch.length;
 
     if (done < PROGRESSIVE_MIN) {
       // Too few vectors for projection — show a simple grid
@@ -1649,14 +1486,19 @@ async function embedAll(files: PhotoFile[]) {
       ]) as Point[];
       fitCamera();
       scheduleRender();
-    } else if (!progressiveProjectionRunning && done - lastProgressiveCount >= PROGRESSIVE_INTERVAL) {
+    } else if (
+      !progressiveProjectionRunning &&
+      done > lastProgressiveCount &&
+      (lastProgressiveCount === 0 || performance.now() - lastProgressiveTime >= PROGRESSIVE_MIN_MS)
+    ) {
       const isFirst = lastProgressiveCount === 0; // first progressive projection → fit camera
       lastProgressiveCount = done;
+      lastProgressiveTime = performance.now();
       progressiveProjectionRunning = true;
       const partialVecs = vectors.slice(0, done);
       const nNeigh = Math.max(2, Math.min(15, done - 1));
       runProjection(partialVecs, 'PCA', nNeigh, { silent: true })
-        .then(rawPts => spreadPointsAsync(rawPts))
+        .then(rawPts => spreadPointsAsync(rawPts, state.settings.density))
         .then(spreadPts => {
           if (state.phase === 'embedding') {
             state.points = spreadPts;
@@ -1669,7 +1511,13 @@ async function embedAll(files: PhotoFile[]) {
         .finally(() => { progressiveProjectionRunning = false; });
     }
     const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
-    setStatus(`Embedding ${done} / ${files.length} images…${fromCache}`);
+    // Overall rate self-corrects as cache-hit bursts fade; only show the ETA
+    // once a few seconds have passed so early estimates aren't nonsense.
+    const elapsedSec = (performance.now() - embedStart) / 1000;
+    const eta = elapsedSec > 3 && done > 0
+      ? ` · ${(done / elapsedSec).toFixed(1)}/s · ${formatEta((files.length - done) * elapsedSec / done)}`
+      : '';
+    setStatus(`Embedding ${done} / ${files.length} images…${eta}${fromCache}`);
     setProgress(10 + (done / files.length) * 80); // 10% to 90%
 
     const pressure = getMemoryPressure();
@@ -1680,6 +1528,7 @@ async function embedAll(files: PhotoFile[]) {
       return vectors.slice(0, done);
     }
 
+    i = done;
     await yieldMain();
   }
 
@@ -1743,7 +1592,7 @@ async function processFiles(files: PhotoFile[]) {
     state.vectors = [];
 
     resizeCanvas();
-    state.points = await spreadPointsAsync(state.rawPoints);
+    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density);
     state.phase = 'done';  // Set after async work completes
     fitCamera();
     scheduleRender();
@@ -1786,22 +1635,22 @@ async function processFiles(files: PhotoFile[]) {
 
     state.vectors = vectors;
 
-    setStatus('Building search index…');
-    state.hnsw = new druid.HNSW(vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
-
     state.phase = 'projecting';
     setStatus(`Projecting with ${state.settings.projectionMethod}…`);
     setProgress(90);
     const nNeighbors = Math.max(2, Math.min(15, files.length - 1));
     const rawPoints = await runProjection(vectors, state.settings.projectionMethod, nNeighbors);
     state.rawPoints = rawPoints;
+    setProgress(94);
 
+    setStatus('Clustering…');
     const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(files.length / 2))));
-    state.clusters = await kmeansAsync(rawPoints, k);
+    state.clusters = await kmeansAsync(rawPoints, k, 60, undefined, f => setProgress(94 + f * 2));
 
     state.phase = 'done';
     resizeCanvas();
-    state.points = await spreadPointsAsync(rawPoints);
+    setStatus('Arranging layout…');
+    state.points = await spreadPointsAsync(rawPoints, state.settings.density, undefined, f => setProgress(96 + f * 4));
     fitCamera();
     scheduleRender();
     setProgress(100);
@@ -1928,7 +1777,6 @@ async function filterByDateTime(
   state.searchResults = null;
   state.searchQuery = '';
   state.searchScores = null;
-  state.hnsw = undefined;
 
   // If extractor isn't loaded, ensure we're in viewer-only mode for filtering
   const wasViewerOnly = state.settings.viewerOnly;
@@ -2678,7 +2526,7 @@ dom.densitySlider.addEventListener('input', async () => {
   state.settings.density = parseFloat(dom.densitySlider.value);
   saveSettings();
   if (state.phase === 'done' && state.rawPoints && state.files.length) {
-    state.points = await spreadPointsAsync(state.rawPoints);
+    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density);
     scheduleRender();
   }
 });
@@ -2791,11 +2639,13 @@ if (dom.projectionSelect) {
         const rawPoints = await runProjection(state.vectors, state.settings.projectionMethod, nNeighbors);
         state.rawPoints = rawPoints;
         
+        setStatus('Clustering…');
         const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(state.files.length / 2))));
         state.clusters = await kmeansAsync(rawPoints, k);
-        
-        state.points = await spreadPointsAsync(rawPoints);
-        
+
+        setStatus('Arranging layout…');
+        state.points = await spreadPointsAsync(rawPoints, state.settings.density);
+
         try {
           localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
           localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
@@ -2979,23 +2829,30 @@ dom.resumeBtn.addEventListener('click', async () => {
     state.clusters = savedClusters ? new Int32Array(savedClusters.slice(0, matched.length)) : null;
 
     if (wasViewerMode) {
-      // Viewer mode: no vectors/HNSW needed
+      // Viewer mode: no vectors needed
       state.vectors = [];
-      state.hnsw = undefined;
       dom.searchInput.disabled = true;
     } else {
-      // AI mode: restore search index
-      setStatus('Restoring search index…');
+      // AI mode: restore cached vectors for search + re-projection
+      setStatus('Restoring embeddings…');
       const resumePrefix = state.settings.modelVariant === 'chrome-ai' ? '@chrome-ai/'
         : !state.settings.modelVariant.startsWith('sapiens2') ? ''
         : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
         : `@${state.settings.modelVariant}/`;
-      const { cached: cachedVectors, migrate } = await readCachedEmbeddings(matched, resumePrefix);
-      if (migrate.length > 0) await cachePutBatch(migrate);
-      state.vectors = cachedVectors.map(v => v || new Float64Array(768));
-      if (state.vectors.length > 0) {
-        state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
+      // Chunked reads so large folders show progress instead of a frozen bar,
+      // and the main thread gets a breather between IDB transactions.
+      const RESUME_CHUNK = 500;
+      const cachedVectors: (Float32Array | null)[] = [];
+      for (let c = 0; c < matched.length; c += RESUME_CHUNK) {
+        const chunk = matched.slice(c, c + RESUME_CHUNK);
+        const { cached, migrate } = await readCachedEmbeddings(chunk, resumePrefix);
+        if (migrate.length > 0) await cachePutBatch(migrate);
+        cachedVectors.push(...cached);
+        setStatus(`Restoring embeddings… ${Math.min(c + RESUME_CHUNK, matched.length)} / ${matched.length}`);
+        setProgress(10 + (cachedVectors.length / matched.length) * 85);
+        await yieldMain();
       }
+      state.vectors = cachedVectors.map(v => v || new Float32Array(768));
       dom.searchInput.disabled = false;
     }
 
@@ -3064,7 +2921,6 @@ function buildDebugInfo(): string {
     `viewerOnly:  ${state.settings.viewerOnly ? 'YES' : 'no'}`,
     `vectors:     ${state.vectors.length}`,
     `points:      ${state.points.length}`,
-    `hnsw:        ${state.hnsw ? 'built' : 'none'}`,
     `searchRes:   ${state.searchResults?.length ?? 'none'}`,
     `thumbs:      ${state.thumbnails.filter(Boolean).length} / ${state.thumbnails.length} decoded`,
     `thumbDecode: ${thumbDecoding.size} in-flight`,
