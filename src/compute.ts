@@ -27,7 +27,7 @@ export async function kmeansAsync(
 ): Promise<Int32Array> {
   const n = points.length;
   if (n === 0) return new Int32Array(0);
-  k = Math.min(k, n);
+  k = Math.max(1, Math.min(k, n));
 
   const idx = Array.from({ length: n }, (_, i) => i);
   for (let i = n - 1; i > 0; i--) {
@@ -243,14 +243,34 @@ export function searchByCosine(
   const scores = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const v = vectors[i];
+    if (!v) {
+      // Missing entry ranks last instead of poisoning the sort with NaN
+      scores[i] = -1;
+      continue;
+    }
+    // Clamp to the shorter vector so a dimension mismatch (mixed-model cache
+    // corruption) degrades to a weaker score instead of NaN everywhere
+    const limit = Math.min(v.length, dims);
     let dot = 0;
-    for (let j = 0; j < dims; j++) dot += v[j] * query[j];
+    for (let j = 0; j < limit; j++) dot += v[j] * query[j];
     scores[i] = dot;
   }
   const indices = new Int32Array(n);
   for (let i = 0; i < n; i++) indices[i] = i;
   indices.sort((a, b) => scores[b] - scores[a]);
   return { indices, scores };
+}
+
+/** Human-readable ETA from a seconds estimate, e.g. "~3m 20s left". */
+export function formatEta(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '';
+  // Round the total first so 119.7s becomes 2m 0s, not 1m 60s
+  const total = Math.max(1, Math.round(seconds));
+  if (total < 90) return `~${total}s left`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  if (m < 60) return `~${m}m ${s}s left`;
+  return `~${Math.floor(m / 60)}h ${m % 60}m left`;
 }
 
 /**

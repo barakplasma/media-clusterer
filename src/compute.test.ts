@@ -1,6 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { searchByCosine, cullAndPrioritize } from './compute';
+import { searchByCosine, cullAndPrioritize, formatEta } from './compute';
 import type { Point } from './types';
+
+describe('formatEta', () => {
+  it('formats seconds, minutes, and hours', () => {
+    expect(formatEta(45)).toBe('~45s left');
+    expect(formatEta(150)).toBe('~2m 30s left');
+    expect(formatEta(7290)).toBe('~2h 1m left');
+  });
+
+  it('never renders 60s from rounding (e.g. 119.7s)', () => {
+    expect(formatEta(119.7)).toBe('~2m 0s left');
+  });
+
+  it('returns empty string for invalid input', () => {
+    expect(formatEta(NaN)).toBe('');
+    expect(formatEta(-5)).toBe('');
+    expect(formatEta(Infinity)).toBe('');
+  });
+});
 
 describe('cullAndPrioritize', () => {
   const camera = { x: 0, y: 0, scale: 1 };
@@ -69,5 +87,20 @@ describe('searchByCosine', () => {
     const { indices, scores } = searchByCosine(Float32Array.from([1, 0]), []);
     expect(indices.length).toBe(0);
     expect(scores.length).toBe(0);
+  });
+
+  it('ranks missing (undefined) vectors last without NaN', () => {
+    const withHole = [rows[0], undefined as unknown as Float32Array, rows[2]];
+    const { indices, scores } = searchByCosine(Float32Array.from([1, 0, 0, 0]), withHole);
+    expect(indices[2]).toBe(1); // the hole sorts last
+    expect(scores[1]).toBe(-1);
+    expect(Array.from(scores).some(Number.isNaN)).toBe(false);
+  });
+
+  it('tolerates dimension mismatch without NaN', () => {
+    const mixed = [Float32Array.from([1, 0]), rows[1]]; // 2-dim vs 4-dim query
+    const { scores } = searchByCosine(Float32Array.from([1, 0, 0, 0]), mixed);
+    expect(scores[0]).toBeCloseTo(1, 5);
+    expect(Array.from(scores).some(Number.isNaN)).toBe(false);
   });
 });

@@ -38,6 +38,7 @@ import {
   generateMetadataBasedLayout,
   cullAndPrioritize,
   searchByCosine,
+  formatEta,
 } from './compute';
 import '@picocss/pico/css/pico.conditional.min.css';
 import { computeOptimalBatchSize, getMemoryPressure } from './hardware';
@@ -1275,16 +1276,6 @@ async function readCachedEmbeddings(
     if (v) { cached[i] = v; migrate.push([keys[i], v]); } // migrate to new key
   }
   return { keys, cached, migrate };
-}
-
-// Human-readable ETA from a seconds estimate, e.g. "~3m 20s left".
-function formatEta(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '';
-  if (seconds < 90) return `~${Math.max(1, Math.round(seconds))}s left`;
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  if (m < 60) return `~${m}m ${s}s left`;
-  return `~${Math.floor(m / 60)}h ${m % 60}m left`;
 }
 
 // ── Embedding loop ───────────────────────────────────────────────────────────
