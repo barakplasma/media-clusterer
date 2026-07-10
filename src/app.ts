@@ -37,6 +37,7 @@ import {
   spreadPointsAsync,
   generateMetadataBasedLayout,
   cullAndPrioritize,
+  searchByCosine,
 } from './compute';
 import '@picocss/pico/css/pico.conditional.min.css';
 import { computeOptimalBatchSize, getMemoryPressure } from './hardware';
@@ -543,17 +544,17 @@ function lazyDecodeThumbnail(idx: number) {
 }
 
 // ── Text embedding (uses text model with search_query prefix) ────────────────
-async function embedText(text: string): Promise<Float64Array> {
+async function embedText(text: string): Promise<Float32Array> {
   if (!textExtractor) throw new Error('Text model not loaded');
 
   // Add required task prefix for nomic-embed-text
   const prefixed = `search_query: ${text}`;
   const output = await textExtractor(prefixed, { pooling: 'mean', normalize: true });
 
-  return Float64Array.from(output.data);
+  return Float32Array.from(output.data);
 }
 
-// ── Text search using DruidJS HNSW ───────────────────────────────────────────
+// ── Text search (exact cosine scan over normalized vectors) ─────────────────
 async function searchImages(query: string) {
   if (!query.trim() || !state.vectors.length) {
     state.searchResults = null;
@@ -570,31 +571,14 @@ async function searchImages(query: string) {
     const queryVector = await embedText(query);
     state.searchQuery = query;
 
-    if (!state.hnsw && state.vectors.length > 0) {
-      state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
-    }
+    const { indices, scores } = searchByCosine(queryVector, state.vectors);
+    state.searchScores = scores;
+    state.searchResults = indices;
 
-    if (state.hnsw) {
-      const k = state.vectors.length;
-      const results = state.hnsw.search(queryVector, k);
-
-      const scores = new Float32Array(state.vectors.length);
-      const indices = new Int32Array(results.length);
-
-      for (let i = 0; i < results.length; i++) {
-        const { index, distance } = results[i];
-        indices[i] = index;
-        scores[index] = 1 - distance;
-      }
-
-      state.searchScores = scores;
-      state.searchResults = indices;
-
-      const topScore = scores[indices[0]] ?? 0;
-      const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
-      setStatus(statusMsg);
-      if (dom.statsEl) dom.statsEl.textContent = statusMsg;
-    }
+    const topScore = scores[indices[0]] ?? 0;
+    const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
+    setStatus(statusMsg);
+    if (dom.statsEl) dom.statsEl.textContent = statusMsg;
   } catch (err) {
     console.error('Search failed:', err);
     setStatus('Search failed. Check console.');
@@ -651,7 +635,6 @@ function resetAll() {
   state.searchResults = null;
   state.searchQuery = '';
   state.searchScores = null;
-  state.hnsw = undefined;
   state.activeFileIndex = null;
   state.lastViewedIndex = null;
   localStorage.removeItem('po_fileKeys');
@@ -847,12 +830,12 @@ function render() {
 }
 
 // ── Projection ───────────────────────────────────────────────────────────────
-async function runProjection(vectors: Float64Array[], method: ProjectionMethod, nNeighbors: number, { silent = false } = {}): Promise<number[][]> {
+async function runProjection(vectors: Float32Array[], method: ProjectionMethod, nNeighbors: number, { silent = false } = {}): Promise<number[][]> {
   try {
     if (!silent) setStatus(`Projecting with ${method}…`);
-    // Druid expects data as Array of Arrays or a Matrix
-    const data = vectors.map(v => Array.from(v));
-    const matrix = druid.Matrix.from(data);
+    // Druid accepts Float64Array rows directly; copy each f32 row to f64
+    // transiently instead of materializing a number[][] of the whole dataset.
+    const matrix = druid.Matrix.from(vectors.map(v => Float64Array.from(v)));
     let result: druid.Matrix;
 
     // Small yield to allow UI update
@@ -1261,7 +1244,7 @@ async function resizeForEmbedding(file: File): Promise<RawImage | null> {
 async function readCachedEmbeddings(
   files: PhotoFile[],
   cachePrefix: string,
-): Promise<{ keys: CacheKey[]; cached: (Float64Array | null)[]; migrate: [CacheKey, Float64Array][] }> {
+): Promise<{ keys: CacheKey[]; cached: (Float32Array | null)[]; migrate: [CacheKey, Float32Array][] }> {
   const keys = files.map(f => `${cachePrefix}${makeCacheKey(f)}` as CacheKey);
 
   // Query new and legacy keys in a single IDB transaction. Legacy keys only
@@ -1279,7 +1262,7 @@ async function readCachedEmbeddings(
 
   const results = await cacheGetBatch(queryKeys);
   const cached = results.slice(0, files.length);
-  const migrate: [CacheKey, Float64Array][] = [];
+  const migrate: [CacheKey, Float32Array][] = [];
 
   for (let q = files.length; q < results.length; q++) {
     const i = legacyForFile[q];
@@ -1293,9 +1276,9 @@ async function readCachedEmbeddings(
 // ── Embedding loop ───────────────────────────────────────────────────────────
 async function embedAll(files: PhotoFile[]) {
   state.phase = 'embedding';
-  const vectors = new Array<Float64Array>(files.length);
+  const vectors = new Array<Float32Array>(files.length);
   let cacheHits = 0;
-  const writeQueue: [CacheKey, Float64Array][] = [];
+  const writeQueue: [CacheKey, Float32Array][] = [];
   lastProgressiveCount = 0;
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
@@ -1380,7 +1363,7 @@ async function embedAll(files: PhotoFile[]) {
           missInputs.push(resized);
         } else {
           // Cannot resize — use zero vector rather than risking OOM with full-res
-          vectors[i + bi] = new Float64Array(768);
+          vectors[i + bi] = new Float32Array(768);
           return;
         }
       }
@@ -1440,13 +1423,13 @@ async function embedAll(files: PhotoFile[]) {
         for (let m = 0; m < missIndices.length; m++) {
           const bi = missIndices[m];
           const idx = i + bi;
-          vectors[idx] = Float64Array.from(extracted[m]);
+          vectors[idx] = extracted[m];
           writeQueue.push([keys[bi], vectors[idx]]);
         }
       } catch (err) {
         console.warn('Batch inference failed, filling zeros:', (err as Error).message);
         for (const bi of missIndices) {
-          vectors[i + bi] = new Float64Array(768);
+          vectors[i + bi] = new Float32Array(768);
         }
       }
     }
@@ -1604,9 +1587,6 @@ async function processFiles(files: PhotoFile[]) {
 
     state.vectors = vectors;
 
-    setStatus('Building search index…');
-    state.hnsw = new druid.HNSW(vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
-
     state.phase = 'projecting';
     setStatus(`Projecting with ${state.settings.projectionMethod}…`);
     setProgress(90);
@@ -1746,7 +1726,6 @@ async function filterByDateTime(
   state.searchResults = null;
   state.searchQuery = '';
   state.searchScores = null;
-  state.hnsw = undefined;
 
   // If extractor isn't loaded, ensure we're in viewer-only mode for filtering
   const wasViewerOnly = state.settings.viewerOnly;
@@ -2797,23 +2776,19 @@ dom.resumeBtn.addEventListener('click', async () => {
     state.clusters = savedClusters ? new Int32Array(savedClusters.slice(0, matched.length)) : null;
 
     if (wasViewerMode) {
-      // Viewer mode: no vectors/HNSW needed
+      // Viewer mode: no vectors needed
       state.vectors = [];
-      state.hnsw = undefined;
       dom.searchInput.disabled = true;
     } else {
-      // AI mode: restore search index
-      setStatus('Restoring search index…');
+      // AI mode: restore cached vectors for search + re-projection
+      setStatus('Restoring embeddings…');
       const resumePrefix = state.settings.modelVariant === 'chrome-ai' ? '@chrome-ai/'
         : !state.settings.modelVariant.startsWith('sapiens2') ? ''
         : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
         : `@${state.settings.modelVariant}/`;
       const { cached: cachedVectors, migrate } = await readCachedEmbeddings(matched, resumePrefix);
       if (migrate.length > 0) await cachePutBatch(migrate);
-      state.vectors = cachedVectors.map(v => v || new Float64Array(768));
-      if (state.vectors.length > 0) {
-        state.hnsw = new druid.HNSW(state.vectors, { metric: druid.cosine } as ConstructorParameters<typeof druid.HNSW>[1]);
-      }
+      state.vectors = cachedVectors.map(v => v || new Float32Array(768));
       dom.searchInput.disabled = false;
     }
 
@@ -2882,7 +2857,6 @@ function buildDebugInfo(): string {
     `viewerOnly:  ${state.settings.viewerOnly ? 'YES' : 'no'}`,
     `vectors:     ${state.vectors.length}`,
     `points:      ${state.points.length}`,
-    `hnsw:        ${state.hnsw ? 'built' : 'none'}`,
     `searchRes:   ${state.searchResults?.length ?? 'none'}`,
     `thumbs:      ${state.thumbnails.filter(Boolean).length} / ${state.thumbnails.length} decoded`,
     `thumbDecode: ${thumbDecoding.size} in-flight`,

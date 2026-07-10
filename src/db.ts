@@ -38,9 +38,20 @@ export async function openDB(): Promise<IDBDatabase> {
 }
 
 /**
+ * Coerce a cached value to Float32Array. Embeddings written by older builds
+ * were stored as Float64Array; convert on read so callers see one type and
+ * rewrites gradually shrink the store.
+ */
+export function asFloat32(value: unknown): Float32Array | null {
+  if (value instanceof Float32Array) return value;
+  if (value instanceof Float64Array) return Float32Array.from(value);
+  return null;
+}
+
+/**
  * Get single embedding from cache
  */
-export async function cacheGet(key: CacheKey): Promise<Float64Array | null> {
+export async function cacheGet(key: CacheKey): Promise<Float32Array | null> {
   const [result] = await cacheGetBatch([key]);
   return result;
 }
@@ -48,19 +59,19 @@ export async function cacheGet(key: CacheKey): Promise<Float64Array | null> {
 /**
  * Batch get embeddings from cache
  */
-export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float64Array | null)[]> {
+export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float32Array | null)[]> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, 'readonly');
     const store = transaction.objectStore(STORE_NAME);
-    const results: (Float64Array | null)[] = new Array(keys.length).fill(null);
+    const results: (Float32Array | null)[] = new Array(keys.length).fill(null);
     let count = 0;
 
     keys.forEach((key, i) => {
       const request = store.get(key);
       request.onsuccess = () => {
-        results[i] = request.result ?? null;
+        results[i] = asFloat32(request.result);
         count++;
         if (count === keys.length) resolve(results);
       };
@@ -76,7 +87,7 @@ export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float64Array | n
 /**
  * Put embedding in cache
  */
-export async function cachePut(key: CacheKey, value: Float64Array): Promise<void> {
+export async function cachePut(key: CacheKey, value: Float32Array): Promise<void> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
@@ -97,7 +108,7 @@ export async function cachePut(key: CacheKey, value: Float64Array): Promise<void
 /**
  * Batch put embeddings (20 per transaction for performance)
  */
-export async function cachePutBatch(entries: [CacheKey, Float64Array][]): Promise<void> {
+export async function cachePutBatch(entries: [CacheKey, Float32Array][]): Promise<void> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
@@ -137,7 +148,7 @@ export async function cacheStats(prefix?: string): Promise<{ count: number; byte
         const key = String(cursor.key);
         if (!prefix || key.startsWith(prefix)) {
           count++;
-          if (cursor.value instanceof Float64Array) bytes += cursor.value.byteLength;
+          if (ArrayBuffer.isView(cursor.value)) bytes += cursor.value.byteLength;
         }
         cursor.continue();
       } else {

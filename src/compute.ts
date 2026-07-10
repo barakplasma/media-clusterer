@@ -190,6 +190,31 @@ export function generateMetadataBasedLayout(
   return points;
 }
 
+/**
+ * Exact cosine-similarity search over L2-normalized vectors (cosine = dot
+ * product for unit vectors). Returns indices sorted best-first plus a
+ * per-index score array. Brute force is O(n·dims) — a few ms even at 20k×768 —
+ * and needs no index build or extra copies of the vectors.
+ */
+export function searchByCosine(
+  query: ArrayLike<number>,
+  vectors: Float32Array[],
+): { indices: Int32Array; scores: Float32Array } {
+  const n = vectors.length;
+  const dims = query.length;
+  const scores = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const v = vectors[i];
+    let dot = 0;
+    for (let j = 0; j < dims; j++) dot += v[j] * query[j];
+    scores[i] = dot;
+  }
+  const indices = new Int32Array(n);
+  for (let i = 0; i < n; i++) indices[i] = i;
+  indices.sort((a, b) => scores[b] - scores[a]);
+  return { indices, scores };
+}
+
 export interface ViewCamera {
   x: number;
   y: number;
