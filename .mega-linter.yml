@@ -11,5 +11,12 @@ DISABLE:
   - COPYPASTE
   - SPELL
 
+# Let zizmor's ref-confusion audit query the GitHub API with the workflow token
+ACTION_ZIZMOR_UNSECURED_ENV_VARIABLES:
+  - GITHUB_TOKEN
+
+# The workflow token is contents:read-only, so PR comments would 403
+GITHUB_COMMENT_REPORTER: false
+
 SHOW_ELAPSED_TIME: true
 FILEIO_REPORTER: false

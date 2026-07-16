@@ -110,16 +110,16 @@ file walking, and pipeline orchestration:
 
 ### Proposed module layout
 
-| Module | Contents (current locations) |
-|---|---|
-| `src/renderer.ts` | `render` (`:669-835`), `resizeCanvas`/`fitCamera` (`:606-626`), camera math, LOD constants |
-| `src/input.ts` | pointer/wheel/pinch (`:1895-1977`), keyboard nav (`:2966-3081`) |
-| `src/modal.ts` | `openFileModal`/`closeModal` (`:2027-2372`), EXIF dialog, breadcrumbs |
-| `src/sources.ts` | `collectImages` (`:348`), `loadDemoImages` (`:405`), `extractVideoFrame` |
+| Module               | Contents (current locations)                                                                                                     |
+|----------------------|----------------------------------------------------------------------------------------------------------------------------------|
+| `src/renderer.ts`    | `render` (`:669-835`), `resizeCanvas`/`fitCamera` (`:606-626`), camera math, LOD constants                                       |
+| `src/input.ts`       | pointer/wheel/pinch (`:1895-1977`), keyboard nav (`:2966-3081`)                                                                  |
+| `src/modal.ts`       | `openFileModal`/`closeModal` (`:2027-2372`), EXIF dialog, breadcrumbs                                                            |
+| `src/sources.ts`     | `collectImages` (`:348`), `loadDemoImages` (`:405`), `extractVideoFrame`                                                         |
 | `src/modelLoader.ts` | `loadModelOnce`/`loadModel`/fallback modal (`:885-1218`) — orchestration on top of the existing `modelFallback.ts`/`sapiens2.ts` |
-| `src/settingsUI.ts` | the ~300 lines of `addEventListener('change') → saveSettings()` wiring (`:2374-2670`), rewritten as a declarative binding table |
-| `src/router.ts` | `parseURLHash`/`updateURL`/popstate (`:1803-1880`) |
-| `src/styles.css` | extracted from the `index.html` inline block |
+| `src/settingsUI.ts`  | the ~300 lines of `addEventListener('change') → saveSettings()` wiring (`:2374-2670`), rewritten as a declarative binding table  |
+| `src/router.ts`      | `parseURLHash`/`updateURL`/popstate (`:1803-1880`)                                                                               |
+| `src/styles.css`     | extracted from the `index.html` inline block                                                                                     |
 
 ### Extraction order (lowest-risk first)
 
@@ -268,13 +268,13 @@ handling differs per model path:
 
 ## Suggested sequencing
 
-| Step | Work | Why this order |
-|---|---|---|
-| 0 | Rotate Unsplash key; docs quick fixes (P2-2) | Security + cheap wins, no code risk |
-| 1 | Projection worker (P1-1 part 1) | Biggest user-visible freeze removed |
-| 2 | Cache versioning + zero-vector fix (P1-3) | Correctness before more refactoring builds on the cache |
-| 3 | Monolith split in stages (P1-2) | Enables real tests; do after worker boundary is known |
-| 4 | CI/tooling hardening (P2-1) | Lint/coverage gates protect the newly split modules |
-| 5 | Accessibility pass (P2-3) | Touches modal/breadcrumb code that step 3 just reorganized |
+| Step | Work                                         | Why this order                                             |
+|------|----------------------------------------------|------------------------------------------------------------|
+| 0    | Rotate Unsplash key; docs quick fixes (P2-2) | Security + cheap wins, no code risk                        |
+| 1    | Projection worker (P1-1 part 1)              | Biggest user-visible freeze removed                        |
+| 2    | Cache versioning + zero-vector fix (P1-3)    | Correctness before more refactoring builds on the cache    |
+| 3    | Monolith split in stages (P1-2)              | Enables real tests; do after worker boundary is known      |
+| 4    | CI/tooling hardening (P2-1)                  | Lint/coverage gates protect the newly split modules        |
+| 5    | Accessibility pass (P2-3)                    | Touches modal/breadcrumb code that step 3 just reorganized |
 
 Testing improvements (P3) ride along with each step rather than being a separate phase.

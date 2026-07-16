@@ -27,6 +27,9 @@
     "vitest": "^4.1.2",
     "wrangler": "^4.80.0"
   },
+  "overrides": {
+    "protobufjs": "^7.6.3"
+  },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@modernized/exifr": "^8.0.1",
