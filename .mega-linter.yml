@@ -1,0 +1,15 @@
+# MegaLinter configuration — https://megalinter.io/latest/config-file/
+# First-run baseline for a repo with no prior lint config; tighten over time
+# (see IMPROVEMENT_PLAN.md, P2-1).
+
+APPLY_FIXES: none
+
+FILTER_REGEX_EXCLUDE: '(dist/|node_modules/|package-lock\.json|megalinter-reports/)'
+
+DISABLE:
+  # jscpd would drown in the duplication already documented in IMPROVEMENT_PLAN.md
+  - COPYPASTE
+  - SPELL
+
+SHOW_ELAPSED_TIME: true
+FILEIO_REPORTER: false

@@ -63,12 +63,19 @@ Secondary main-thread costs found alongside:
    small RPC protocol (`embedBatch(files) → Float32Array + shape`). Chrome AI's Prompt API
    is main-thread-only today, so that path keeps its current structure.
 3. **Micro-optimizations third** (independent, small PRs each):
-   - top-K partial selection in `searchByCosine` (reuse `selectSmallest`);
+   - top-K partial selection in `searchByCosine` (adapt `selectSmallest`, which
+     partitions for the *smallest* keys — cosine similarity needs the *largest*, so
+     negate the scores or add a select-largest variant);
    - accumulate IDB writes across batches, flush every ~50 items;
    - k-means++ seeding and empty-cluster re-seeding;
    - hoist per-frame allocations out of `render()`; extract a single
      `findNearestToCenter()` helper; move `Image` loading out of the draw path into a
-     small request queue.
+     small request queue;
+   - fix the full-res object-URL leak: URLs created at `src/app.ts:756` are only revoked
+     in bulk on reset (`src/app.ts:636,1549`) while LRU eviction just sets `img.src = ''`
+     (`:748,824,831`), so long sessions accumulate an object URL for every image ever
+     viewed at high zoom — revoke on eviction. This can crash tabs on memory-constrained
+     devices, which is why it lives here with the performance work rather than in P2-3.
 
 ### Files
 
@@ -193,9 +200,11 @@ handling differs per model path:
   silently degrades there. Either drop the GH Pages target or accept/document
   single-threaded WASM on it. No `Cache-Control` headers exist for hashed assets on
   either target.
-- **No linter or formatter** exists (no ESLint/Prettier/Biome config, no lint script).
-  Recommendation: Biome (one fast tool for lint+format), wired into `.husky/pre-commit`
-  (currently runs only `npm test`) and CI.
+- **No linter or formatter** existed before this plan. The PR introducing this document
+  also adds a MegaLinter (javascript flavor) CI workflow
+  (`.github/workflows/mega-linter.yml` + `.mega-linter.yml`) as a first step.
+  Recommendation for local dev remains Biome (one fast tool for lint+format), wired into
+  `.husky/pre-commit` (currently runs only `npm test`).
 - `tsconfig.json` is `strict` but lacks `noUnusedLocals`, `noUnusedParameters`,
   `noImplicitReturns`, `noUncheckedIndexedAccess`; `declaration: true` emits unused
   `.d.ts` for an app and can be removed.
@@ -216,8 +225,11 @@ handling differs per model path:
 - `AGENT.md` says "Multimodal Nomic embeddings" but the default model is sapiens2 ONNX
   (`modelVariant: 'sapiens2-fp16'`, `src/app.ts:181`); the Chrome AI describe path is
   undocumented in both docs.
-- `__APP_VERSION__` is defined in `vite.config.ts:40` but never shown anywhere (the UI
-  renders only `__GIT_BRANCH__@__GIT_COMMIT__`) — surface it or drop it.
+- `__APP_VERSION__` (`vite.config.ts:40`) is never shown in the UI (which renders only
+  `__GIT_BRANCH__@__GIT_COMMIT__`), but it **is** used as the Sentry release tag
+  (`src/sentry.ts:12`, declared in `src/types.ts:163`) — so it must not be dropped
+  without refactoring both files. Recommendation: surface it in the UI/debug overlay so
+  the version users see matches the release Sentry tracks.
 
 ## P2-3 · UX & accessibility
 
@@ -232,9 +244,8 @@ handling differs per model path:
   w/a/s/d in the Chrome-AI prompt textarea pans the canvas.
 - No `prefers-reduced-motion` handling; fixed pixel font sizes in inline styles don't
   respect user font settings.
-- Full-res object URLs are only revoked in bulk on reset (`src/app.ts:636,1549`); LRU
-  eviction just sets `img.src = ''` (`:748,824,831`), so long sessions accumulate object
-  URLs for every image ever viewed at high zoom.
+- (The full-res object-URL leak formerly listed here is a memory/performance issue, not
+  a UX/a11y one — it now lives with the P1-1 micro-optimizations above.)
 
 ---
 
