@@ -1,9 +1,7 @@
-/// <reference types="vite/client" />
+import 'vite/client'
 
-interface ImportMetaEnv {
-  readonly VITE_UNSPLASH_ACCESS_KEY?: string;
-}
-
-interface ImportMeta {
-  readonly env: ImportMetaEnv;
+declare module 'vite/client' {
+  interface ImportMetaEnv {
+    readonly VITE_UNSPLASH_ACCESS_KEY?: string,
+  }
 }
