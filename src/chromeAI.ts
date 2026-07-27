@@ -10,95 +10,81 @@
 
 // ── Type declarations for Chrome's built-in LanguageModel API ────────────────
 
-export type LanguageModelAvailability =
-  | "available"
-  | "downloadable"
-  | "downloading"
-  | "unavailable";
+export type LanguageModelAvailability = 'available' | 'downloadable' | 'downloading' | 'unavailable'
 
 // Content items within a message
 type LanguageModelContentItem =
-  | { type: "text"; value: string }
+  | { type: 'text'; value: string }
   | {
-      type: "image";
-      value:
-        | ImageBitmap
-        | Blob
-        | HTMLCanvasElement
-        | HTMLImageElement
-        | HTMLVideoElement;
-    };
+      type: 'image'
+      value: ImageBitmap | Blob | HTMLCanvasElement | HTMLImageElement | HTMLVideoElement
+    }
 
 // Messages use role/content wrapper per the Prompt API spec
 interface LanguageModelMessage {
-  role: "user" | "assistant";
-  content: LanguageModelContentItem[];
+  role: 'user' | 'assistant'
+  content: LanguageModelContentItem[]
 }
 
 export interface LanguageModelSession {
-  prompt(
-    input: LanguageModelMessage[],
-    options?: { signal?: AbortSignal },
-  ): Promise<string>;
-  destroy(): void;
+  prompt(input: LanguageModelMessage[], options?: { signal?: AbortSignal }): Promise<string>
+  destroy(): void
 }
 
 interface LanguageModelStatic {
   availability(options?: {
-    expectedInputs?: Array<{ type: string; languages?: string[] }>;
-    expectedOutputs?: Array<{ type: string; languages?: string[] }>;
-  }): Promise<LanguageModelAvailability>;
+    expectedInputs?: Array<{ type: string; languages?: string[] }>
+    expectedOutputs?: Array<{ type: string; languages?: string[] }>
+  }): Promise<LanguageModelAvailability>
   create(options?: {
-    expectedInputs?: Array<{ type: string; languages?: string[] }>;
-    expectedOutputs?: Array<{ type: string; languages?: string[] }>;
-    signal?: AbortSignal;
-  }): Promise<LanguageModelSession>;
+    expectedInputs?: Array<{ type: string; languages?: string[] }>
+    expectedOutputs?: Array<{ type: string; languages?: string[] }>
+    signal?: AbortSignal
+  }): Promise<LanguageModelSession>
 }
 
 declare global {
-  const LanguageModel: LanguageModelStatic | undefined;
+  const LanguageModel: LanguageModelStatic | undefined
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const DEFAULT_DESCRIBE_PROMPT =
-  "Describe this image for photo organization and clustering. " +
-  "Include: main subjects, setting or location, dominant colors, mood, " +
-  "lighting conditions, and any activity taking place. " +
-  "Be specific and concise (2-4 sentences).";
+  'Describe this image for photo organization and clustering. ' +
+  'Include: main subjects, setting or location, dominant colors, mood, ' +
+  'lighting conditions, and any activity taking place. ' +
+  'Be specific and concise (2-4 sentences).'
 
 // Recycle the session after this many .prompt() calls to bound context growth.
-const SESSION_RECYCLE_INTERVAL = 15;
+const SESSION_RECYCLE_INTERVAL = 15
 
 // ── Availability check ────────────────────────────────────────────────────────
 
 export async function getChromeAIAvailability(): Promise<LanguageModelAvailability> {
   // Support both new global form and legacy window.ai.languageModel (pre-138)
   const api =
-    (typeof LanguageModel !== "undefined" ? LanguageModel : undefined) ??
-    (window as unknown as { ai?: { languageModel?: LanguageModelStatic } }).ai
-      ?.languageModel;
-  if (!api) return "unavailable";
+    (typeof LanguageModel !== 'undefined' ? LanguageModel : undefined) ??
+    (window as unknown as { ai?: { languageModel?: LanguageModelStatic } }).ai?.languageModel
+  if (!api) return 'unavailable'
   try {
     return await api.availability({
-      expectedInputs: [{ type: "image" }, { type: "text", languages: ["en"] }],
-      expectedOutputs: [{ type: "text", languages: ["en"] }],
-    });
+      expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
+      expectedOutputs: [{ type: 'text', languages: ['en'] }]
+    })
   } catch {
-    return "unavailable";
+    return 'unavailable'
   }
 }
 
 function getAPI(): LanguageModelStatic {
   const api =
-    (typeof LanguageModel !== "undefined" ? LanguageModel : undefined) ??
-    (window as unknown as { ai?: { languageModel?: LanguageModelStatic } }).ai
-      ?.languageModel;
+    (typeof LanguageModel !== 'undefined' ? LanguageModel : undefined) ??
+    (window as unknown as { ai?: { languageModel?: LanguageModelStatic } }).ai?.languageModel
   if (!api)
     throw new Error(
-      "Chrome AI Prompt API not available. Enable chrome://flags/#prompt-api-for-gemini-nano in Chrome 138+.",
-    );
-  return api;
+      'Chrome AI Prompt API not available. Enable chrome://flags/#prompt-api-for-gemini-nano in Chrome 138+.'
+    )
+  return api
 }
 
 // ── Session manager ───────────────────────────────────────────────────────────
@@ -110,65 +96,58 @@ function getAPI(): LanguageModelStatic {
  */
 export class ChromeAISessionManager {
   private slots: Array<{
-    session: LanguageModelSession | null;
-    callCount: number;
+    session: LanguageModelSession | null
+    callCount: number
   }> = [
     { session: null, callCount: 0 },
-    { session: null, callCount: 0 },
-  ];
+    { session: null, callCount: 0 }
+  ]
 
   async describe(
     image: ImageBitmap | Blob,
     prompt: string = DEFAULT_DESCRIBE_PROMPT,
     signal?: AbortSignal,
-    slot = 0,
+    slot = 0
   ): Promise<string> {
-    const api = getAPI();
-    const s = this.slots[slot % this.slots.length];
+    const api = getAPI()
+    const s = this.slots[slot % this.slots.length]
 
-    if (
-      s.session &&
-      s.callCount > 0 &&
-      s.callCount % SESSION_RECYCLE_INTERVAL === 0
-    ) {
-      s.session.destroy();
-      s.session = null;
+    if (s.session && s.callCount > 0 && s.callCount % SESSION_RECYCLE_INTERVAL === 0) {
+      s.session.destroy()
+      s.session = null
     }
 
     if (!s.session) {
       s.session = await api.create({
-        expectedInputs: [
-          { type: "image" },
-          { type: "text", languages: ["en"] },
-        ],
-        expectedOutputs: [{ type: "text", languages: ["en"] }],
-        signal,
-      });
+        expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
+        expectedOutputs: [{ type: 'text', languages: ['en'] }],
+        signal
+      })
     }
 
     // Prompt API requires an array of role/content messages
     const description = await s.session.prompt(
       [
         {
-          role: "user",
+          role: 'user',
           content: [
-            { type: "image", value: image },
-            { type: "text", value: prompt },
-          ],
-        },
+            { type: 'image', value: image },
+            { type: 'text', value: prompt }
+          ]
+        }
       ],
-      { signal },
-    );
+      { signal }
+    )
 
-    s.callCount++;
-    return description.trim();
+    s.callCount++
+    return description.trim()
   }
 
   destroy(): void {
     for (const s of this.slots) {
-      s.session?.destroy();
-      s.session = null;
-      s.callCount = 0;
+      s.session?.destroy()
+      s.session = null
+      s.callCount = 0
     }
   }
 }

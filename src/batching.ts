@@ -15,40 +15,30 @@ export async function embedBatchAdaptive<I, V>(
   inputs: I[],
   embed: (batch: I[]) => Promise<V[]>,
   makeFallback: (input: I, error: unknown) => V,
-  onFailure?: (batchLength: number, error: unknown) => void,
+  onFailure?: (batchLength: number, error: unknown) => void
 ): Promise<V[]> {
-  if (inputs.length === 0) return [];
+  if (inputs.length === 0) return []
   try {
-    return await embed(inputs);
+    return await embed(inputs)
   } catch (err) {
-    onFailure?.(inputs.length, err);
+    onFailure?.(inputs.length, err)
     if (inputs.length === 1) {
-      return [makeFallback(inputs[0], err)];
+      return [makeFallback(inputs[0], err)]
     }
-    const mid = Math.ceil(inputs.length / 2);
+    const mid = Math.ceil(inputs.length / 2)
     // Sequential, not parallel: after an OOM the last thing we want is two
     // half-size batches hitting the GPU at the same time.
-    const left = await embedBatchAdaptive(
-      inputs.slice(0, mid),
-      embed,
-      makeFallback,
-      onFailure,
-    );
-    const right = await embedBatchAdaptive(
-      inputs.slice(mid),
-      embed,
-      makeFallback,
-      onFailure,
-    );
-    return left.concat(right);
+    const left = await embedBatchAdaptive(inputs.slice(0, mid), embed, makeFallback, onFailure)
+    const right = await embedBatchAdaptive(inputs.slice(mid), embed, makeFallback, onFailure)
+    return left.concat(right)
   }
 }
 
 export interface AdaptiveBatcher {
   /** Current working batch size. */
-  readonly size: number;
-  recordSuccess(): void;
-  recordFailure(): void;
+  readonly size: number
+  recordSuccess(): void
+  recordFailure(): void
 }
 
 /**
@@ -57,25 +47,25 @@ export interface AdaptiveBatcher {
  */
 export function createAdaptiveBatcher(
   initialSize: number,
-  { growAfter = 5 }: { growAfter?: number } = {},
+  { growAfter = 5 }: { growAfter?: number } = {}
 ): AdaptiveBatcher {
-  let size = Math.max(1, initialSize);
-  let streak = 0;
+  let size = Math.max(1, initialSize)
+  let streak = 0
   return {
     get size() {
-      return size;
+      return size
     },
     recordSuccess() {
-      if (size >= initialSize) return;
-      streak++;
+      if (size >= initialSize) return
+      streak++
       if (streak >= growAfter) {
-        size = Math.min(initialSize, Math.ceil(size * 1.25));
-        streak = 0;
+        size = Math.min(initialSize, Math.ceil(size * 1.25))
+        streak = 0
       }
     },
     recordFailure() {
-      size = Math.max(1, Math.floor(size / 2));
-      streak = 0;
-    },
-  };
+      size = Math.max(1, Math.floor(size / 2))
+      streak = 0
+    }
+  }
 }
