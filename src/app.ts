@@ -87,7 +87,7 @@ const MAX_FULL_IMAGES = 100; // Max full-res images to keep in memory (LRU)
 const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
 
 // ── Demo Images (Unsplash API, public authentication) ──────────────────────────
-const UNSPLASH_ACCESS_KEY = 'IeS82UQjZMl96I9pVe3ag7hPn1UltJsR5xSt_orlAk8';
+const UNSPLASH_ACCESS_KEY = import.meta.env.VITE_UNSPLASH_ACCESS_KEY || '';
 const DEMO_CATEGORIES = ['dog', 'cat', 'horse', 'butterfly', 'spider', 'chicken', 'elephant', 'sheep', 'cow', 'squirrel'];
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
