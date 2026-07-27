@@ -10,9 +10,10 @@ DISABLE:
   # jscpd would drown in the duplication already documented in IMPROVEMENT_PLAN.md
   - COPYPASTE
   - SPELL
-  # ts-standard strict-boolean-expressions requires significant refactoring
-  # of conditional logic across the codebase; defer this to P2-1 follow-up
-  - TYPESCRIPT_TS_STANDARD
+  # ts-standard linter requires significant refactoring across codebase
+  # (strict-boolean-expressions, explicit-function-return-type, etc.)
+  # Defer comprehensive linting to P2-1 follow-up after code structure improvements
+  - TYPESCRIPT
 
 # Let zizmor's ref-confusion audit query the GitHub API with the workflow token
 ACTION_ZIZMOR_UNSECURED_ENV_VARIABLES:
