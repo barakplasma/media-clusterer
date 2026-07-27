@@ -2,12 +2,12 @@
  * IndexedDB cache for embeddings
  */
 
-import type { CacheKey } from './types';
+import type { CacheKey } from "./types";
 
 let db: IDBDatabase | null = null;
 
-const DB_NAME = 'photo-organizer-v1';
-const STORE_NAME = 'embeddings';
+const DB_NAME = "photo-organizer-v1";
+const STORE_NAME = "embeddings";
 const DB_VERSION = 1;
 
 /**
@@ -59,11 +59,13 @@ export async function cacheGet(key: CacheKey): Promise<Float32Array | null> {
 /**
  * Batch get embeddings from cache
  */
-export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float32Array | null)[]> {
+export async function cacheGetBatch(
+  keys: CacheKey[],
+): Promise<(Float32Array | null)[]> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, 'readonly');
+    const transaction = database.transaction(STORE_NAME, "readonly");
     const store = transaction.objectStore(STORE_NAME);
     const results: (Float32Array | null)[] = new Array(keys.length).fill(null);
     let count = 0;
@@ -87,11 +89,14 @@ export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float32Array | n
 /**
  * Put embedding in cache
  */
-export async function cachePut(key: CacheKey, value: Float32Array): Promise<void> {
+export async function cachePut(
+  key: CacheKey,
+  value: Float32Array,
+): Promise<void> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     store.put(value, key);
 
@@ -108,11 +113,13 @@ export async function cachePut(key: CacheKey, value: Float32Array): Promise<void
 /**
  * Batch put embeddings (20 per transaction for performance)
  */
-export async function cachePutBatch(entries: [CacheKey, Float32Array][]): Promise<void> {
+export async function cachePutBatch(
+  entries: [CacheKey, Float32Array][],
+): Promise<void> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
 
     for (const [key, value] of entries) {
@@ -132,11 +139,13 @@ export async function cachePutBatch(entries: [CacheKey, Float32Array][]): Promis
 /**
  * Return count and total bytes of cached embeddings, optionally filtered by key prefix.
  */
-export async function cacheStats(prefix?: string): Promise<{ count: number; bytes: number }> {
+export async function cacheStats(
+  prefix?: string,
+): Promise<{ count: number; bytes: number }> {
   const database = await openDB();
 
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, 'readonly');
+    const transaction = database.transaction(STORE_NAME, "readonly");
     const store = transaction.objectStore(STORE_NAME);
     let count = 0;
     let bytes = 0;
@@ -148,7 +157,8 @@ export async function cacheStats(prefix?: string): Promise<{ count: number; byte
         const key = String(cursor.key);
         if (!prefix || key.startsWith(prefix)) {
           count++;
-          if (ArrayBuffer.isView(cursor.value)) bytes += cursor.value.byteLength;
+          if (ArrayBuffer.isView(cursor.value))
+            bytes += cursor.value.byteLength;
         }
         cursor.continue();
       } else {

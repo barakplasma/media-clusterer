@@ -2,7 +2,7 @@
  * Embedding utilities for vision and text models
  */
 
-import type { PipelineOutput, PipelineInstance } from './types';
+import type { PipelineOutput, PipelineInstance } from "./types";
 
 /**
  * L2 normalize array to unit vector
@@ -30,15 +30,19 @@ export function l2normalize(arr: number[] | Float32Array): Float32Array {
  */
 export function extractVector(output: PipelineOutput): Float32Array {
   // Unwrap pipeline output: Tensor, array of Tensors, or named object
-  let tensor: PipelineOutput | undefined = Array.isArray(output) ? output[0] : output;
+  let tensor: PipelineOutput | undefined = Array.isArray(output)
+    ? output[0]
+    : output;
 
-  if (tensor && typeof tensor === 'object' && !('dims' in tensor)) {
+  if (tensor && typeof tensor === "object" && !("dims" in tensor)) {
     const obj = tensor as Record<string, unknown>;
-    tensor = (obj.last_hidden_state ?? obj.pooler_output ?? Object.values(obj)[0]) as PipelineOutput;
+    tensor = (obj.last_hidden_state ??
+      obj.pooler_output ??
+      Object.values(obj)[0]) as PipelineOutput;
   }
 
   if (!tensor) {
-    throw new Error('Failed to extract tensor from pipeline output');
+    throw new Error("Failed to extract tensor from pipeline output");
   }
 
   const dims = tensor.dims;
@@ -67,15 +71,23 @@ export function extractVector(output: PipelineOutput): Float32Array {
 /**
  * Extract multiple vectors from a batched pipeline output (dims: [batchSize, hidden])
  */
-export function extractBatchedVectors(output: PipelineOutput, batchSize: number): Float32Array[] {
-  let tensor: PipelineOutput | undefined = Array.isArray(output) ? output[0] : output;
+export function extractBatchedVectors(
+  output: PipelineOutput,
+  batchSize: number,
+): Float32Array[] {
+  let tensor: PipelineOutput | undefined = Array.isArray(output)
+    ? output[0]
+    : output;
 
-  if (tensor && typeof tensor === 'object' && !('dims' in tensor)) {
+  if (tensor && typeof tensor === "object" && !("dims" in tensor)) {
     const obj = tensor as Record<string, unknown>;
-    tensor = (obj.last_hidden_state ?? obj.pooler_output ?? Object.values(obj)[0]) as PipelineOutput;
+    tensor = (obj.last_hidden_state ??
+      obj.pooler_output ??
+      Object.values(obj)[0]) as PipelineOutput;
   }
 
-  if (!tensor) throw new Error('Failed to extract tensor from batched pipeline output');
+  if (!tensor)
+    throw new Error("Failed to extract tensor from batched pipeline output");
 
   const dims = tensor.dims;
   const data = tensor.data;
@@ -97,7 +109,11 @@ export function extractBatchedVectors(output: PipelineOutput, batchSize: number)
       results.push(l2normalize(pooled));
     } else {
       // [batch, hidden] — already pooled
-      results.push(l2normalize(data.slice(b * hiddenSize, (b + 1) * hiddenSize) as Float32Array));
+      results.push(
+        l2normalize(
+          data.slice(b * hiddenSize, (b + 1) * hiddenSize) as Float32Array,
+        ),
+      );
     }
   }
 
@@ -114,7 +130,11 @@ export function extractBatchedVectors(output: PipelineOutput, batchSize: number)
  * size + lastModified makes the cache hit regardless of folder scope. The
  * size + lastModified pair keeps distinct files with the same basename apart.
  */
-export function makeCacheKey(file: { name: string; size: number; lastModified: number }): string {
-  const basename = file.name.split('/').pop() || file.name;
+export function makeCacheKey(file: {
+  name: string;
+  size: number;
+  lastModified: number;
+}): string {
+  const basename = file.name.split("/").pop() || file.name;
   return `${basename}:${file.size}:${file.lastModified}`;
 }

@@ -28,8 +28,18 @@ export async function embedBatchAdaptive<I, V>(
     const mid = Math.ceil(inputs.length / 2);
     // Sequential, not parallel: after an OOM the last thing we want is two
     // half-size batches hitting the GPU at the same time.
-    const left = await embedBatchAdaptive(inputs.slice(0, mid), embed, makeFallback, onFailure);
-    const right = await embedBatchAdaptive(inputs.slice(mid), embed, makeFallback, onFailure);
+    const left = await embedBatchAdaptive(
+      inputs.slice(0, mid),
+      embed,
+      makeFallback,
+      onFailure,
+    );
+    const right = await embedBatchAdaptive(
+      inputs.slice(mid),
+      embed,
+      makeFallback,
+      onFailure,
+    );
     return left.concat(right);
   }
 }
@@ -52,7 +62,9 @@ export function createAdaptiveBatcher(
   let size = Math.max(1, initialSize);
   let streak = 0;
   return {
-    get size() { return size; },
+    get size() {
+      return size;
+    },
     recordSuccess() {
       if (size >= initialSize) return;
       streak++;

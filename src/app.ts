@@ -2,35 +2,43 @@
  * Main application logic for Media Clusterer
  */
 
-import './sentry';
-import exifr from '@modernized/exifr';
-import { pipeline, env, RawImage } from '@huggingface/transformers';
-import * as druid from '@saehrimnir/druidjs';
-import pLimit from 'p-limit';
-import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
-import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2';
+import "./sentry";
+import exifr from "@modernized/exifr";
+import { pipeline, env, RawImage } from "@huggingface/transformers";
+import * as druid from "@saehrimnir/druidjs";
+import pLimit from "p-limit";
+import { loadSapiens2, embedWithSapiens2 } from "./sapiens2";
+import type {
+  Sapiens2Session,
+  Sapiens2Variant,
+  Sapiens2FallbackReason,
+} from "./sapiens2";
 import {
   modelDownloadUrls,
   buildUploadCache,
   normalizeHost,
   isDownloadError,
-} from './modelFallback';
-import { getChromeAIAvailability, ChromeAISessionManager, DEFAULT_DESCRIBE_PROMPT } from './chromeAI';
-import type { LanguageModelAvailability } from './chromeAI';
+} from "./modelFallback";
+import {
+  getChromeAIAvailability,
+  ChromeAISessionManager,
+  DEFAULT_DESCRIBE_PROMPT,
+} from "./chromeAI";
+import type { LanguageModelAvailability } from "./chromeAI";
 import {
   l2normalize,
   extractVector,
   extractBatchedVectors,
   makeCacheKey,
-} from './embeddings';
+} from "./embeddings";
 import {
   openDB,
   cacheGet,
   cacheGetBatch,
   cachePutBatch,
   cacheStats,
-} from './db';
-import { getNextImageInDirection } from './spatial';
+} from "./db";
+import { getNextImageInDirection } from "./spatial";
 import {
   THUMB_WORLD,
   kmeansAsync,
@@ -39,10 +47,10 @@ import {
   cullAndPrioritize,
   searchByCosine,
   formatEta,
-} from './compute';
-import '@picocss/pico/css/pico.conditional.min.css';
-import { computeOptimalBatchSize, getMemoryPressure } from './hardware';
-import { embedBatchAdaptive, createAdaptiveBatcher } from './batching';
+} from "./compute";
+import "@picocss/pico/css/pico.conditional.min.css";
+import { computeOptimalBatchSize, getMemoryPressure } from "./hardware";
+import { embedBatchAdaptive, createAdaptiveBatcher } from "./batching";
 import type {
   AppState,
   Camera,
@@ -60,113 +68,193 @@ import type {
   CanvasPointerPos,
   CacheKey,
   ModelVariant,
-} from './types';
+} from "./types";
 
 // Enable caching and local model access for persistent storage
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
-env.cacheDir = 'models';
+env.cacheDir = "models";
 
 // Point Transformers.js at an alternative HuggingFace-compatible host when the
 // user has configured one (corporate proxy / Artifactory). Called at startup
 // and whenever the setting changes via the download-fallback modal.
 function applyModelEnv() {
   const host = normalizeHost(state.settings.customModelHost);
-  env.remoteHost = host || 'https://huggingface.co';
+  env.remoteHost = host || "https://huggingface.co";
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'heic', 'heif']);
-const VIDEO_EXTS = new Set(['mp4', 'webm']);
-const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
+const IMAGE_EXTS = new Set([
+  "jpg",
+  "jpeg",
+  "png",
+  "gif",
+  "webp",
+  "avif",
+  "bmp",
+  "tiff",
+  "tif",
+  "heic",
+  "heif",
+]);
+const VIDEO_EXTS = new Set(["mp4", "webm"]);
+const FULL_LOD_SIZE = 120; // screen px at which we switch from thumb to full-res
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const BATCH_SIZE = IS_MOBILE ? 4 : 16; // fallback before settings load
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
 const MAX_THUMBNAILS_CACHE = 2000; // Max decoded thumbnails to keep in memory (LRU)
 const MAX_FULL_IMAGES = 100; // Max full-res images to keep in memory (LRU)
-const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
+const CLUSTER_COLORS = [
+  "#f87171",
+  "#fb923c",
+  "#facc15",
+  "#4ade80",
+  "#38bdf8",
+  "#818cf8",
+  "#f472b6",
+  "#a78bfa",
+];
 
 // ── Demo Images (Unsplash API, public authentication) ──────────────────────────
-const UNSPLASH_ACCESS_KEY = import.meta.env.VITE_UNSPLASH_ACCESS_KEY || '';
-const DEMO_CATEGORIES = ['dog', 'cat', 'horse', 'butterfly', 'spider', 'chicken', 'elephant', 'sheep', 'cow', 'squirrel'];
+const UNSPLASH_ACCESS_KEY = import.meta.env.VITE_UNSPLASH_ACCESS_KEY || "";
+const DEMO_CATEGORIES = [
+  "dog",
+  "cat",
+  "horse",
+  "butterfly",
+  "spider",
+  "chicken",
+  "elephant",
+  "sheep",
+  "cow",
+  "squirrel",
+];
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
 const dom: DOMElements = {
-  loadModelBtn: document.getElementById('load-model-btn') as HTMLButtonElement,
-  resumeBtn: document.getElementById('resume-btn') as HTMLButtonElement,
-  openBtn: document.getElementById('open-btn') as HTMLButtonElement,
-  recenterBtn: document.getElementById('recenter-btn') as HTMLButtonElement,
-  resetBtn: document.getElementById('reset-btn') as HTMLButtonElement,
-  progressBar: document.getElementById('progress-bar') as HTMLDivElement,
-  statusEl: document.getElementById('status') as HTMLDivElement,
-  canvas: document.getElementById('canvas') as HTMLCanvasElement,
-  modal: document.getElementById('modal') as HTMLDialogElement,
-  modalClose: document.getElementById('modal-close') as HTMLButtonElement,
-  modalNavLeft: document.getElementById('modal-nav-left') as HTMLButtonElement,
-  modalNavRight: document.getElementById('modal-nav-right') as HTMLButtonElement,
-  modalNavUp: document.getElementById('modal-nav-up') as HTMLButtonElement,
-  modalNavDown: document.getElementById('modal-nav-down') as HTMLButtonElement,
-  modalImg: document.getElementById('modal-img') as HTMLImageElement,
-  modalVideo: document.getElementById('modal-video') as HTMLVideoElement,
-  modalFooter: document.getElementById('modal-footer') as HTMLDivElement,
-  modalUp: document.getElementById('modal-up') as HTMLSpanElement,
-  modalPath: document.getElementById('modal-path') as HTMLDivElement,
-  modalFilename: document.getElementById('modal-filename') as HTMLDivElement,
-  modalDatetime: document.getElementById('modal-datetime') as HTMLDivElement,
-  modalMeta: document.getElementById('modal-meta') as HTMLSpanElement,
-  modalGps: document.getElementById('modal-gps') as HTMLAnchorElement,
-  modalExifBtn: document.getElementById('modal-exif-btn') as HTMLButtonElement,
-  modalPrevBtn: document.getElementById('modal-prev-btn') as HTMLButtonElement,
-  modalNextBtn: document.getElementById('modal-next-btn') as HTMLButtonElement,
-  searchWrap: document.getElementById('search-wrap') as HTMLDivElement,
-  searchInput: document.getElementById('search-input') as HTMLInputElement,
-  searchClearBtn: document.getElementById('search-clear-btn') as HTMLButtonElement,
-  fileInput: document.getElementById('file-input') as HTMLInputElement,
-  aboutBtn: document.getElementById('about-btn') as HTMLButtonElement,
-  aboutModal: document.getElementById('about-modal') as HTMLDialogElement,
-  aboutClose: document.getElementById('about-close') as HTMLButtonElement,
-  statsEl: document.getElementById('stats') as HTMLDivElement,
-  settingsBtn: document.getElementById('settings-btn') as HTMLButtonElement,
-  settingsModal: document.getElementById('settings-modal') as HTMLDialogElement,
-  settingsClose: document.getElementById('settings-close') as HTMLButtonElement,
-  densitySlider: document.getElementById('density-slider') as HTMLInputElement,
-  loopToggle: document.getElementById('loop-toggle') as HTMLInputElement,
-  drawBudgetSlider: document.getElementById('draw-budget-slider') as HTMLInputElement,
-  enableSearchToggle: document.getElementById('enable-search-toggle') as HTMLInputElement,
-  projectionSelect: document.getElementById('projection-select') as HTMLSelectElement,
-  viewerOnlyToggle: document.getElementById('viewer-only-toggle') as HTMLInputElement,
-  lazyCaptionToggle: document.getElementById('lazy-caption-toggle') as HTMLInputElement,
-  doNotTrackToggle: document.getElementById('do-not-track-toggle') as HTMLInputElement,
-  batchSizeInput: document.getElementById('batch-size-slider') as HTMLInputElement,
-  batchSizeAutoBtn: document.getElementById('batch-size-auto-btn') as HTMLButtonElement,
-  randomSampleSizeInput: document.getElementById('random-sample-size') as HTMLInputElement,
-  bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
-  headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
-  demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
-  modelSelect: document.getElementById('model-select') as HTMLSelectElement,
-  modalCaption: document.getElementById('modal-caption') as HTMLDivElement,
-  chromeAIPromptInput: document.getElementById('chrome-ai-prompt') as HTMLTextAreaElement,
-  chromeAIPromptReset: document.getElementById('chrome-ai-prompt-reset') as HTMLButtonElement,
-  chromeAIPromptSetting: document.getElementById('chrome-ai-prompt-setting') as HTMLDivElement,
-  customModelHostInput: document.getElementById('custom-model-host') as HTMLInputElement,
-  modelFallbackModal: document.getElementById('model-fallback-modal') as HTMLDialogElement,
-  modelFallbackClose: document.getElementById('model-fallback-close') as HTMLButtonElement,
-  modelFallbackUrls: document.getElementById('model-fallback-urls') as HTMLUListElement,
-  modelFallbackFile: document.getElementById('model-fallback-file') as HTMLInputElement,
-  modelFallbackFileHint: document.getElementById('model-fallback-file-hint') as HTMLDivElement,
-  modelFallbackHost: document.getElementById('model-fallback-host') as HTMLInputElement,
-  modelFallbackCancel: document.getElementById('model-fallback-cancel') as HTMLButtonElement,
-  modelFallbackRetry: document.getElementById('model-fallback-retry') as HTMLButtonElement,
-  };
+  loadModelBtn: document.getElementById("load-model-btn") as HTMLButtonElement,
+  resumeBtn: document.getElementById("resume-btn") as HTMLButtonElement,
+  openBtn: document.getElementById("open-btn") as HTMLButtonElement,
+  recenterBtn: document.getElementById("recenter-btn") as HTMLButtonElement,
+  resetBtn: document.getElementById("reset-btn") as HTMLButtonElement,
+  progressBar: document.getElementById("progress-bar") as HTMLDivElement,
+  statusEl: document.getElementById("status") as HTMLDivElement,
+  canvas: document.getElementById("canvas") as HTMLCanvasElement,
+  modal: document.getElementById("modal") as HTMLDialogElement,
+  modalClose: document.getElementById("modal-close") as HTMLButtonElement,
+  modalNavLeft: document.getElementById("modal-nav-left") as HTMLButtonElement,
+  modalNavRight: document.getElementById(
+    "modal-nav-right",
+  ) as HTMLButtonElement,
+  modalNavUp: document.getElementById("modal-nav-up") as HTMLButtonElement,
+  modalNavDown: document.getElementById("modal-nav-down") as HTMLButtonElement,
+  modalImg: document.getElementById("modal-img") as HTMLImageElement,
+  modalVideo: document.getElementById("modal-video") as HTMLVideoElement,
+  modalFooter: document.getElementById("modal-footer") as HTMLDivElement,
+  modalUp: document.getElementById("modal-up") as HTMLSpanElement,
+  modalPath: document.getElementById("modal-path") as HTMLDivElement,
+  modalFilename: document.getElementById("modal-filename") as HTMLDivElement,
+  modalDatetime: document.getElementById("modal-datetime") as HTMLDivElement,
+  modalMeta: document.getElementById("modal-meta") as HTMLSpanElement,
+  modalGps: document.getElementById("modal-gps") as HTMLAnchorElement,
+  modalExifBtn: document.getElementById("modal-exif-btn") as HTMLButtonElement,
+  modalPrevBtn: document.getElementById("modal-prev-btn") as HTMLButtonElement,
+  modalNextBtn: document.getElementById("modal-next-btn") as HTMLButtonElement,
+  searchWrap: document.getElementById("search-wrap") as HTMLDivElement,
+  searchInput: document.getElementById("search-input") as HTMLInputElement,
+  searchClearBtn: document.getElementById(
+    "search-clear-btn",
+  ) as HTMLButtonElement,
+  fileInput: document.getElementById("file-input") as HTMLInputElement,
+  aboutBtn: document.getElementById("about-btn") as HTMLButtonElement,
+  aboutModal: document.getElementById("about-modal") as HTMLDialogElement,
+  aboutClose: document.getElementById("about-close") as HTMLButtonElement,
+  statsEl: document.getElementById("stats") as HTMLDivElement,
+  settingsBtn: document.getElementById("settings-btn") as HTMLButtonElement,
+  settingsModal: document.getElementById("settings-modal") as HTMLDialogElement,
+  settingsClose: document.getElementById("settings-close") as HTMLButtonElement,
+  densitySlider: document.getElementById("density-slider") as HTMLInputElement,
+  loopToggle: document.getElementById("loop-toggle") as HTMLInputElement,
+  drawBudgetSlider: document.getElementById(
+    "draw-budget-slider",
+  ) as HTMLInputElement,
+  enableSearchToggle: document.getElementById(
+    "enable-search-toggle",
+  ) as HTMLInputElement,
+  projectionSelect: document.getElementById(
+    "projection-select",
+  ) as HTMLSelectElement,
+  viewerOnlyToggle: document.getElementById(
+    "viewer-only-toggle",
+  ) as HTMLInputElement,
+  lazyCaptionToggle: document.getElementById(
+    "lazy-caption-toggle",
+  ) as HTMLInputElement,
+  doNotTrackToggle: document.getElementById(
+    "do-not-track-toggle",
+  ) as HTMLInputElement,
+  batchSizeInput: document.getElementById(
+    "batch-size-slider",
+  ) as HTMLInputElement,
+  batchSizeAutoBtn: document.getElementById(
+    "batch-size-auto-btn",
+  ) as HTMLButtonElement,
+  randomSampleSizeInput: document.getElementById(
+    "random-sample-size",
+  ) as HTMLInputElement,
+  bottomPanel: document.getElementById("bottom-panel") as HTMLDivElement,
+  headerRecenterBtn: document.getElementById(
+    "header-recenter-btn",
+  ) as HTMLButtonElement,
+  demoBtn: document.getElementById("demo-btn") as HTMLButtonElement,
+  modelSelect: document.getElementById("model-select") as HTMLSelectElement,
+  modalCaption: document.getElementById("modal-caption") as HTMLDivElement,
+  chromeAIPromptInput: document.getElementById(
+    "chrome-ai-prompt",
+  ) as HTMLTextAreaElement,
+  chromeAIPromptReset: document.getElementById(
+    "chrome-ai-prompt-reset",
+  ) as HTMLButtonElement,
+  chromeAIPromptSetting: document.getElementById(
+    "chrome-ai-prompt-setting",
+  ) as HTMLDivElement,
+  customModelHostInput: document.getElementById(
+    "custom-model-host",
+  ) as HTMLInputElement,
+  modelFallbackModal: document.getElementById(
+    "model-fallback-modal",
+  ) as HTMLDialogElement,
+  modelFallbackClose: document.getElementById(
+    "model-fallback-close",
+  ) as HTMLButtonElement,
+  modelFallbackUrls: document.getElementById(
+    "model-fallback-urls",
+  ) as HTMLUListElement,
+  modelFallbackFile: document.getElementById(
+    "model-fallback-file",
+  ) as HTMLInputElement,
+  modelFallbackFileHint: document.getElementById(
+    "model-fallback-file-hint",
+  ) as HTMLDivElement,
+  modelFallbackHost: document.getElementById(
+    "model-fallback-host",
+  ) as HTMLInputElement,
+  modelFallbackCancel: document.getElementById(
+    "model-fallback-cancel",
+  ) as HTMLButtonElement,
+  modelFallbackRetry: document.getElementById(
+    "model-fallback-retry",
+  ) as HTMLButtonElement,
+};
 
-  // ── Version Info ─────────────────────────────────────────────────────────────
-  const versionEl = document.getElementById('version-info') as HTMLElement | null;
-  if (versionEl) {
-    versionEl.textContent = `${__GIT_BRANCH__}@${__GIT_COMMIT__}`;
-    versionEl.style.display = '';
-  }
+// ── Version Info ─────────────────────────────────────────────────────────────
+const versionEl = document.getElementById("version-info") as HTMLElement | null;
+if (versionEl) {
+  versionEl.textContent = `${__GIT_BRANCH__}@${__GIT_COMMIT__}`;
+  versionEl.style.display = "";
+}
 
-  // ── Constants ────────────────────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────────────
 // ── Auto batch size ───────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS: Settings = {
@@ -174,33 +262,35 @@ const DEFAULT_SETTINGS: Settings = {
   loopVideos: true,
   drawBudget: IS_MOBILE ? 150 : 400,
   enableTextSearch: false,
-  projectionMethod: 'TSNE',
+  projectionMethod: "TSNE",
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  modelVariant: 'sapiens2-fp16',
+  modelVariant: "sapiens2-fp16",
   enableLazyCaption: false,
   doNotTrack: false,
-  customModelHost: '',
+  customModelHost: "",
 };
 
-const savedSettings = localStorage.getItem('mc_settings');
+const savedSettings = localStorage.getItem("mc_settings");
 // Migrate legacy modelVariant values to the new named variants
 if (savedSettings) {
   const parsed = JSON.parse(savedSettings);
   if (!parsed.modelVariant) {
-    parsed.modelVariant = 'sapiens2-fp16';
-    localStorage.setItem('mc_settings', JSON.stringify(parsed));
-  } else if (parsed.modelVariant === 'sapiens2') {
+    parsed.modelVariant = "sapiens2-fp16";
+    localStorage.setItem("mc_settings", JSON.stringify(parsed));
+  } else if (parsed.modelVariant === "sapiens2") {
     // 'sapiens2' was the generic name for fp16 — keep pointing at the same model
-    parsed.modelVariant = 'sapiens2-fp16';
-    localStorage.setItem('mc_settings', JSON.stringify(parsed));
+    parsed.modelVariant = "sapiens2-fp16";
+    localStorage.setItem("mc_settings", JSON.stringify(parsed));
   }
 }
-const settings: Settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem('mc_settings')!) } : DEFAULT_SETTINGS;
+const settings: Settings = savedSettings
+  ? { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem("mc_settings")!) }
+  : DEFAULT_SETTINGS;
 
 const state: AppState = {
-  phase: 'idle',
+  phase: "idle",
   files: [],
   vectors: [],
   points: [],
@@ -209,10 +299,10 @@ const state: AppState = {
   thumbnails: [],
   captions: [],
   searchResults: null,
-  searchQuery: '',
+  searchQuery: "",
   searchScores: null,
   currentDirHandle: null,
-  currentBasePath: '',
+  currentBasePath: "",
   settings,
   activeFileIndex: null,
   lastViewedIndex: null,
@@ -222,9 +312,9 @@ const state: AppState = {
 const camera: Camera = { x: 0, y: 0, scale: 1 };
 
 // ── Model singleton ──────────────────────────────────────────────────────────
-let extractor: PipelineInstance | null = null;      // Vision model (for images)
-let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
-let modelDevice: 'webgpu' | 'cpu' | null = null;
+let extractor: PipelineInstance | null = null; // Vision model (for images)
+let textExtractor: PipelineInstance | null = null; // Text model (for search queries)
+let modelDevice: "webgpu" | "cpu" | null = null;
 let modelFallbackReason: Sapiens2FallbackReason | undefined;
 // Set by the download-fallback modal when the user uploads a Sapiens2 .onnx;
 // consumed on the next loadModelOnce() and then cleared.
@@ -232,103 +322,130 @@ let pendingSapiens2Buffer: ArrayBuffer | null = null;
 let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
 let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption for non-chrome-ai modes
-let captionAbortController: AbortController | null = null;   // Cancels in-flight lazy caption
+let captionAbortController: AbortController | null = null; // Cancels in-flight lazy caption
 let captionDebounceTimer: ReturnType<typeof setTimeout> | null = null; // Debounce before starting AI
-let chromeAIAvailability: LanguageModelAvailability = 'unavailable'; // Set at page load
-let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
+let chromeAIAvailability: LanguageModelAvailability = "unavailable"; // Set at page load
+let modelLoadAbort: AbortController | null = null; // In-flight auto-start abort handle
 
-const CHROME_AI_PROMPT_KEY = 'mc_chrome_ai_prompt';
-const getChromeAIPrompt = () => localStorage.getItem(CHROME_AI_PROMPT_KEY) ?? DEFAULT_DESCRIBE_PROMPT;
+const CHROME_AI_PROMPT_KEY = "mc_chrome_ai_prompt";
+const getChromeAIPrompt = () =>
+  localStorage.getItem(CHROME_AI_PROMPT_KEY) ?? DEFAULT_DESCRIBE_PROMPT;
 
 // Progressive projection state
 let progressiveProjectionRunning = false;
 let lastProgressiveCount = 0;
 let lastProgressiveTime = 0;
-const PROGRESSIVE_MIN = 3;       // min vectors before first progressive projection
+const PROGRESSIVE_MIN = 3; // min vectors before first progressive projection
 const PROGRESSIVE_MIN_MS = 2500; // min time between progressive projections — a
-                                 // per-N-vectors trigger meant PCA + spread ran
-                                 // near-continuously over the whole embed phase
+// per-N-vectors trigger meant PCA + spread ran
+// near-continuously over the whole embed phase
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
-const setProgress = (pct: number) => { dom.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`; };
-const yieldMain = () => new Promise(resolve => setTimeout(resolve, 0));
+const setStatus = (msg: string) => {
+  dom.statusEl.textContent = msg;
+};
+const setProgress = (pct: number) => {
+  dom.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+};
+const yieldMain = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
-function showToast(message: string, level: 'info' | 'warn' | 'error' = 'info', durationMs = 5000) {
-  const el = document.getElementById('toast')!;
+function showToast(
+  message: string,
+  level: "info" | "warn" | "error" = "info",
+  durationMs = 5000,
+) {
+  const el = document.getElementById("toast")!;
   el.textContent = message;
-  el.className = `visible ${level === 'info' ? '' : level}`.trim();
+  el.className = `visible ${level === "info" ? "" : level}`.trim();
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
-    el.classList.remove('visible');
+    el.classList.remove("visible");
     toastTimer = null;
   }, durationMs);
 }
 
-const cacheSizeEl = document.getElementById('cache-size');
-const deviceBadgeEl = document.getElementById('device-badge');
-const storageBadgeEl = document.getElementById('storage-badge');
+const cacheSizeEl = document.getElementById("cache-size");
+const deviceBadgeEl = document.getElementById("device-badge");
+const storageBadgeEl = document.getElementById("storage-badge");
 
 function updateDeviceBadge() {
   if (!deviceBadgeEl) return;
 
   if (state.settings.viewerOnly) {
-    deviceBadgeEl.textContent = 'Viewer';
-    deviceBadgeEl.style.color = '#4ade80';
+    deviceBadgeEl.textContent = "Viewer";
+    deviceBadgeEl.style.color = "#4ade80";
   } else if (sapiens2Session) {
     const threads = navigator.hardwareConcurrency || 1;
-    const mt = typeof SharedArrayBuffer !== 'undefined';
-    const variant = state.settings.modelVariant.split('-')[1] ?? 'fp16';
+    const mt = typeof SharedArrayBuffer !== "undefined";
+    const variant = state.settings.modelVariant.split("-")[1] ?? "fp16";
     let label: string;
-    if (modelDevice === 'webgpu') {
+    if (modelDevice === "webgpu") {
       label = `Sapiens2·${variant} · WebGPU`;
     } else {
-      const reason = modelFallbackReason === 'vram-limit'  ? 'VRAM limit'
-                   : modelFallbackReason === 'no-webgpu'   ? 'no WebGPU'
-                   : modelFallbackReason === 'no-adapter'  ? 'no GPU'
-                   : modelFallbackReason === 'device-error' ? 'GPU error'
-                   : modelFallbackReason === 'session-error' ? 'GPU error'
-                   : null;
-      const suffix = reason ? ` · WASM (${reason})` : mt ? ` · ${threads}T` : ' · CPU';
+      const reason =
+        modelFallbackReason === "vram-limit"
+          ? "VRAM limit"
+          : modelFallbackReason === "no-webgpu"
+            ? "no WebGPU"
+            : modelFallbackReason === "no-adapter"
+              ? "no GPU"
+              : modelFallbackReason === "device-error"
+                ? "GPU error"
+                : modelFallbackReason === "session-error"
+                  ? "GPU error"
+                  : null;
+      const suffix = reason
+        ? ` · WASM (${reason})`
+        : mt
+          ? ` · ${threads}T`
+          : " · CPU";
       label = `Sapiens2·${variant}${suffix}`;
     }
     deviceBadgeEl.textContent = label;
-    deviceBadgeEl.style.color = modelDevice === 'webgpu' ? '#4ade80' : '#fb923c';
+    deviceBadgeEl.style.color =
+      modelDevice === "webgpu" ? "#4ade80" : "#fb923c";
   } else if (chromeAIManager) {
-    deviceBadgeEl.textContent = 'Chrome AI · Built-in';
-    deviceBadgeEl.style.color = '#4ade80';
-  } else if (modelDevice === 'webgpu') {
-    deviceBadgeEl.textContent = 'WebGPU';
-    deviceBadgeEl.style.color = '#4ade80';
-  } else if (modelDevice === 'cpu') {
+    deviceBadgeEl.textContent = "Chrome AI · Built-in";
+    deviceBadgeEl.style.color = "#4ade80";
+  } else if (modelDevice === "webgpu") {
+    deviceBadgeEl.textContent = "WebGPU";
+    deviceBadgeEl.style.color = "#4ade80";
+  } else if (modelDevice === "cpu") {
     deviceBadgeEl.innerHTML =
       'CPU · <a href="https://webgpureport.org/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">check WebGPU</a>';
-    deviceBadgeEl.style.color = '#fb923c';
-    deviceBadgeEl.title = 'WebGPU not available — running on CPU (slower). Open webgpureport.org to check your GPU support.';
+    deviceBadgeEl.style.color = "#fb923c";
+    deviceBadgeEl.title =
+      "WebGPU not available — running on CPU (slower). Open webgpureport.org to check your GPU support.";
   } else {
-    deviceBadgeEl.textContent = 'Local AI';
-    deviceBadgeEl.style.color = '';
+    deviceBadgeEl.textContent = "Local AI";
+    deviceBadgeEl.style.color = "";
   }
 }
 
 function currentCachePrefix(): string {
   const v = state.settings.modelVariant;
-  if (v === 'chrome-ai') return '@chrome-ai/';
-  if (!v.startsWith('sapiens2')) return '';
-  if (v === 'sapiens2-fp16') return '@sapiens2/';
+  if (v === "chrome-ai") return "@chrome-ai/";
+  if (!v.startsWith("sapiens2")) return "";
+  if (v === "sapiens2-fp16") return "@sapiens2/";
   return `@${v}/`;
 }
 
 async function refreshCacheSize() {
   try {
     const { count } = await cacheStats(currentCachePrefix());
-    const text = count === 0 ? '' : `${count} embeddings`;
+    const text = count === 0 ? "" : `${count} embeddings`;
     if (cacheSizeEl) cacheSizeEl.textContent = text;
-    if (storageBadgeEl) { storageBadgeEl.textContent = text; (storageBadgeEl as HTMLElement).style.display = text ? '' : 'none'; }
+    if (storageBadgeEl) {
+      storageBadgeEl.textContent = text;
+      (storageBadgeEl as HTMLElement).style.display = text ? "" : "none";
+    }
   } catch (err) {
-    if (cacheSizeEl) cacheSizeEl.textContent = '';
-    if (storageBadgeEl) { storageBadgeEl.textContent = ''; (storageBadgeEl as HTMLElement).style.display = 'none'; }
+    if (cacheSizeEl) cacheSizeEl.textContent = "";
+    if (storageBadgeEl) {
+      storageBadgeEl.textContent = "";
+      (storageBadgeEl as HTMLElement).style.display = "none";
+    }
   }
 }
 
@@ -345,7 +462,11 @@ function scheduleRender() {
 }
 
 // ── File collection ──────────────────────────────────────────────────────────
-async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0, basePath: string = ''): Promise<PhotoFile[]> {
+async function collectImages(
+  dirHandle: DirectoryHandle,
+  sampleSize: number = 0,
+  basePath: string = "",
+): Promise<PhotoFile[]> {
   // Phase 1: walk the tree and collect lightweight file references.
   // When sampleSize > 0, use reservoir sampling so memory stays bounded at O(sampleSize).
   type Ref = { name: string; handle: FileSystemHandle };
@@ -355,7 +476,7 @@ async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0,
   // Navigate to base path if specified
   let currentHandle = dirHandle;
   if (basePath) {
-    const pathParts = basePath.split('/').filter(p => p);
+    const pathParts = basePath.split("/").filter((p) => p);
     for (const part of pathParts) {
       currentHandle = await currentHandle.getDirectoryHandle(part);
     }
@@ -363,13 +484,16 @@ async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0,
 
   async function walk(handle: DirectoryHandle, prefix: string) {
     for await (const [name, entry] of handle as any) {
-      if (name.startsWith('.')) continue;
-      if (entry.kind === 'directory') {
+      if (name.startsWith(".")) continue;
+      if (entry.kind === "directory") {
         await walk(entry as DirectoryHandle, `${prefix}${name}/`);
       } else {
-        const ext = name.split('.').pop()?.toLowerCase() ?? '';
+        const ext = name.split(".").pop()?.toLowerCase() ?? "";
         if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
-          const ref: Ref = { name: `${basePath}${prefix}${name}`, handle: entry as FileSystemHandle };
+          const ref: Ref = {
+            name: `${basePath}${prefix}${name}`,
+            handle: entry as FileSystemHandle,
+          };
           if (sampleSize <= 0) {
             refs.push(ref);
           } else if (refs.length < sampleSize) {
@@ -384,7 +508,7 @@ async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0,
       }
     }
   }
-  await walk(currentHandle, '');
+  await walk(currentHandle, "");
 
   // Phase 2: fetch File objects only for the selected refs.
   const files: PhotoFile[] = [];
@@ -395,7 +519,7 @@ async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0,
       size: file.size,
       lastModified: file.lastModified,
       file,
-      objectURL: null
+      objectURL: null,
     });
   }
   return files;
@@ -416,7 +540,10 @@ async function loadDemoImages(): Promise<PhotoFile[]> {
         continue;
       }
 
-      const photos = await res.json() as Array<{ id: string; urls: { regular: string } }>;
+      const photos = (await res.json()) as Array<{
+        id: string;
+        urls: { regular: string };
+      }>;
 
       for (let i = 0; i < photos.length; i++) {
         try {
@@ -424,14 +551,14 @@ async function loadDemoImages(): Promise<PhotoFile[]> {
           const imgRes = await fetch(photoUrl);
           const blob = await imgRes.blob();
           const name = `${category}-${i + 1}.jpg`;
-          const file = new File([blob], name, { type: 'image/jpeg' });
+          const file = new File([blob], name, { type: "image/jpeg" });
 
           files.push({
             name,
             size: file.size,
             lastModified: Date.now(),
             file,
-            objectURL: null
+            objectURL: null,
           });
         } catch (e) {
           console.warn(`Failed to load ${category} image ${i}:`, e);
@@ -448,8 +575,8 @@ async function loadDemoImages(): Promise<PhotoFile[]> {
 // ── Media helpers ────────────────────────────────────────────────────────────
 async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
   return new Promise((resolve) => {
-    const video = document.createElement('video');
-    video.preload = 'metadata';
+    const video = document.createElement("video");
+    video.preload = "metadata";
     video.muted = true;
     video.playsInline = true;
     const url = URL.createObjectURL(file);
@@ -466,7 +593,7 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
       video.onerror = null;
       URL.revokeObjectURL(url);
       video.pause();
-      video.src = '';
+      video.src = "";
       video.load();
     };
 
@@ -476,10 +603,13 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
 
     video.onseeked = async () => {
       try {
-        const bitmap = await createImageBitmap(video, { resizeWidth: 224, resizeQuality: 'medium' });
+        const bitmap = await createImageBitmap(video, {
+          resizeWidth: 224,
+          resizeQuality: "medium",
+        });
         resolve(bitmap);
       } catch (e) {
-        console.warn('Failed to extract video frame:', e);
+        console.warn("Failed to extract video frame:", e);
         resolve(null);
       } finally {
         cleanup();
@@ -487,7 +617,7 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
     };
 
     video.onerror = () => {
-      console.debug('Video load error (unsupported format):', file.name);
+      console.debug("Video load error (unsupported format):", file.name);
       cleanup();
       resolve(null);
     };
@@ -503,15 +633,19 @@ function initThumbnails(files: PhotoFile[]): (ImageBitmap | null)[] {
 }
 
 function lazyDecodeThumbnail(idx: number) {
-  if (thumbDecoding.has(idx) || state.thumbnails[idx] || thumbFailed.has(idx)) return;
+  if (thumbDecoding.has(idx) || state.thumbnails[idx] || thumbFailed.has(idx))
+    return;
   thumbDecoding.add(idx);
   const f = state.files[idx];
-  if (!f) { thumbDecoding.delete(idx); return; }
+  if (!f) {
+    thumbDecoding.delete(idx);
+    return;
+  }
 
   // Create objectURL lazily if needed (for large folders, don't create all upfront)
   if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
 
-  const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+  const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
 
   const done = (bm: ImageBitmap | null) => {
     state.thumbnails[idx] = bm;
@@ -519,7 +653,10 @@ function lazyDecodeThumbnail(idx: number) {
 
     // Only track in LRU when we have an actual bitmap — null entries (failed
     // decodes) would crowd out real thumbnails and trigger unnecessary evictions.
-    if (!bm) { scheduleRender(); return; }
+    if (!bm) {
+      scheduleRender();
+      return;
+    }
 
     thumbnailLRU.delete(idx);
     thumbnailLRU.add(idx);
@@ -540,21 +677,31 @@ function lazyDecodeThumbnail(idx: number) {
 
   if (VIDEO_EXTS.has(ext)) {
     videoFrameLimit(() => extractVideoFrame(f.file))
-      .then(result => { if (!result) thumbFailed.add(idx); done(result); })
-      .catch((err) => { thumbFailed.add(idx); done(null); });
+      .then((result) => {
+        if (!result) thumbFailed.add(idx);
+        done(result);
+      })
+      .catch((err) => {
+        thumbFailed.add(idx);
+        done(null);
+      });
   } else {
-    createImageBitmap(f.file, { resizeWidth: 96, resizeQuality: 'low' })
-      .then(done).catch(() => done(null));
+    createImageBitmap(f.file, { resizeWidth: 96, resizeQuality: "low" })
+      .then(done)
+      .catch(() => done(null));
   }
 }
 
 // ── Text embedding (uses text model with search_query prefix) ────────────────
 async function embedText(text: string): Promise<Float32Array> {
-  if (!textExtractor) throw new Error('Text model not loaded');
+  if (!textExtractor) throw new Error("Text model not loaded");
 
   // Add required task prefix for nomic-embed-text
   const prefixed = `search_query: ${text}`;
-  const output = await textExtractor(prefixed, { pooling: 'mean', normalize: true });
+  const output = await textExtractor(prefixed, {
+    pooling: "mean",
+    normalize: true,
+  });
 
   return Float32Array.from(output.data);
 }
@@ -563,13 +710,13 @@ async function embedText(text: string): Promise<Float32Array> {
 async function searchImages(query: string) {
   if (!query.trim() || !state.vectors.length) {
     state.searchResults = null;
-    state.searchQuery = '';
+    state.searchQuery = "";
     state.searchScores = null;
-    dom.searchWrap.classList.remove('loading');
+    dom.searchWrap.classList.remove("loading");
     return;
   }
 
-  dom.searchWrap.classList.add('loading');
+  dom.searchWrap.classList.add("loading");
   setStatus(`Searching for "${query}"…`);
 
   try {
@@ -585,19 +732,19 @@ async function searchImages(query: string) {
     setStatus(statusMsg);
     if (dom.statsEl) dom.statsEl.textContent = statusMsg;
   } catch (err) {
-    console.error('Search failed:', err);
-    setStatus('Search failed. Check console.');
+    console.error("Search failed:", err);
+    setStatus("Search failed. Check console.");
   } finally {
-    dom.searchWrap.classList.remove('loading');
+    dom.searchWrap.classList.remove("loading");
   }
 }
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 const fullImages = new Map<number, HTMLImageElement>(); // index → HTMLImageElement
-const fullImageLRU = new Set<number>();                // LRU tracking for full-res images
-const thumbDecoding = new Set<number>();               // indices currently being decoded
-const thumbFailed = new Set<number>();                 // indices where video frame extraction permanently failed
-const thumbnailLRU = new Set<number>();                // indices in LRU order (most recently used at end)
+const fullImageLRU = new Set<number>(); // LRU tracking for full-res images
+const thumbDecoding = new Set<number>(); // indices currently being decoded
+const thumbFailed = new Set<number>(); // indices where video frame extraction permanently failed
+const thumbnailLRU = new Set<number>(); // indices in LRU order (most recently used at end)
 
 // Chrome limits concurrent WebMediaPlayers to ~75; cap video frame extraction
 // well below that so the render loop + embedAll can't together exceed the limit.
@@ -611,63 +758,80 @@ function resizeCanvas() {
 function fitCamera() {
   const pts = state.points;
   if (!pts.length) return;
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
   for (const [x, y] of pts) {
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
   }
   const pad = THUMB_WORLD + 16;
-  const scX = (dom.canvas.width - pad * 2) / ((maxX - minX) || 1);
-  const scY = (dom.canvas.height - pad * 2) / ((maxY - minY) || 1);
+  const scX = (dom.canvas.width - pad * 2) / (maxX - minX || 1);
+  const scY = (dom.canvas.height - pad * 2) / (maxY - minY || 1);
   camera.x = (minX + maxX) / 2;
   camera.y = (minY + maxY) / 2;
   camera.scale = Math.min(scX, scY);
 }
 
 function resetAll() {
-  for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
-  for (const img of fullImages.values()) img.src = '';
+  for (const bmp of state.thumbnails) {
+    if (bmp?.close) bmp.close();
+  }
+  for (const img of fullImages.values()) img.src = "";
   fullImages.clear();
   fullImageLRU.clear();
   thumbDecoding.clear();
   thumbFailed.clear();
   thumbnailLRU.clear();
   for (const f of state.files) {
-    if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
+    if (f.objectURL) {
+      URL.revokeObjectURL(f.objectURL);
+      f.objectURL = null;
+    }
   }
-  state.phase = 'idle'; state.files = []; state.vectors = [];
-  state.points = []; state.clusters = null; state.thumbnails = []; state.captions = [];
+  state.phase = "idle";
+  state.files = [];
+  state.vectors = [];
+  state.points = [];
+  state.clusters = null;
+  state.thumbnails = [];
+  state.captions = [];
   state.searchResults = null;
-  state.searchQuery = '';
+  state.searchQuery = "";
   state.searchScores = null;
   state.activeFileIndex = null;
   state.lastViewedIndex = null;
-  localStorage.removeItem('po_fileKeys');
-  localStorage.removeItem('po_umapPoints');
-  localStorage.removeItem('po_projectedPoints');
-  localStorage.removeItem('po_clusters');
-  localStorage.removeItem('po_viewerMode');
-  camera.x = 0; camera.y = 0; camera.scale = 1;
-  const ctx = dom.canvas.getContext('2d');
+  localStorage.removeItem("po_fileKeys");
+  localStorage.removeItem("po_umapPoints");
+  localStorage.removeItem("po_projectedPoints");
+  localStorage.removeItem("po_clusters");
+  localStorage.removeItem("po_viewerMode");
+  camera.x = 0;
+  camera.y = 0;
+  camera.scale = 1;
+  const ctx = dom.canvas.getContext("2d");
   if (ctx) ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
   dom.recenterBtn.disabled = true;
   dom.resetBtn.disabled = true;
   dom.headerRecenterBtn.disabled = true;
   dom.searchInput.disabled = true;
-  dom.searchInput.value = '';
+  dom.searchInput.value = "";
   dom.searchClearBtn.hidden = true;
   dom.resumeBtn.hidden = true;
   dom.resumeBtn.disabled = true;
-  dom.resumeBtn.classList.remove('primary');
+  dom.resumeBtn.classList.remove("primary");
   dom.openBtn.disabled = false;
   dom.demoBtn.disabled = false;
   setProgress(0);
-  setStatus('Cleared. Open a folder to start.');
+  setStatus("Cleared. Open a folder to start.");
   refreshCacheSize();
 }
 
 function render() {
-  const ctx = dom.canvas.getContext('2d');
+  const ctx = dom.canvas.getContext("2d");
   if (!ctx) return;
   ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
   const pts = state.points;
@@ -697,14 +861,22 @@ function render() {
       const dx = pts[i][0] - camera.x;
       const dy = pts[i][1] - camera.y;
       const d = dx * dx + dy * dy;
-      if (d < minD) { minD = d; currentActive = i; }
+      if (d < minD) {
+        minD = d;
+        currentActive = i;
+      }
     }
   }
 
   // Frustum culling + draw prioritization (search results first, then center distance)
   const visibleIndices = cullAndPrioritize(
-    pts, camera, dom.canvas.width, dom.canvas.height, half,
-    state.searchResults ? rank : null, state.settings.drawBudget,
+    pts,
+    camera,
+    dom.canvas.width,
+    dom.canvas.height,
+    half,
+    state.searchResults ? rank : null,
+    state.settings.drawBudget,
   );
 
   for (const i of visibleIndices) {
@@ -718,7 +890,7 @@ function render() {
     if (state.searchResults) {
       const r = rank[i];
       if (r < 20) {
-        highlightBorder = '#facc15'; // Bright yellow for top results
+        highlightBorder = "#facc15"; // Bright yellow for top results
         alphaMultiplier = 1.0;
       } else if (r < 100) {
         alphaMultiplier = 0.4;
@@ -728,11 +900,15 @@ function render() {
     }
 
     if (isSelected) {
-      highlightBorder = '#fff';
+      highlightBorder = "#fff";
       alphaMultiplier = 1.0;
     }
 
-    const clr = highlightBorder ?? (state.clusters?.length ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length] : '#6b7280');
+    const clr =
+      highlightBorder ??
+      (state.clusters?.length
+        ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length]
+        : "#6b7280");
     let drawn = false;
 
     if (useFull && drawnFull) {
@@ -745,7 +921,7 @@ function render() {
           if (lruIdx !== undefined) {
             fullImageLRU.delete(lruIdx);
             const oldImg = fullImages.get(lruIdx);
-            if (oldImg) oldImg.src = '';
+            if (oldImg) oldImg.src = "";
             fullImages.delete(lruIdx);
           }
         }
@@ -758,7 +934,10 @@ function render() {
         fullImg = new Image();
         fullImg.onload = () => {
           if (fullImg) {
-            fullImg.decode().then(() => scheduleRender()).catch(() => scheduleRender());
+            fullImg
+              .decode()
+              .then(() => scheduleRender())
+              .catch(() => scheduleRender());
           }
         };
         fullImg.src = f.objectURL;
@@ -777,7 +956,9 @@ function render() {
         ctx.drawImage(fullImg, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
-        ctx.lineWidth = isSelected ? Math.max(3, 4 * Math.min(s, 1)) : Math.max(1.5, 2 * Math.min(s, 1));
+        ctx.lineWidth = isSelected
+          ? Math.max(3, 4 * Math.min(s, 1))
+          : Math.max(1.5, 2 * Math.min(s, 1));
         ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
         drawn = true;
       }
@@ -798,10 +979,14 @@ function render() {
         ctx.drawImage(thumb, sx - dw / 2, sy - dh / 2, dw, dh);
         ctx.globalAlpha = 1.0;
         ctx.strokeStyle = clr;
-        ctx.lineWidth = isSelected ? Math.max(3, 4 * Math.min(s, 1)) : Math.max(1.5, 2 * Math.min(s, 1));
+        ctx.lineWidth = isSelected
+          ? Math.max(3, 4 * Math.min(s, 1))
+          : Math.max(1.5, 2 * Math.min(s, 1));
         ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
       } else {
-        const r = isSelected ? Math.max(5, half * 0.4) : Math.max(3, half * 0.3);
+        const r = isSelected
+          ? Math.max(5, half * 0.4)
+          : Math.max(3, half * 0.3);
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fillStyle = clr;
@@ -809,7 +994,7 @@ function render() {
         ctx.fill();
         ctx.globalAlpha = 1;
         if (isSelected) {
-          ctx.strokeStyle = '#fff';
+          ctx.strokeStyle = "#fff";
           ctx.lineWidth = 2;
           ctx.stroke();
         }
@@ -821,60 +1006,78 @@ function render() {
     // Evict full images that weren't drawn this frame
     for (const [idx, img] of fullImages) {
       if (!drawnFull.has(idx)) {
-        img.src = '';
+        img.src = "";
         fullImages.delete(idx);
         fullImageLRU.delete(idx);
       }
     }
   } else {
     // Full-res disabled, clear all
-    for (const img of fullImages.values()) img.src = '';
+    for (const img of fullImages.values()) img.src = "";
     fullImages.clear();
     fullImageLRU.clear();
   }
 }
 
 // ── Projection ───────────────────────────────────────────────────────────────
-async function runProjection(vectors: Float32Array[], method: ProjectionMethod, nNeighbors: number, { silent = false } = {}): Promise<number[][]> {
+async function runProjection(
+  vectors: Float32Array[],
+  method: ProjectionMethod,
+  nNeighbors: number,
+  { silent = false } = {},
+): Promise<number[][]> {
   try {
     if (!silent) setStatus(`Projecting with ${method}…`);
     // Druid accepts Float64Array rows directly; copy each f32 row to f64
     // transiently instead of materializing a number[][] of the whole dataset.
-    const matrix = druid.Matrix.from(vectors.map(v => Float64Array.from(v)));
+    const matrix = druid.Matrix.from(vectors.map((v) => Float64Array.from(v)));
     let result: druid.Matrix;
 
     // Small yield to allow UI update
     await yieldMain();
 
     switch (method) {
-      case 'TSNE':
-        result = new druid.TSNE(matrix, { d: 2, perplexity: Math.min(30, Math.floor(vectors.length / 3)) }).transform();
+      case "TSNE":
+        result = new druid.TSNE(matrix, {
+          d: 2,
+          perplexity: Math.min(30, Math.floor(vectors.length / 3)),
+        }).transform();
         break;
-      case 'PCA':
+      case "PCA":
         result = new druid.PCA(matrix, { d: 2 }).transform();
         break;
-      case 'ISOMAP':
-        result = new druid.ISOMAP(matrix, { d: 2, neighbors: nNeighbors }).transform();
+      case "ISOMAP":
+        result = new druid.ISOMAP(matrix, {
+          d: 2,
+          neighbors: nNeighbors,
+        }).transform();
         break;
-      case 'LLE':
-        result = new druid.LLE(matrix, { d: 2, neighbors: nNeighbors }).transform();
+      case "LLE":
+        result = new druid.LLE(matrix, {
+          d: 2,
+          neighbors: nNeighbors,
+        }).transform();
         break;
-      case 'MDS':
+      case "MDS":
         result = new druid.MDS(matrix, { d: 2 }).transform();
         break;
-      case 'SAMMON':
+      case "SAMMON":
         result = new druid.SAMMON(matrix, { d: 2 }).transform();
         break;
-      case 'TriMap':
+      case "TriMap":
         result = new druid.TriMap(matrix, { d: 2 }).transform();
         break;
-      case 'UMAP':
+      case "UMAP":
       default:
-        result = new druid.UMAP(matrix, { d: 2, n_neighbors: nNeighbors, local_connectivity: 1 }).transform();
+        result = new druid.UMAP(matrix, {
+          d: 2,
+          n_neighbors: nNeighbors,
+          local_connectivity: 1,
+        }).transform();
         break;
     }
 
-    return result.to2dArray().map(row => Array.from(row));
+    return result.to2dArray().map((row) => Array.from(row));
   } catch (err) {
     setStatus(`${method} projection failed: ${(err as Error).message}`);
     throw err;
@@ -884,52 +1087,54 @@ async function runProjection(vectors: Float32Array[], method: ProjectionMethod, 
 // ── Model singleton ──────────────────────────────────────────────────────────
 async function loadModelOnce(signal?: AbortSignal) {
   applyModelEnv();
-  state.phase = 'loading_model';
-  setStatus('Loading model…');
+  state.phase = "loading_model";
+  setStatus("Loading model…");
   setProgress(0);
 
-  if (state.settings.modelVariant === 'chrome-ai') {
-    setStatus('Checking Chrome AI availability…');
+  if (state.settings.modelVariant === "chrome-ai") {
+    setStatus("Checking Chrome AI availability…");
     const availability = await getChromeAIAvailability();
 
-    if (availability === 'unavailable') {
+    if (availability === "unavailable") {
       setStatus(
-        'Chrome AI unavailable. Enable chrome://flags/#prompt-api-for-gemini-nano in Chrome 138+.'
+        "Chrome AI unavailable. Enable chrome://flags/#prompt-api-for-gemini-nano in Chrome 138+.",
       );
       dom.loadModelBtn.hidden = false;
-      state.phase = 'idle';
+      state.phase = "idle";
       return;
     }
 
-    if (availability === 'downloadable' || availability === 'downloading') {
-      setStatus('Chrome AI model downloading (managed by Chrome, this happens once)…');
+    if (availability === "downloadable" || availability === "downloading") {
+      setStatus(
+        "Chrome AI model downloading (managed by Chrome, this happens once)…",
+      );
       let polls = 0;
       while (polls < 60) {
         signal?.throwIfAborted();
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 2000));
         signal?.throwIfAborted();
         const current = await getChromeAIAvailability();
-        if (current === 'available') break;
+        if (current === "available") break;
         setStatus(`Chrome AI model downloading… (${++polls * 2}s elapsed)`);
       }
-      if (await getChromeAIAvailability() !== 'available') {
-        setStatus('Chrome AI model download timed out. Try again later.');
+      if ((await getChromeAIAvailability()) !== "available") {
+        setStatus("Chrome AI model download timed out. Try again later.");
         dom.loadModelBtn.hidden = false;
-        state.phase = 'idle';
+        state.phase = "idle";
         return;
       }
     }
 
-    setStatus('Initializing Chrome AI session…');
+    setStatus("Initializing Chrome AI session…");
     chromeAIManager = new ChromeAISessionManager();
 
     if (!textExtractor) {
-      setStatus('Loading text embedding model (134 MB)…');
+      setStatus("Loading text embedding model (134 MB)…");
       const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
       const textLoaded = new Map<string, number>();
 
       const textProgressCb = (e: ProgressEvent) => {
-        if (e.status === 'progress') {
+        if (e.status === "progress") {
           textLoaded.set(e.file, e.loaded ?? 0);
           const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
           const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
@@ -938,76 +1143,85 @@ async function loadModelOnce(signal?: AbortSignal) {
         }
       };
 
-      const tryLoadText = (device: 'webgpu' | 'wasm') =>
+      const tryLoadText = (device: "webgpu" | "wasm") =>
         (pipeline as Pipeline)(
-          'feature-extraction',
-          'nomic-ai/nomic-embed-text-v1.5',
-          { device, dtype: 'fp32', progress_callback: textProgressCb }
+          "feature-extraction",
+          "nomic-ai/nomic-embed-text-v1.5",
+          { device, dtype: "fp32", progress_callback: textProgressCb },
         ) as Promise<PipelineInstance>;
 
       try {
-        textExtractor = await tryLoadText('webgpu');
+        textExtractor = await tryLoadText("webgpu");
       } catch {
         textLoaded.clear();
-        textExtractor = await tryLoadText('wasm');
+        textExtractor = await tryLoadText("wasm");
       }
     }
 
     updateDeviceBadge();
     setProgress(100);
-    state.phase = 'model_ready';
+    state.phase = "model_ready";
     setProgress(0);
     dom.loadModelBtn.hidden = true;
     dom.modelSelect.disabled = false;
     dom.openBtn.disabled = false;
-    dom.openBtn.classList.add('primary');
+    dom.openBtn.classList.add("primary");
     dom.demoBtn.disabled = false;
     if (!dom.resumeBtn.hidden) {
       dom.resumeBtn.disabled = false;
-      dom.resumeBtn.classList.add('primary');
-      setStatus('Chrome AI ready — resume or open a folder.');
+      dom.resumeBtn.classList.add("primary");
+      setStatus("Chrome AI ready — resume or open a folder.");
     } else {
-      setStatus('Chrome AI ready — open a folder to start.');
+      setStatus("Chrome AI ready — open a folder to start.");
     }
     return;
   }
 
-  if (state.settings.modelVariant.startsWith('sapiens2')) {
-    const sapiens2Variant = state.settings.modelVariant.split('-')[1] as Sapiens2Variant;
+  if (state.settings.modelVariant.startsWith("sapiens2")) {
+    const sapiens2Variant = state.settings.modelVariant.split(
+      "-",
+    )[1] as Sapiens2Variant;
     let result: Awaited<ReturnType<typeof loadSapiens2>>;
     try {
-      result = await loadSapiens2(sapiens2Variant, (pct, fromCache) => {
-        setProgress(pct);
-        setStatus(fromCache
-          ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
-          : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`);
-      }, signal, {
-        host: state.settings.customModelHost,
-        uploadedBuffer: pendingSapiens2Buffer ?? undefined,
-      });
+      result = await loadSapiens2(
+        sapiens2Variant,
+        (pct, fromCache) => {
+          setProgress(pct);
+          setStatus(
+            fromCache
+              ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
+              : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`,
+          );
+        },
+        signal,
+        {
+          host: state.settings.customModelHost,
+          uploadedBuffer: pendingSapiens2Buffer ?? undefined,
+        },
+      );
     } finally {
       // Always release the uploaded buffer — even if loading threw — so it
       // isn't held in memory or silently reused on the next attempt.
       pendingSapiens2Buffer = null;
     }
     sapiens2Session = result.session;
-    modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
+    modelDevice = result.device === "webgpu" ? "webgpu" : "cpu";
     modelFallbackReason = result.fallbackReason;
     updateDeviceBadge();
     setProgress(100);
-    state.phase = 'model_ready';
+    state.phase = "model_ready";
     setProgress(0);
     dom.loadModelBtn.hidden = true;
     dom.modelSelect.disabled = false;
     dom.openBtn.disabled = false;
-    dom.openBtn.classList.add('primary');
+    dom.openBtn.classList.add("primary");
     dom.demoBtn.disabled = false;
     if (!dom.resumeBtn.hidden) {
       dom.resumeBtn.disabled = false;
-      dom.resumeBtn.classList.add('primary');
-      setStatus('Sapiens2 ready — resume or open a folder.');
+      dom.resumeBtn.classList.add("primary");
+      setStatus("Sapiens2 ready — resume or open a folder.");
     } else {
-      setStatus('Sapiens2 ready — open a folder to start.');
+      setStatus("Sapiens2 ready — open a folder to start.");
     }
     return;
   }
@@ -1016,7 +1230,7 @@ async function loadModelOnce(signal?: AbortSignal) {
   const loaded = new Map<string, number>();
 
   const progressCb = (e: ProgressEvent) => {
-    if (e.status === 'progress') {
+    if (e.status === "progress") {
       loaded.set(e.file, e.loaded ?? 0);
       const total = [...loaded.values()].reduce((a, b) => a + b, 0);
       const pct = Math.min(99, (total / MODEL_SIZE_BYTES) * 100);
@@ -1025,32 +1239,39 @@ async function loadModelOnce(signal?: AbortSignal) {
     }
   };
 
-  const tryLoad = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
-    'image-feature-extraction',
-    'nomic-ai/nomic-embed-vision-v1.5',
-    { device, dtype: 'fp32', progress_callback: progressCb, pooling: 'mean', normalize: true }
-  ) as Promise<PipelineInstance>;
+  const tryLoad = (device: "webgpu" | "wasm") =>
+    (pipeline as Pipeline)(
+      "image-feature-extraction",
+      "nomic-ai/nomic-embed-vision-v1.5",
+      {
+        device,
+        dtype: "fp32",
+        progress_callback: progressCb,
+        pooling: "mean",
+        normalize: true,
+      },
+    ) as Promise<PipelineInstance>;
 
   try {
-    extractor = await tryLoad('webgpu');
-    modelDevice = 'webgpu';
+    extractor = await tryLoad("webgpu");
+    modelDevice = "webgpu";
   } catch (gpuErr) {
-    console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
-    setStatus('WebGPU unavailable — using CPU (slower)…');
+    console.warn("WebGPU init failed, falling back to wasm:", gpuErr);
+    setStatus("WebGPU unavailable — using CPU (slower)…");
     loaded.clear();
-    extractor = await tryLoad('wasm');
-    modelDevice = 'cpu';
+    extractor = await tryLoad("wasm");
+    modelDevice = "cpu";
   }
   updateDeviceBadge();
   setProgress(100);
 
   if (state.settings.enableTextSearch) {
-    setStatus('Loading text model for search…');
+    setStatus("Loading text model for search…");
     const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
     const textLoaded = new Map<string, number>();
 
     const textProgressCb = (e: ProgressEvent) => {
-      if (e.status === 'progress') {
+      if (e.status === "progress") {
         textLoaded.set(e.file, e.loaded ?? 0);
         const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
         const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
@@ -1059,73 +1280,80 @@ async function loadModelOnce(signal?: AbortSignal) {
       }
     };
 
-    const tryLoadText = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
-      'feature-extraction',
-      'nomic-ai/nomic-embed-text-v1.5',
-      { device, dtype: 'fp32', progress_callback: textProgressCb }
-    ) as Promise<PipelineInstance>;
+    const tryLoadText = (device: "webgpu" | "wasm") =>
+      (pipeline as Pipeline)(
+        "feature-extraction",
+        "nomic-ai/nomic-embed-text-v1.5",
+        { device, dtype: "fp32", progress_callback: textProgressCb },
+      ) as Promise<PipelineInstance>;
 
     try {
-      textExtractor = await tryLoadText('webgpu');
+      textExtractor = await tryLoadText("webgpu");
     } catch (gpuErr) {
-      console.warn('Text model WebGPU failed, using wasm:', gpuErr);
+      console.warn("Text model WebGPU failed, using wasm:", gpuErr);
       textLoaded.clear();
-      textExtractor = await tryLoadText('wasm');
+      textExtractor = await tryLoadText("wasm");
     }
     setProgress(100);
   }
 
-  state.phase = 'model_ready';
+  state.phase = "model_ready";
   setProgress(0);
   dom.loadModelBtn.hidden = true;
   dom.modelSelect.disabled = true;
   dom.openBtn.disabled = false;
-  dom.openBtn.classList.add('primary');
+  dom.openBtn.classList.add("primary");
   dom.demoBtn.disabled = false;
   if (!dom.resumeBtn.hidden) {
     dom.resumeBtn.disabled = false;
-    dom.resumeBtn.classList.add('primary');
-    setStatus('Model ready — resume or open a folder.');
+    dom.resumeBtn.classList.add("primary");
+    setStatus("Model ready — resume or open a folder.");
   } else {
-    setStatus('Model ready — open a folder to start.');
+    setStatus("Model ready — open a folder to start.");
   }
 }
 
 // ── Model download fallback (offline / corporate proxy) ──────────────────────
 interface FallbackChoice {
-  host?: string;                  // alternative HuggingFace-compatible host (may be '')
-  sapiensBuffer?: ArrayBuffer;    // uploaded single .onnx (Sapiens2)
+  host?: string; // alternative HuggingFace-compatible host (may be '')
+  sapiensBuffer?: ArrayBuffer; // uploaded single .onnx (Sapiens2)
   uploadFiles?: Map<string, File>; // uploaded model folder (Transformers.js)
 }
 
 // Show the recovery modal after a download failure. Resolves with the user's
 // choice, or null if they cancelled.
-function showModelFallbackModal(variant: string): Promise<FallbackChoice | null> {
-  const isSapiens = variant.startsWith('sapiens2');
+function showModelFallbackModal(
+  variant: string,
+): Promise<FallbackChoice | null> {
+  const isSapiens = variant.startsWith("sapiens2");
 
   // Visible, copy/curl-friendly direct links (always against the canonical Hub).
   const urls = modelDownloadUrls(variant, {
-    includeText: variant === 'nomic' && state.settings.enableTextSearch,
+    includeText: variant === "nomic" && state.settings.enableTextSearch,
   });
   dom.modelFallbackUrls.innerHTML = urls
-    .map((u) => `<li>🔗 <a href="${u}" target="_blank" rel="noopener">${u}</a></li>`)
-    .join('');
+    .map(
+      (u) =>
+        `<li>🔗 <a href="${u}" target="_blank" rel="noopener">${u}</a></li>`,
+    )
+    .join("");
 
   // Single .onnx for Sapiens2; whole model folder for Transformers.js repos.
   if (isSapiens) {
-    dom.modelFallbackFile.accept = '.onnx';
-    dom.modelFallbackFile.removeAttribute('webkitdirectory');
+    dom.modelFallbackFile.accept = ".onnx";
+    dom.modelFallbackFile.removeAttribute("webkitdirectory");
     dom.modelFallbackFile.multiple = false;
-    dom.modelFallbackFileHint.textContent = 'Select the single .onnx file listed above.';
+    dom.modelFallbackFileHint.textContent =
+      "Select the single .onnx file listed above.";
   } else {
-    dom.modelFallbackFile.removeAttribute('accept');
-    dom.modelFallbackFile.setAttribute('webkitdirectory', '');
+    dom.modelFallbackFile.removeAttribute("accept");
+    dom.modelFallbackFile.setAttribute("webkitdirectory", "");
     dom.modelFallbackFile.multiple = true;
     dom.modelFallbackFileHint.textContent =
-      'Select the downloaded model folder (must contain config.json and the onnx/ folder).';
+      "Select the downloaded model folder (must contain config.json and the onnx/ folder).";
   }
-  dom.modelFallbackFile.value = '';
-  dom.modelFallbackHost.value = state.settings.customModelHost || '';
+  dom.modelFallbackFile.value = "";
+  dom.modelFallbackHost.value = state.settings.customModelHost || "";
   dom.modelFallbackModal.showModal();
 
   return new Promise((resolve) => {
@@ -1146,7 +1374,9 @@ function showModelFallbackModal(variant: string): Promise<FallbackChoice | null>
       dom.modelFallbackRetry.disabled = true;
       dom.modelFallbackCancel.disabled = true;
       try {
-        const choice: FallbackChoice = { host: dom.modelFallbackHost.value.trim() };
+        const choice: FallbackChoice = {
+          host: dom.modelFallbackHost.value.trim(),
+        };
         const files = dom.modelFallbackFile.files;
         if (files && files.length) {
           if (isSapiens) {
@@ -1164,7 +1394,10 @@ function showModelFallbackModal(variant: string): Promise<FallbackChoice | null>
         // File read failed — re-enable so the user can try again.
         dom.modelFallbackRetry.disabled = false;
         dom.modelFallbackCancel.disabled = false;
-        showToast(`Couldn't read the uploaded file: ${(err as Error).message}`, 'error');
+        showToast(
+          `Couldn't read the uploaded file: ${(err as Error).message}`,
+          "error",
+        );
       }
     };
     dom.modelFallbackCancel.onclick = () => finish(null);
@@ -1183,7 +1416,9 @@ function applyFallbackChoice(choice: FallbackChoice) {
   if (choice.uploadFiles) {
     // Feed the uploaded files to Transformers.js via a custom Web Cache.
     (env as unknown as { useCustomCache: boolean }).useCustomCache = true;
-    (env as unknown as { customCache: unknown }).customCache = buildUploadCache(choice.uploadFiles);
+    (env as unknown as { customCache: unknown }).customCache = buildUploadCache(
+      choice.uploadFiles,
+    );
   }
 }
 
@@ -1201,9 +1436,11 @@ async function loadModel(signal?: AbortSignal) {
       await loadModelOnce(signal);
       return;
     } catch (err) {
-      if ((err as Error)?.name === 'AbortError') throw err;
+      if ((err as Error)?.name === "AbortError") throw err;
       if (isDownloadError(err)) {
-        const choice = await showModelFallbackModal(state.settings.modelVariant);
+        const choice = await showModelFallbackModal(
+          state.settings.modelVariant,
+        );
         if (choice) {
           applyFallbackChoice(choice);
           continue; // retry with the new host / uploaded files
@@ -1224,12 +1461,15 @@ async function loadModel(signal?: AbortSignal) {
 // full-res, to avoid the OOM this fix is meant to prevent).
 async function resizeForEmbedding(file: File): Promise<RawImage | null> {
   try {
-    const bmp = await createImageBitmap(file, { resizeWidth: 256, resizeQuality: 'medium' });
+    const bmp = await createImageBitmap(file, {
+      resizeWidth: 256,
+      resizeQuality: "medium",
+    });
     try {
-      const cvs = document.createElement('canvas');
+      const cvs = document.createElement("canvas");
       cvs.width = bmp.width;
       cvs.height = bmp.height;
-      const ctx2d = cvs.getContext('2d');
+      const ctx2d = cvs.getContext("2d");
       if (!ctx2d) return null;
       ctx2d.drawImage(bmp, 0, 0);
       return await RawImage.fromCanvas(cvs);
@@ -1249,8 +1489,12 @@ async function resizeForEmbedding(file: File): Promise<RawImage | null> {
 async function readCachedEmbeddings(
   files: PhotoFile[],
   cachePrefix: string,
-): Promise<{ keys: CacheKey[]; cached: (Float32Array | null)[]; migrate: [CacheKey, Float32Array][] }> {
-  const keys = files.map(f => `${cachePrefix}${makeCacheKey(f)}` as CacheKey);
+): Promise<{
+  keys: CacheKey[];
+  cached: (Float32Array | null)[];
+  migrate: [CacheKey, Float32Array][];
+}> {
+  const keys = files.map((f) => `${cachePrefix}${makeCacheKey(f)}` as CacheKey);
 
   // Query new and legacy keys in a single IDB transaction. Legacy keys only
   // differ for files inside a subfolder (basename !== full path), so we only
@@ -1259,9 +1503,11 @@ async function readCachedEmbeddings(
   const queryKeys = [...keys];
   const legacyForFile: number[] = []; // queryKeys index -> file index
   files.forEach((f, i) => {
-    if (f.name.includes('/')) {
+    if (f.name.includes("/")) {
       legacyForFile[queryKeys.length] = i;
-      queryKeys.push(`${cachePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+      queryKeys.push(
+        `${cachePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey,
+      );
     }
   });
 
@@ -1273,14 +1519,17 @@ async function readCachedEmbeddings(
     const i = legacyForFile[q];
     if (i === undefined || cached[i]) continue; // new key already hit
     const v = results[q];
-    if (v) { cached[i] = v; migrate.push([keys[i], v]); } // migrate to new key
+    if (v) {
+      cached[i] = v;
+      migrate.push([keys[i], v]);
+    } // migrate to new key
   }
   return { keys, cached, migrate };
 }
 
 // ── Embedding loop ───────────────────────────────────────────────────────────
 async function embedAll(files: PhotoFile[]) {
-  state.phase = 'embedding';
+  state.phase = "embedding";
   const vectors = new Array<Float32Array>(files.length);
   let cacheHits = 0;
   const writeQueue: [CacheKey, Float32Array][] = [];
@@ -1288,97 +1537,110 @@ async function embedAll(files: PhotoFile[]) {
   lastProgressiveTime = 0;
   const embedStart = performance.now();
 
-  const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
-  const isChromeAI = state.settings.modelVariant === 'chrome-ai';
+  const isSapiens2 = state.settings.modelVariant.startsWith("sapiens2");
+  const isChromeAI = state.settings.modelVariant === "chrome-ai";
   // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel
   // session speedup. The transformers path adapts: the working batch size
   // halves after a GPU failure and creeps back up after sustained successes.
   const batcher = createAdaptiveBatcher(state.settings.batchSize);
   // Separate cache namespace per variant so vectors don't collide across models.
   // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
-  const cachePrefix = isChromeAI ? '@chrome-ai/'
-    : !isSapiens2 ? ''
-    : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
-    : `@${state.settings.modelVariant}/`;
+  const cachePrefix = isChromeAI
+    ? "@chrome-ai/"
+    : !isSapiens2
+      ? ""
+      : state.settings.modelVariant === "sapiens2-fp16"
+        ? "@sapiens2/"
+        : `@${state.settings.modelVariant}/`;
 
-  for (let i = 0; i < files.length;) {
+  for (let i = 0; i < files.length; ) {
     const batchSize = isChromeAI ? 2 : isSapiens2 ? 1 : batcher.size;
     const batch = files.slice(i, Math.min(i + batchSize, files.length));
 
     // One IDB transaction for the whole batch, with legacy-key fallback so
     // embeddings cached by older builds (full-path keys) are reused and migrated.
-    const { keys, cached, migrate } = await readCachedEmbeddings(batch, cachePrefix);
+    const { keys, cached, migrate } = await readCachedEmbeddings(
+      batch,
+      cachePrefix,
+    );
     if (migrate.length > 0) writeQueue.push(...migrate);
 
     // Resolve inputs for cache misses
     const missIndices: number[] = [];
     const missInputs: (File | RawImage | ImageBitmap)[] = [];
 
-    await Promise.all(batch.map(async (f, bi) => {
-      if (cached[bi]) return; // cache hit — handled below
-      const idx = i + bi;
-      const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-      if (VIDEO_EXTS.has(ext)) {
-        // Use cached thumbnail if available, otherwise extract frame now
-        let thumb: ImageBitmap | null = state.thumbnails[idx] ?? null;
-        if (!thumb && !thumbFailed.has(idx)) {
-          thumb = await videoFrameLimit(() => extractVideoFrame(f.file));
-          if (!thumb) thumbFailed.add(idx);
-        }
-        if (thumb) {
-          if (!state.thumbnails[idx]) {
-            state.thumbnails[idx] = thumb;
-            thumbDecoding.delete(idx);
+    await Promise.all(
+      batch.map(async (f, bi) => {
+        if (cached[bi]) return; // cache hit — handled below
+        const idx = i + bi;
+        const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+        if (VIDEO_EXTS.has(ext)) {
+          // Use cached thumbnail if available, otherwise extract frame now
+          let thumb: ImageBitmap | null = state.thumbnails[idx] ?? null;
+          if (!thumb && !thumbFailed.has(idx)) {
+            thumb = await videoFrameLimit(() => extractVideoFrame(f.file));
+            if (!thumb) thumbFailed.add(idx);
           }
-          if (isSapiens2) {
-            missInputs.push(thumb);
-          } else if (isChromeAI) {
-            // Clone so Chrome AI doesn't close the bitmap that's cached in state.thumbnails
-            missInputs.push(await createImageBitmap(thumb));
-          } else {
-            const canvas = document.createElement('canvas');
-            canvas.width = thumb.width;
-            canvas.height = thumb.height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              ctx.drawImage(thumb, 0, 0);
-              missInputs.push(await RawImage.fromCanvas(canvas));
-            } else {
-              missInputs.push(f.file);
+          if (thumb) {
+            if (!state.thumbnails[idx]) {
+              state.thumbnails[idx] = thumb;
+              thumbDecoding.delete(idx);
             }
+            if (isSapiens2) {
+              missInputs.push(thumb);
+            } else if (isChromeAI) {
+              // Clone so Chrome AI doesn't close the bitmap that's cached in state.thumbnails
+              missInputs.push(await createImageBitmap(thumb));
+            } else {
+              const canvas = document.createElement("canvas");
+              canvas.width = thumb.width;
+              canvas.height = thumb.height;
+              const ctx = canvas.getContext("2d");
+              if (ctx) {
+                ctx.drawImage(thumb, 0, 0);
+                missInputs.push(await RawImage.fromCanvas(canvas));
+              } else {
+                missInputs.push(f.file);
+              }
+            }
+          } else {
+            missInputs.push(f.file);
+          }
+        } else if (isSapiens2) {
+          // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
+          missInputs.push(f.file);
+        } else if (isChromeAI) {
+          // Use cached thumbnail if already decoded, else create a small bitmap.
+          // Always create a fresh bitmap for the inference queue — never share the
+          // state.thumbnails reference, because Chrome AI closes the bitmap after use.
+          const cached = state.thumbnails[idx];
+          try {
+            missInputs.push(
+              cached
+                ? await createImageBitmap(cached) // clone so the canvas copy stays intact
+                : await createImageBitmap(f.file, {
+                    resizeWidth: 128,
+                    resizeQuality: "medium",
+                  }),
+            );
+          } catch {
+            missInputs.push(f.file);
+            missIndices.push(bi);
+            return;
           }
         } else {
-          missInputs.push(f.file);
+          const resized = await resizeForEmbedding(f.file);
+          if (resized !== null) {
+            missInputs.push(resized);
+          } else {
+            // Cannot resize — use zero vector rather than risking OOM with full-res
+            vectors[i + bi] = new Float32Array(768);
+            return;
+          }
         }
-      } else if (isSapiens2) {
-        // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
-        missInputs.push(f.file);
-      } else if (isChromeAI) {
-        // Use cached thumbnail if already decoded, else create a small bitmap.
-        // Always create a fresh bitmap for the inference queue — never share the
-        // state.thumbnails reference, because Chrome AI closes the bitmap after use.
-        const cached = state.thumbnails[idx];
-        try {
-          missInputs.push(cached
-            ? await createImageBitmap(cached)  // clone so the canvas copy stays intact
-            : await createImageBitmap(f.file, { resizeWidth: 128, resizeQuality: 'medium' }));
-        } catch {
-          missInputs.push(f.file);
-          missIndices.push(bi);
-          return;
-        }
-      } else {
-        const resized = await resizeForEmbedding(f.file);
-        if (resized !== null) {
-          missInputs.push(resized);
-        } else {
-          // Cannot resize — use zero vector rather than risking OOM with full-res
-          vectors[i + bi] = new Float32Array(768);
-          return;
-        }
-      }
-      missIndices.push(bi);
-    }));
+        missIndices.push(bi);
+      }),
+    );
 
     // Apply cache hits
     for (let bi = 0; bi < batch.length; bi++) {
@@ -1387,7 +1649,9 @@ async function embedAll(files: PhotoFile[]) {
         cacheHits++;
         if (isChromeAI) {
           const f = batch[bi];
-          state.captions[i + bi] = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
+          state.captions[i + bi] = localStorage.getItem(
+            `@caption/${f.name}:${f.size}:${f.lastModified}`,
+          );
         }
       }
     }
@@ -1401,33 +1665,49 @@ async function embedAll(files: PhotoFile[]) {
       try {
         let extracted: Float32Array[];
         if (isSapiens2) {
-          if (!sapiens2Session) throw new Error('Sapiens2 session not loaded');
+          if (!sapiens2Session) throw new Error("Sapiens2 session not loaded");
           extracted = await embedWithSapiens2(
             sapiens2Session,
             missInputs as (File | ImageBitmap)[],
           );
         } else if (isChromeAI) {
-          if (!chromeAIManager) throw new Error('Chrome AI not initialized');
-          if (!textExtractor) throw new Error('Text embedding model not loaded');
+          if (!chromeAIManager) throw new Error("Chrome AI not initialized");
+          if (!textExtractor)
+            throw new Error("Text embedding model not loaded");
           extracted = [];
           // Fire all describes in parallel (each using its own session slot)
           const prompt = getChromeAIPrompt();
           const descs = await Promise.all(
             missInputs.map((input, m) =>
-              chromeAIManager!.describe(input as ImageBitmap | Blob, prompt, undefined, m)
-            )
+              chromeAIManager!.describe(
+                input as ImageBitmap | Blob,
+                prompt,
+                undefined,
+                m,
+              ),
+            ),
           );
           for (let m = 0; m < descs.length; m++) {
             const description = descs[m];
             const f = batch[missIndices[m]];
             state.captions[i + missIndices[m]] = description;
-            try { localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description); } catch (_) { console.warn('Caption cache full'); }
+            try {
+              localStorage.setItem(
+                `@caption/${f.name}:${f.size}:${f.lastModified}`,
+                description,
+              );
+            } catch (_) {
+              console.warn("Caption cache full");
+            }
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
-            const output = await textExtractor(`search_document: ${description}`, { pooling: 'mean', normalize: true });
+            const output = await textExtractor(
+              `search_document: ${description}`,
+              { pooling: "mean", normalize: true },
+            );
             extracted.push(extractVector(output));
           }
         } else {
-          if (!extractor) throw new Error('Extractor not loaded');
+          if (!extractor) throw new Error("Extractor not loaded");
           const ex = extractor;
           // On failure (typically GPU OOM) bisect the batch and retry, so a
           // whole batch is never zero-filled because of one bad input or a
@@ -1435,21 +1715,31 @@ async function embedAll(files: PhotoFile[]) {
           extracted = await embedBatchAdaptive(
             missInputs,
             async (chunk) => {
-              const output = await ex(chunk.length === 1 ? chunk[0] : chunk, { pooling: 'mean', normalize: true });
-              const vecs = chunk.length === 1
-                ? [extractVector(output)]
-                : extractBatchedVectors(output, chunk.length);
+              const output = await ex(chunk.length === 1 ? chunk[0] : chunk, {
+                pooling: "mean",
+                normalize: true,
+              });
+              const vecs =
+                chunk.length === 1
+                  ? [extractVector(output)]
+                  : extractBatchedVectors(output, chunk.length);
               batcher.recordSuccess();
               return vecs;
             },
             (input, err) => {
               failedInputs.add(input);
-              console.warn('Embedding failed for one file, using zero vector:', (err as Error).message);
+              console.warn(
+                "Embedding failed for one file, using zero vector:",
+                (err as Error).message,
+              );
               return new Float32Array(768);
             },
             (len, err) => {
               batcher.recordFailure();
-              console.warn(`Inference failed at batch size ${len}, retrying smaller (working size now ${batcher.size}):`, (err as Error).message);
+              console.warn(
+                `Inference failed at batch size ${len}, retrying smaller (working size now ${batcher.size}):`,
+                (err as Error).message,
+              );
             },
           );
         }
@@ -1463,7 +1753,10 @@ async function embedAll(files: PhotoFile[]) {
           }
         }
       } catch (err) {
-        console.warn('Batch inference failed, filling zeros:', (err as Error).message);
+        console.warn(
+          "Batch inference failed, filling zeros:",
+          (err as Error).message,
+        );
         for (const bi of missIndices) {
           vectors[i + bi] = new Float32Array(768);
         }
@@ -1482,14 +1775,16 @@ async function embedAll(files: PhotoFile[]) {
       resizeCanvas();
       const cols = Math.ceil(Math.sqrt(files.length));
       state.points = Array.from({ length: done }, (_, j) => [
-        (j % cols) * 60, Math.floor(j / cols) * 60
+        (j % cols) * 60,
+        Math.floor(j / cols) * 60,
       ]) as Point[];
       fitCamera();
       scheduleRender();
     } else if (
       !progressiveProjectionRunning &&
       done > lastProgressiveCount &&
-      (lastProgressiveCount === 0 || performance.now() - lastProgressiveTime >= PROGRESSIVE_MIN_MS)
+      (lastProgressiveCount === 0 ||
+        performance.now() - lastProgressiveTime >= PROGRESSIVE_MIN_MS)
     ) {
       const isFirst = lastProgressiveCount === 0; // first progressive projection → fit camera
       lastProgressiveCount = done;
@@ -1497,32 +1792,39 @@ async function embedAll(files: PhotoFile[]) {
       progressiveProjectionRunning = true;
       const partialVecs = vectors.slice(0, done);
       const nNeigh = Math.max(2, Math.min(15, done - 1));
-      runProjection(partialVecs, 'PCA', nNeigh, { silent: true })
-        .then(rawPts => spreadPointsAsync(rawPts, state.settings.density))
-        .then(spreadPts => {
-          if (state.phase === 'embedding') {
+      runProjection(partialVecs, "PCA", nNeigh, { silent: true })
+        .then((rawPts) => spreadPointsAsync(rawPts, state.settings.density))
+        .then((spreadPts) => {
+          if (state.phase === "embedding") {
             state.points = spreadPts;
             resizeCanvas();
             if (isFirst) fitCamera();
             scheduleRender();
           }
         })
-        .catch((err) => { console.error('Progressive projection failed:', err); })
-        .finally(() => { progressiveProjectionRunning = false; });
+        .catch((err) => {
+          console.error("Progressive projection failed:", err);
+        })
+        .finally(() => {
+          progressiveProjectionRunning = false;
+        });
     }
-    const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
+    const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : "";
     // Overall rate self-corrects as cache-hit bursts fade; only show the ETA
     // once a few seconds have passed so early estimates aren't nonsense.
     const elapsedSec = (performance.now() - embedStart) / 1000;
-    const eta = elapsedSec > 3 && done > 0
-      ? ` · ${(done / elapsedSec).toFixed(1)}/s · ${formatEta((files.length - done) * elapsedSec / done)}`
-      : '';
+    const eta =
+      elapsedSec > 3 && done > 0
+        ? ` · ${(done / elapsedSec).toFixed(1)}/s · ${formatEta(((files.length - done) * elapsedSec) / done)}`
+        : "";
     setStatus(`Embedding ${done} / ${files.length} images…${eta}${fromCache}`);
     setProgress(10 + (done / files.length) * 80); // 10% to 90%
 
     const pressure = getMemoryPressure();
-    if (pressure !== null && pressure.freeRatio < 0.20) {
-      setStatus(`Low memory (${(pressure.freeRatio * 100).toFixed(0)}% free) — stopping at ${done} / ${files.length} files…`);
+    if (pressure !== null && pressure.freeRatio < 0.2) {
+      setStatus(
+        `Low memory (${(pressure.freeRatio * 100).toFixed(0)}% free) — stopping at ${done} / ${files.length} files…`,
+      );
       await cachePutBatch(writeQueue);
       writeQueue.length = 0;
       return vectors.slice(0, done);
@@ -1539,14 +1841,19 @@ async function embedAll(files: PhotoFile[]) {
 // ── Main run ─────────────────────────────────────────────────────────────────
 async function processFiles(files: PhotoFile[]) {
   if (files.length === 0) {
-    setStatus('No images found.');
+    setStatus("No images found.");
     return;
   }
 
   // Clean up old resources before processing new files (prevents blob URL errors)
-  for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
+  for (const bmp of state.thumbnails) {
+    if (bmp?.close) bmp.close();
+  }
   for (const f of state.files) {
-    if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
+    if (f.objectURL) {
+      URL.revokeObjectURL(f.objectURL);
+      f.objectURL = null;
+    }
   }
   thumbDecoding.clear();
   thumbFailed.clear();
@@ -1568,12 +1875,14 @@ async function processFiles(files: PhotoFile[]) {
     // This ensures n/p navigation follows the visual order
     const folderGroups = new Map<string, PhotoFile[]>();
     for (const f of files) {
-      const pathParts = f.name.split('/');
-      const folder = pathParts.slice(0, -1).join('/') || '(root)';
+      const pathParts = f.name.split("/");
+      const folder = pathParts.slice(0, -1).join("/") || "(root)";
       if (!folderGroups.has(folder)) folderGroups.set(folder, []);
       folderGroups.get(folder)!.push(f);
     }
-    const sortedFolders = Array.from(folderGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const sortedFolders = Array.from(folderGroups.entries()).sort((a, b) =>
+      a[0].localeCompare(b[0]),
+    );
     for (const [, folderFiles] of sortedFolders) {
       folderFiles.sort((a, b) => a.lastModified - b.lastModified);
     }
@@ -1585,34 +1894,47 @@ async function processFiles(files: PhotoFile[]) {
     // Generate metadata-based grid layout (already sorted)
     setProgress(50);
     const layoutPoints = generateMetadataBasedLayout(sortedFiles);
-    state.rawPoints = layoutPoints.map(p => [p[0], p[1]]);
+    state.rawPoints = layoutPoints.map((p) => [p[0], p[1]]);
 
     // No semantic clustering in viewer mode - use folder-based colors if needed
     state.clusters = null;
     state.vectors = [];
 
     resizeCanvas();
-    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density);
-    state.phase = 'done';  // Set after async work completes
+    state.points = await spreadPointsAsync(
+      state.rawPoints,
+      state.settings.density,
+    );
+    state.phase = "done"; // Set after async work completes
     fitCamera();
     scheduleRender();
     setProgress(100);
 
-    setStatus(`${sortedFiles.length} media files — viewer mode (arranged by folder & date)`);
-    if (dom.statsEl) dom.statsEl.textContent = `${sortedFiles.length} files · viewer mode`;
+    setStatus(
+      `${sortedFiles.length} media files — viewer mode (arranged by folder & date)`,
+    );
+    if (dom.statsEl)
+      dom.statsEl.textContent = `${sortedFiles.length} files · viewer mode`;
     dom.recenterBtn.disabled = false;
     dom.resetBtn.disabled = false;
     dom.headerRecenterBtn.disabled = false;
-    dom.searchInput.disabled = true;  // No search in viewer mode
+    dom.searchInput.disabled = true; // No search in viewer mode
 
     // Save session state for resume (viewer mode)
-    const fileKeys = sortedFiles.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    const fileKeys = sortedFiles.map(
+      (f) => `${f.name}:${f.size}:${f.lastModified}` as CacheKey,
+    );
     try {
-      localStorage.setItem('po_fileKeys', JSON.stringify(fileKeys));
-      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
-      localStorage.setItem('po_clusters', JSON.stringify([])); // No semantic clusters in viewer mode
-      localStorage.setItem('po_viewerMode', 'true'); // Flag for resume handler
-    } catch (_) { showToast('Session state couldn\'t be saved — browser storage is full. Results are visible but won\'t be resumable.', 'warn'); }
+      localStorage.setItem("po_fileKeys", JSON.stringify(fileKeys));
+      localStorage.setItem("po_projectedPoints", JSON.stringify(state.points));
+      localStorage.setItem("po_clusters", JSON.stringify([])); // No semantic clusters in viewer mode
+      localStorage.setItem("po_viewerMode", "true"); // Flag for resume handler
+    } catch (_) {
+      showToast(
+        "Session state couldn't be saved — browser storage is full. Results are visible but won't be resumable.",
+        "warn",
+      );
+    }
 
     dom.openBtn.disabled = false;
     return;
@@ -1635,22 +1957,33 @@ async function processFiles(files: PhotoFile[]) {
 
     state.vectors = vectors;
 
-    state.phase = 'projecting';
+    state.phase = "projecting";
     setStatus(`Projecting with ${state.settings.projectionMethod}…`);
     setProgress(90);
     const nNeighbors = Math.max(2, Math.min(15, files.length - 1));
-    const rawPoints = await runProjection(vectors, state.settings.projectionMethod, nNeighbors);
+    const rawPoints = await runProjection(
+      vectors,
+      state.settings.projectionMethod,
+      nNeighbors,
+    );
     state.rawPoints = rawPoints;
     setProgress(94);
 
-    setStatus('Clustering…');
+    setStatus("Clustering…");
     const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(files.length / 2))));
-    state.clusters = await kmeansAsync(rawPoints, k, 60, undefined, f => setProgress(94 + f * 2));
+    state.clusters = await kmeansAsync(rawPoints, k, 60, undefined, (f) =>
+      setProgress(94 + f * 2),
+    );
 
-    state.phase = 'done';
+    state.phase = "done";
     resizeCanvas();
-    setStatus('Arranging layout…');
-    state.points = await spreadPointsAsync(rawPoints, state.settings.density, undefined, f => setProgress(96 + f * 4));
+    setStatus("Arranging layout…");
+    state.points = await spreadPointsAsync(
+      rawPoints,
+      state.settings.density,
+      undefined,
+      (f) => setProgress(96 + f * 4),
+    );
     fitCamera();
     scheduleRender();
     setProgress(100);
@@ -1662,13 +1995,20 @@ async function processFiles(files: PhotoFile[]) {
     dom.headerRecenterBtn.disabled = false;
     dom.searchInput.disabled = false;
 
-    state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
+    state.fileKeys = files.map((f) => `${f.name}:${f.size}:${f.lastModified}`);
     try {
-      localStorage.setItem('po_fileKeys', JSON.stringify(state.fileKeys));
-      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
-      localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
-    } catch (_) { showToast('Session state couldn\'t be saved — browser storage is full. Results are visible but won\'t be resumable.', 'warn'); }
-
+      localStorage.setItem("po_fileKeys", JSON.stringify(state.fileKeys));
+      localStorage.setItem("po_projectedPoints", JSON.stringify(state.points));
+      localStorage.setItem(
+        "po_clusters",
+        JSON.stringify(Array.from(state.clusters)),
+      );
+    } catch (_) {
+      showToast(
+        "Session state couldn't be saved — browser storage is full. Results are visible but won't be resumable.",
+        "warn",
+      );
+    }
   } catch (err) {
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
@@ -1677,19 +2017,23 @@ async function processFiles(files: PhotoFile[]) {
   }
 }
 
-async function run(dirHandle: DirectoryHandle, basePath: string = '') {
+async function run(dirHandle: DirectoryHandle, basePath: string = "") {
   dom.openBtn.disabled = true;
   setProgress(0);
 
   try {
     state.currentDirHandle = dirHandle;
     state.currentBasePath = basePath;
-    setStatus('Scanning folder…');
-    const files = await collectImages(dirHandle, state.settings.randomSampleSize, basePath);
+    setStatus("Scanning folder…");
+    const files = await collectImages(
+      dirHandle,
+      state.settings.randomSampleSize,
+      basePath,
+    );
     await processFiles(files);
 
     // Update URL to show current folder (clears any filter state)
-    updateURL({ type: 'folder', path: basePath });
+    updateURL({ type: "folder", path: basePath });
   } catch (err) {
     console.error(err);
     setStatus(`Error: ${(err as Error).message}`);
@@ -1708,17 +2052,17 @@ async function navigateToFolder(targetPath: string) {
   await run(state.currentDirHandle, targetPath);
 
   // Update URL for bookmarking/back-forward
-  updateURL({ type: 'folder', path: targetPath });
+  updateURL({ type: "folder", path: targetPath });
 }
 
 // Filter files by datetime range - rescans original folder
 async function filterByDateTime(
-  granularity: 'year' | 'month' | 'day' | 'hour' | 'minute',
+  granularity: "year" | "month" | "day" | "hour" | "minute",
   year: number,
   month?: number,
   day?: number,
   hour?: number,
-  minute?: number
+  minute?: number,
 ) {
   if (!state.currentDirHandle) return;
 
@@ -1727,10 +2071,14 @@ async function filterByDateTime(
 
   // Re-scan the original folder (no random sample, get all files)
   setStatus(`Scanning folder for ${granularity}…`);
-  const allFiles = await collectImages(state.currentDirHandle, 0, state.currentBasePath);
+  const allFiles = await collectImages(
+    state.currentDirHandle,
+    0,
+    state.currentBasePath,
+  );
 
   // Filter by datetime range
-  const filtered = allFiles.filter(f => {
+  const filtered = allFiles.filter((f) => {
     const d = new Date(f.lastModified);
     if (d.getFullYear() !== year) return false;
     if (month !== undefined && d.getMonth() !== month) return false;
@@ -1741,7 +2089,7 @@ async function filterByDateTime(
   });
 
   if (filtered.length === 0) {
-    setStatus('No files found in this time range.');
+    setStatus("No files found in this time range.");
     return;
   }
 
@@ -1760,14 +2108,18 @@ async function filterByDateTime(
 
   // Update display name for status
   const rangeDesc =
-    granularity === 'year' ? year.toString() :
-    granularity === 'month' ? `${year}-${(month! + 1).toString().padStart(2, '0')}` :
-    granularity === 'day' ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}` :
-    granularity === 'hour' ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:00` :
-    `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:${minute!.toString().padStart(2, '0')}`;
+    granularity === "year"
+      ? year.toString()
+      : granularity === "month"
+        ? `${year}-${(month! + 1).toString().padStart(2, "0")}`
+        : granularity === "day"
+          ? `${year}-${(month! + 1).toString().padStart(2, "0")}-${day!.toString().padStart(2, "0")}`
+          : granularity === "hour"
+            ? `${year}-${(month! + 1).toString().padStart(2, "0")}-${day!.toString().padStart(2, "0")} ${hour!.toString().padStart(2, "0")}:00`
+            : `${year}-${(month! + 1).toString().padStart(2, "0")}-${day!.toString().padStart(2, "0")} ${hour!.toString().padStart(2, "0")}:${minute!.toString().padStart(2, "0")}`;
 
   // Clear current state and process filtered files
-  state.phase = 'idle';
+  state.phase = "idle";
   state.files = [];
   state.vectors = [];
   state.points = [];
@@ -1775,7 +2127,7 @@ async function filterByDateTime(
   state.clusters = null;
   state.thumbnails = [];
   state.searchResults = null;
-  state.searchQuery = '';
+  state.searchQuery = "";
   state.searchScores = null;
 
   // If extractor isn't loaded, ensure we're in viewer-only mode for filtering
@@ -1784,8 +2136,13 @@ async function filterByDateTime(
     state.settings.viewerOnly = true;
   }
 
-  const sampleNote = finalFiles.length < filtered.length ? ` (sampled ${finalFiles.length} of ${filtered.length})` : '';
-  setStatus(`Found ${filtered.length} files from ${rangeDesc}.${sampleNote} Processing...`);
+  const sampleNote =
+    finalFiles.length < filtered.length
+      ? ` (sampled ${finalFiles.length} of ${filtered.length})`
+      : "";
+  setStatus(
+    `Found ${filtered.length} files from ${rangeDesc}.${sampleNote} Processing...`,
+  );
 
   try {
     await processFiles(finalFiles);
@@ -1797,37 +2154,50 @@ async function filterByDateTime(
   }
 
   // Update URL for bookmarking/back-forward
-  updateURL({ type: 'datetime', granularity, year, month, day, hour, minute });
+  updateURL({ type: "datetime", granularity, year, month, day, hour, minute });
 }
 
 // ── URL State Management ───────────────────────────────────────────────────────
 // URL format: #folder:path/to/folder or #dt:2025-01-15T14:30
 
-type URLState = { type: 'folder'; path: string } | { type: 'datetime'; granularity: string; year: number; month?: number; day?: number; hour?: number; minute?: number } | null;
+type URLState =
+  | { type: "folder"; path: string }
+  | {
+      type: "datetime";
+      granularity: string;
+      year: number;
+      month?: number;
+      day?: number;
+      hour?: number;
+      minute?: number;
+    }
+  | null;
 
 function parseURLHash(hash: string): URLState {
-  if (!hash || hash === '#') return null;
+  if (!hash || hash === "#") return null;
 
   const content = hash.slice(1); // Remove #
 
-  if (content.startsWith('folder:')) {
-    return { type: 'folder', path: content.slice(7) };
+  if (content.startsWith("folder:")) {
+    return { type: "folder", path: content.slice(7) };
   }
 
-  if (content.startsWith('dt:')) {
+  if (content.startsWith("dt:")) {
     const dtStr = content.slice(3);
     // Parse datetime: 2025-01-15T14:30
-    const parts = dtStr.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}))?(?::(\d{2}))?$/);
+    const parts = dtStr.match(
+      /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}))?(?::(\d{2}))?$/,
+    );
     if (parts) {
       const [, year, month, day, hour, minute] = parts;
       return {
-        type: 'datetime',
-        granularity: minute ? 'minute' : hour ? 'hour' : 'day',
+        type: "datetime",
+        granularity: minute ? "minute" : hour ? "hour" : "day",
         year: parseInt(year),
         month: parseInt(month) - 1,
         day: parseInt(day),
         hour: hour ? parseInt(hour) : undefined,
-        minute: minute ? parseInt(minute) : undefined
+        minute: minute ? parseInt(minute) : undefined,
       };
     }
   }
@@ -1837,44 +2207,47 @@ function parseURLHash(hash: string): URLState {
 
 function updateURL(state: URLState) {
   if (!state) {
-    history.replaceState(null, '', '#');
+    history.replaceState(null, "", "#");
     return;
   }
 
-  let hash = '';
-  if (state.type === 'folder') {
+  let hash = "";
+  if (state.type === "folder") {
     hash = `#folder:${state.path}`;
-  } else if (state.type === 'datetime') {
+  } else if (state.type === "datetime") {
     const { year, month, day, hour, minute } = state;
-    const datePart = `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}`;
-    const timePart = hour !== undefined ? `T${hour.toString().padStart(2, '0')}${minute !== undefined ? ':' + minute.toString().padStart(2, '0') : ''}` : '';
+    const datePart = `${year}-${(month! + 1).toString().padStart(2, "0")}-${day!.toString().padStart(2, "0")}`;
+    const timePart =
+      hour !== undefined
+        ? `T${hour.toString().padStart(2, "0")}${minute !== undefined ? ":" + minute.toString().padStart(2, "0") : ""}`
+        : "";
     hash = `#dt:${datePart}${timePart}`;
   }
 
-  history.pushState(state, '', hash);
+  history.pushState(state, "", hash);
 }
 
 // Handle back/forward navigation
-window.addEventListener('popstate', (e) => {
+window.addEventListener("popstate", (e) => {
   const urlState = parseURLHash(window.location.hash);
   if (!urlState) {
     // No state - reset to original folder
     if (state.currentBasePath) {
-      navigateToFolder('');
+      navigateToFolder("");
     }
     return;
   }
 
-  if (urlState.type === 'folder') {
+  if (urlState.type === "folder") {
     navigateToFolder(urlState.path);
-  } else if (urlState.type === 'datetime') {
+  } else if (urlState.type === "datetime") {
     filterByDateTime(
-      urlState.granularity as 'year' | 'month' | 'day' | 'hour' | 'minute',
+      urlState.granularity as "year" | "month" | "day" | "hour" | "minute",
       urlState.year,
       urlState.month,
       urlState.day,
       urlState.hour,
-      urlState.minute
+      urlState.minute,
     );
   }
 });
@@ -1892,14 +2265,14 @@ function pointerPos(e: PointerEvent): CanvasPointerPos {
   };
 }
 
-dom.canvas.addEventListener('pointerdown', (e) => {
+dom.canvas.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   dom.canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   dragMoved = 0;
 });
 
-dom.canvas.addEventListener('pointermove', (e) => {
+dom.canvas.addEventListener("pointermove", (e) => {
   e.preventDefault();
   const prev = pointers.get(e.pointerId);
   if (!prev) return;
@@ -1915,7 +2288,8 @@ dom.canvas.addEventListener('pointermove', (e) => {
     scheduleRender();
   } else if (pointers.size === 2) {
     const pts = [...pointers.values()];
-    const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
+    const dx = pts[0].x - pts[1].x,
+      dy = pts[0].y - pts[1].y;
     const dist = Math.sqrt(dx * dx + dy * dy);
     if (lastPinchDist > 0) {
       const midX = (pts[0].x + pts[1].x) / 2;
@@ -1935,7 +2309,7 @@ dom.canvas.addEventListener('pointermove', (e) => {
   }
 });
 
-dom.canvas.addEventListener('pointerup', (e) => {
+dom.canvas.addEventListener("pointerup", (e) => {
   e.preventDefault();
   const wasSingleTap = pointers.size === 1 && dragMoved < 15;
   pointers.delete(e.pointerId);
@@ -1946,11 +2320,16 @@ dom.canvas.addEventListener('pointerup', (e) => {
     const wx = (cx - dom.canvas.width / 2) / camera.scale + camera.x;
     const wy = (cy - dom.canvas.height / 2) / camera.scale + camera.y;
     const hitRadius = (THUMB_WORLD / 2) ** 2;
-    let closest = -1, minD = hitRadius * 4;
+    let closest = -1,
+      minD = hitRadius * 4;
     for (let i = 0; i < state.points.length; i++) {
-      const ddx = state.points[i][0] - wx, ddy = state.points[i][1] - wy;
+      const ddx = state.points[i][0] - wx,
+        ddy = state.points[i][1] - wy;
       const d = ddx * ddx + ddy * ddy;
-      if (d < minD) { minD = d; closest = i; }
+      if (d < minD) {
+        minD = d;
+        closest = i;
+      }
     }
     if (closest >= 0) {
       openFileModal(closest);
@@ -1958,32 +2337,46 @@ dom.canvas.addEventListener('pointerup', (e) => {
   }
 });
 
-dom.canvas.addEventListener('pointercancel', (e) => {
+dom.canvas.addEventListener("pointercancel", (e) => {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) lastPinchDist = 0;
 });
 
-dom.canvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const factor = e.deltaY > 0 ? 0.88 : 1.14;
-  const rect = dom.canvas.getBoundingClientRect();
-  const px = (e.clientX - rect.left) * (dom.canvas.width / rect.width) - dom.canvas.width / 2;
-  const py = (e.clientY - rect.top) * (dom.canvas.height / rect.height) - dom.canvas.height / 2;
-  camera.x += px / camera.scale - px / (camera.scale * factor);
-  camera.y += py / camera.scale - py / (camera.scale * factor);
-  camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor));
-  state.lastViewedIndex = null;
-  scheduleRender();
-}, { passive: false });
+dom.canvas.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 0.88 : 1.14;
+    const rect = dom.canvas.getBoundingClientRect();
+    const px =
+      (e.clientX - rect.left) * (dom.canvas.width / rect.width) -
+      dom.canvas.width / 2;
+    const py =
+      (e.clientY - rect.top) * (dom.canvas.height / rect.height) -
+      dom.canvas.height / 2;
+    camera.x += px / camera.scale - px / (camera.scale * factor);
+    camera.y += py / camera.scale - py / (camera.scale * factor);
+    camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor));
+    state.lastViewedIndex = null;
+    scheduleRender();
+  },
+  { passive: false },
+);
 
-dom.recenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
-dom.resetBtn.addEventListener('click', resetAll);
-dom.headerRecenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
+dom.recenterBtn.addEventListener("click", () => {
+  fitCamera();
+  scheduleRender();
+});
+dom.resetBtn.addEventListener("click", resetAll);
+dom.headerRecenterBtn.addEventListener("click", () => {
+  fitCamera();
+  scheduleRender();
+});
 
 // ── Search input ─────────────────────────────────────────────────────────────
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
-dom.searchInput.addEventListener('input', () => {
+dom.searchInput.addEventListener("input", () => {
   dom.searchClearBtn.hidden = !dom.searchInput.value.trim();
 
   if (searchDebounce) clearTimeout(searchDebounce);
@@ -1992,7 +2385,7 @@ dom.searchInput.addEventListener('input', () => {
       await searchImages(dom.searchInput.value);
     } else {
       state.searchResults = null;
-      state.searchQuery = '';
+      state.searchQuery = "";
       state.searchScores = null;
       dom.searchClearBtn.hidden = true;
       setStatus(`${state.files.length} images · tap to view`);
@@ -2001,11 +2394,11 @@ dom.searchInput.addEventListener('input', () => {
   }, 300);
 });
 
-dom.searchInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    dom.searchInput.value = '';
+dom.searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    dom.searchInput.value = "";
     state.searchResults = null;
-    state.searchQuery = '';
+    state.searchQuery = "";
     state.searchScores = null;
     dom.searchClearBtn.hidden = true;
     setStatus(`${state.files.length} images · tap to view`);
@@ -2013,10 +2406,10 @@ dom.searchInput.addEventListener('keydown', (e) => {
   }
 });
 
-dom.searchClearBtn.addEventListener('click', () => {
-  dom.searchInput.value = '';
+dom.searchClearBtn.addEventListener("click", () => {
+  dom.searchInput.value = "";
   state.searchResults = null;
-  state.searchQuery = '';
+  state.searchQuery = "";
   state.searchScores = null;
   dom.searchClearBtn.hidden = true;
   dom.searchInput.focus();
@@ -2026,21 +2419,21 @@ dom.searchClearBtn.addEventListener('click', () => {
 
 const openFileModal = (index: number) => {
   const f = state.files[index];
-  const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+  const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
 
   if (VIDEO_EXTS.has(ext)) {
-    dom.modalImg.style.display = 'none';
-    dom.modalVideo.style.display = 'block';
+    dom.modalImg.style.display = "none";
+    dom.modalVideo.style.display = "block";
     dom.modalVideo.loop = state.settings.loopVideos;
     // Ensure objectURL exists (created lazily during thumbnail decode)
     if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
     dom.modalVideo.src = f.objectURL;
     dom.modalVideo.play().catch(() => {}); // Autoplay when opened
   } else {
-    dom.modalVideo.style.display = 'none';
+    dom.modalVideo.style.display = "none";
     dom.modalVideo.pause();
-    dom.modalVideo.src = '';
-    dom.modalImg.style.display = 'block';
+    dom.modalVideo.src = "";
+    dom.modalImg.style.display = "block";
     // Ensure objectURL exists (created lazily during thumbnail decode); without
     // this, navigating (n/p) to an image not yet rendered on-canvas shows blank.
     if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
@@ -2048,8 +2441,8 @@ const openFileModal = (index: number) => {
   }
 
   // Populate modal footer with metadata
-  const pathParts = f.name.split('/');
-  const filename = pathParts.pop() || '';
+  const pathParts = f.name.split("/");
+  const filename = pathParts.pop() || "";
 
   dom.modalFilename.textContent = filename;
 
@@ -2059,23 +2452,23 @@ const openFileModal = (index: number) => {
   }
 
   if (pathParts.length === 0) {
-    const rootSpan = document.createElement('span');
-    rootSpan.className = 'modal-link';
-    rootSpan.textContent = '(root)';
-    rootSpan.onclick = () => navigateToFolder('');
+    const rootSpan = document.createElement("span");
+    rootSpan.className = "modal-link";
+    rootSpan.textContent = "(root)";
+    rootSpan.onclick = () => navigateToFolder("");
     dom.modalPath.appendChild(rootSpan);
   } else {
     pathParts.forEach((part, i) => {
       if (i > 0) {
-        const sep = document.createElement('span');
-        sep.className = 'modal-sep';
-        sep.textContent = ' / ';
+        const sep = document.createElement("span");
+        sep.className = "modal-sep";
+        sep.textContent = " / ";
         dom.modalPath.appendChild(sep);
       }
-      const link = document.createElement('span');
-      link.className = 'modal-link';
+      const link = document.createElement("span");
+      link.className = "modal-link";
       link.textContent = part;
-      const targetPath = pathParts.slice(0, i + 1).join('/');
+      const targetPath = pathParts.slice(0, i + 1).join("/");
       link.onclick = () => navigateToFolder(targetPath);
       dom.modalPath.appendChild(link);
     });
@@ -2083,13 +2476,13 @@ const openFileModal = (index: number) => {
 
   // Up one level button
   if (pathParts.length > 0) {
-    dom.modalUp.style.visibility = 'visible';
+    dom.modalUp.style.visibility = "visible";
     dom.modalUp.onclick = () => {
-      const upPath = pathParts.slice(0, -1).join('/');
+      const upPath = pathParts.slice(0, -1).join("/");
       navigateToFolder(upPath);
     };
   } else {
-    dom.modalUp.style.visibility = 'hidden';
+    dom.modalUp.style.visibility = "hidden";
   }
 
   // Create clickable datetime breadcrumbs
@@ -2099,54 +2492,76 @@ const openFileModal = (index: number) => {
   }
 
   // Year
-  const yearLink = document.createElement('span');
-  yearLink.className = 'modal-link';
+  const yearLink = document.createElement("span");
+  yearLink.className = "modal-link";
   yearLink.textContent = date.getFullYear().toString();
-  yearLink.onclick = () => filterByDateTime('year', date.getFullYear());
+  yearLink.onclick = () => filterByDateTime("year", date.getFullYear());
   dom.modalDatetime.appendChild(yearLink);
 
   // Month
-  const monthSep = document.createElement('span');
-  monthSep.className = 'modal-sep';
-  monthSep.textContent = '/';
+  const monthSep = document.createElement("span");
+  monthSep.className = "modal-sep";
+  monthSep.textContent = "/";
   dom.modalDatetime.appendChild(monthSep);
-  const monthLink = document.createElement('span');
-  monthLink.className = 'modal-link';
-  monthLink.textContent = (date.getMonth() + 1).toString().padStart(2, '0');
-  monthLink.onclick = () => filterByDateTime('month', date.getFullYear(), date.getMonth());
+  const monthLink = document.createElement("span");
+  monthLink.className = "modal-link";
+  monthLink.textContent = (date.getMonth() + 1).toString().padStart(2, "0");
+  monthLink.onclick = () =>
+    filterByDateTime("month", date.getFullYear(), date.getMonth());
   dom.modalDatetime.appendChild(monthLink);
 
   // Day
-  const daySep = document.createElement('span');
-  daySep.className = 'modal-sep';
-  daySep.textContent = '/';
+  const daySep = document.createElement("span");
+  daySep.className = "modal-sep";
+  daySep.textContent = "/";
   dom.modalDatetime.appendChild(daySep);
-  const dayLink = document.createElement('span');
-  dayLink.className = 'modal-link';
-  dayLink.textContent = date.getDate().toString().padStart(2, '0');
-  dayLink.onclick = () => filterByDateTime('day', date.getFullYear(), date.getMonth(), date.getDate());
+  const dayLink = document.createElement("span");
+  dayLink.className = "modal-link";
+  dayLink.textContent = date.getDate().toString().padStart(2, "0");
+  dayLink.onclick = () =>
+    filterByDateTime(
+      "day",
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+    );
   dom.modalDatetime.appendChild(dayLink);
 
   // Hour
-  const hourSep = document.createElement('span');
-  hourSep.className = 'modal-sep';
-  hourSep.textContent = ' ';
+  const hourSep = document.createElement("span");
+  hourSep.className = "modal-sep";
+  hourSep.textContent = " ";
   dom.modalDatetime.appendChild(hourSep);
-  const hourLink = document.createElement('span');
-  hourLink.className = 'modal-link';
-  hourLink.textContent = date.getHours().toString().padStart(2, '0');
-  hourLink.onclick = () => filterByDateTime('hour', date.getFullYear(), date.getMonth(), date.getDate(), date.getHours());
+  const hourLink = document.createElement("span");
+  hourLink.className = "modal-link";
+  hourLink.textContent = date.getHours().toString().padStart(2, "0");
+  hourLink.onclick = () =>
+    filterByDateTime(
+      "hour",
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+      date.getHours(),
+    );
   dom.modalDatetime.appendChild(hourLink);
 
   // Minute
-  const minSep = document.createElement('span');
-  minSep.className = 'modal-sep';
-  minSep.textContent = ':';
+  const minSep = document.createElement("span");
+  minSep.className = "modal-sep";
+  minSep.textContent = ":";
   dom.modalDatetime.appendChild(minSep);
-  const minLink = document.createElement('span');
-  minLink.className = 'modal-link';
-  minLink.textContent = date.getMinutes().toString().padStart(2, '0');
-  minLink.onclick = () => filterByDateTime('minute', date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes());
+  const minLink = document.createElement("span");
+  minLink.className = "modal-link";
+  minLink.textContent = date.getMinutes().toString().padStart(2, "0");
+  minLink.onclick = () =>
+    filterByDateTime(
+      "minute",
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+      date.getHours(),
+      date.getMinutes(),
+    );
   dom.modalDatetime.appendChild(minLink);
 
   // Store date for updateSizeInfo closure
@@ -2154,15 +2569,19 @@ const openFileModal = (index: number) => {
 
   // Update size and resolution after media loads
   const updateSizeInfo = () => {
-    const width = dom.modalImg.style.display !== 'none'
-      ? dom.modalImg.naturalWidth
-      : dom.modalVideo.videoWidth;
-    const height = dom.modalImg.style.display !== 'none'
-      ? dom.modalImg.naturalHeight
-      : dom.modalVideo.videoHeight;
+    const width =
+      dom.modalImg.style.display !== "none"
+        ? dom.modalImg.naturalWidth
+        : dom.modalVideo.videoWidth;
+    const height =
+      dom.modalImg.style.display !== "none"
+        ? dom.modalImg.naturalHeight
+        : dom.modalVideo.videoHeight;
 
     if (width && height) {
-      const sizeMB = (f.size / (1024 * 1024)).toFixed(f.size < 1024 * 1024 ? 2 : 1);
+      const sizeMB = (f.size / (1024 * 1024)).toFixed(
+        f.size < 1024 * 1024 ? 2 : 1,
+      );
       const sizeKB = (f.size / 1024).toFixed(0);
       const sizeStr = f.size < 1024 * 1024 ? `${sizeKB} KB` : `${sizeMB} MB`;
       dom.modalMeta.textContent = `${width}×${height} · ${sizeStr}`;
@@ -2171,65 +2590,92 @@ const openFileModal = (index: number) => {
 
   // Try immediately (might be cached), otherwise wait for load
   updateSizeInfo();
-  if (dom.modalImg.style.display !== 'none') {
+  if (dom.modalImg.style.display !== "none") {
     dom.modalImg.onload = updateSizeInfo;
   } else {
     dom.modalVideo.onloadedmetadata = updateSizeInfo;
   }
 
   // EXIF: full parse lazily; result feeds footer GPS and detail dialog
-  const gpsSep = document.getElementById('modal-gps-sep') as HTMLSpanElement;
-  const exifSep = document.getElementById('modal-exif-sep') as HTMLSpanElement;
+  const gpsSep = document.getElementById("modal-gps-sep") as HTMLSpanElement;
+  const exifSep = document.getElementById("modal-exif-sep") as HTMLSpanElement;
   const applyExif = (exif: Record<string, unknown> | null) => {
     const lat = exif?.latitude as number | undefined;
     const lon = exif?.longitude as number | undefined;
-    if (typeof lat === 'number' && typeof lon === 'number') {
+    if (typeof lat === "number" && typeof lon === "number") {
       dom.modalGps.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
       dom.modalGps.href = `https://www.openstreetmap.org/?mlat=${lat.toFixed(5)}&mlon=${lon.toFixed(5)}&zoom=15`;
-      dom.modalGps.style.display = '';
-      gpsSep.style.display = '';
+      dom.modalGps.style.display = "";
+      gpsSep.style.display = "";
     } else {
-      dom.modalGps.style.display = 'none';
-      gpsSep.style.display = 'none';
+      dom.modalGps.style.display = "none";
+      gpsSep.style.display = "none";
     }
     const hasExif = exif && Object.keys(exif).length > 0;
-    dom.modalExifBtn.style.display = hasExif ? '' : 'none';
-    exifSep.style.display = hasExif ? '' : 'none';
+    dom.modalExifBtn.style.display = hasExif ? "" : "none";
+    exifSep.style.display = hasExif ? "" : "none";
   };
 
   if (f.exifData !== undefined) {
     applyExif(f.exifData);
   } else {
     applyExif(null);
-    exifr.parse(f.file, { gps: true, exif: true, iptc: false, xmp: false, icc: false, jfif: false })
-      .then(exif => {
+    exifr
+      .parse(f.file, {
+        gps: true,
+        exif: true,
+        iptc: false,
+        xmp: false,
+        icc: false,
+        jfif: false,
+      })
+      .then((exif) => {
         f.exifData = exif ?? null;
-        f.gps = (typeof exif?.latitude === 'number' && typeof exif?.longitude === 'number')
-          ? { latitude: exif.latitude as number, longitude: exif.longitude as number } : null;
+        f.gps =
+          typeof exif?.latitude === "number" &&
+          typeof exif?.longitude === "number"
+            ? {
+                latitude: exif.latitude as number,
+                longitude: exif.longitude as number,
+              }
+            : null;
         if (state.activeFileIndex === index) applyExif(f.exifData ?? null);
-      }).catch((err) => { console.warn('EXIF parse failed:', err); f.exifData = null; f.gps = null; });
+      })
+      .catch((err) => {
+        console.warn("EXIF parse failed:", err);
+        f.exifData = null;
+        f.gps = null;
+      });
   }
 
   // Cancel any in-flight lazy caption and pending debounce from a previous modal open
   captionAbortController?.abort();
   captionAbortController = null;
-  if (captionDebounceTimer !== null) { clearTimeout(captionDebounceTimer); captionDebounceTimer = null; }
+  if (captionDebounceTimer !== null) {
+    clearTimeout(captionDebounceTimer);
+    captionDebounceTimer = null;
+  }
 
   // Warm from localStorage so captions survive page reload in all modes
   if (!state.captions[index]) {
-    const stored = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
+    const stored = localStorage.getItem(
+      `@caption/${f.name}:${f.size}:${f.lastModified}`,
+    );
     if (stored) state.captions[index] = stored;
   }
 
   const caption = state.captions[index] ?? null;
   if (caption) {
     dom.modalCaption.textContent = caption;
-    dom.modalCaption.style.display = 'block';
-    dom.modalFooter.style.borderRadius = '0';
-  } else if (state.settings.enableLazyCaption && chromeAIAvailability !== 'unavailable') {
+    dom.modalCaption.style.display = "block";
+    dom.modalFooter.style.borderRadius = "0";
+  } else if (
+    state.settings.enableLazyCaption &&
+    chromeAIAvailability !== "unavailable"
+  ) {
     // Hide until the debounce fires — no flash when quickly flipping images
-    dom.modalCaption.style.display = 'none';
-    dom.modalFooter.style.borderRadius = '';
+    dom.modalCaption.style.display = "none";
+    dom.modalFooter.style.borderRadius = "";
 
     const ac = new AbortController();
     captionAbortController = ac;
@@ -2241,35 +2687,53 @@ const openFileModal = (index: number) => {
       if (ac.signal.aborted) return;
 
       // Show placeholder now that the user has paused on this image
-      dom.modalCaption.textContent = 'Generating caption…';
-      dom.modalCaption.style.display = 'block';
-      dom.modalFooter.style.borderRadius = '0';
+      dom.modalCaption.textContent = "Generating caption…";
+      dom.modalCaption.style.display = "block";
+      dom.modalFooter.style.borderRadius = "0";
 
       try {
-        if (!lazyCaptionManager) lazyCaptionManager = new ChromeAISessionManager();
+        if (!lazyCaptionManager)
+          lazyCaptionManager = new ChromeAISessionManager();
         const thumb = state.thumbnails[captureIndex];
         const img = thumb
           ? await createImageBitmap(thumb)
-          : await createImageBitmap(captureFile.file, { resizeWidth: 128, resizeQuality: 'medium' });
-        if (ac.signal.aborted) { img.close(); return; }
-        const desc = await lazyCaptionManager.describe(img, getChromeAIPrompt(), ac.signal);
+          : await createImageBitmap(captureFile.file, {
+              resizeWidth: 128,
+              resizeQuality: "medium",
+            });
+        if (ac.signal.aborted) {
+          img.close();
+          return;
+        }
+        const desc = await lazyCaptionManager.describe(
+          img,
+          getChromeAIPrompt(),
+          ac.signal,
+        );
         img.close();
         if (ac.signal.aborted) return;
         state.captions[captureIndex] = desc;
-        try { localStorage.setItem(`@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`, desc); } catch (_) { console.warn('Caption cache full'); }
+        try {
+          localStorage.setItem(
+            `@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`,
+            desc,
+          );
+        } catch (_) {
+          console.warn("Caption cache full");
+        }
         if (state.activeFileIndex === captureIndex) {
           dom.modalCaption.textContent = desc;
         }
       } catch {
         if (!ac.signal.aborted && state.activeFileIndex === captureIndex) {
-          dom.modalCaption.style.display = 'none';
-          dom.modalFooter.style.borderRadius = '';
+          dom.modalCaption.style.display = "none";
+          dom.modalFooter.style.borderRadius = "";
         }
       }
     }, 400);
   } else {
-    dom.modalCaption.style.display = 'none';
-    dom.modalFooter.style.borderRadius = '';
+    dom.modalCaption.style.display = "none";
+    dom.modalFooter.style.borderRadius = "";
   }
 
   dom.modal.showModal();
@@ -2290,90 +2754,117 @@ const closeModal = () => {
 };
 
 // Cleanup happens on the native close event (handles X button, Escape, and backdrop click)
-dom.modal.addEventListener('close', () => {
+dom.modal.addEventListener("close", () => {
   dom.modalVideo.pause();
-  dom.modalVideo.src = '';
+  dom.modalVideo.src = "";
   state.activeFileIndex = null;
-  if (captionDebounceTimer !== null) { clearTimeout(captionDebounceTimer); captionDebounceTimer = null; }
+  if (captionDebounceTimer !== null) {
+    clearTimeout(captionDebounceTimer);
+    captionDebounceTimer = null;
+  }
   captionAbortController?.abort();
   captionAbortController = null;
 });
 
-dom.modalClose.addEventListener('click', closeModal);
+dom.modalClose.addEventListener("click", closeModal);
 
 // Backdrop click: dialog is fullscreen overlay, click on dialog outside content closes it
-dom.modal.addEventListener('click', (e) => {
+dom.modal.addEventListener("click", (e) => {
   if (e.target === dom.modal) closeModal();
 });
 
 // ── EXIF detail dialog ───────────────────────────────────────────────────────
-const exifDialog = document.getElementById('exif-dialog') as HTMLDialogElement;
-const exifDialogBody = document.getElementById('exif-dialog-body') as HTMLDivElement;
-const exifDialogClose = document.getElementById('exif-dialog-close') as HTMLButtonElement;
+const exifDialog = document.getElementById("exif-dialog") as HTMLDialogElement;
+const exifDialogBody = document.getElementById(
+  "exif-dialog-body",
+) as HTMLDivElement;
+const exifDialogClose = document.getElementById(
+  "exif-dialog-close",
+) as HTMLButtonElement;
 
 const EXIF_LABELS: Record<string, string> = {
-  Make: 'Camera Make', Model: 'Camera Model', LensModel: 'Lens',
-  FNumber: 'Aperture', ExposureTime: 'Shutter Speed', ISO: 'ISO',
-  FocalLength: 'Focal Length', FocalLengthIn35mmFormat: '35mm Equiv.',
-  DateTimeOriginal: 'Date Taken', CreateDate: 'Date Created',
-  ImageWidth: 'Width', ImageHeight: 'Height', Orientation: 'Orientation',
-  Flash: 'Flash', WhiteBalance: 'White Balance', ExposureMode: 'Exposure Mode',
-  ExposureProgram: 'Exposure Program', MeteringMode: 'Metering Mode',
-  ColorSpace: 'Color Space', Software: 'Software',
-  Artist: 'Artist', Copyright: 'Copyright',
-  latitude: 'Latitude', longitude: 'Longitude',
+  Make: "Camera Make",
+  Model: "Camera Model",
+  LensModel: "Lens",
+  FNumber: "Aperture",
+  ExposureTime: "Shutter Speed",
+  ISO: "ISO",
+  FocalLength: "Focal Length",
+  FocalLengthIn35mmFormat: "35mm Equiv.",
+  DateTimeOriginal: "Date Taken",
+  CreateDate: "Date Created",
+  ImageWidth: "Width",
+  ImageHeight: "Height",
+  Orientation: "Orientation",
+  Flash: "Flash",
+  WhiteBalance: "White Balance",
+  ExposureMode: "Exposure Mode",
+  ExposureProgram: "Exposure Program",
+  MeteringMode: "Metering Mode",
+  ColorSpace: "Color Space",
+  Software: "Software",
+  Artist: "Artist",
+  Copyright: "Copyright",
+  latitude: "Latitude",
+  longitude: "Longitude",
 };
 
 function formatExifValue(key: string, val: unknown): string {
-  if (val === null || val === undefined) return '';
-  if (key === 'FNumber') return `f/${val}`;
-  if (key === 'ExposureTime') {
+  if (val === null || val === undefined) return "";
+  if (key === "FNumber") return `f/${val}`;
+  if (key === "ExposureTime") {
     const s = val as number;
     return s < 1 ? `1/${Math.round(1 / s)}s` : `${s}s`;
   }
-  if (key === 'FocalLength' || key === 'FocalLengthIn35mmFormat') return `${val}mm`;
-  if (key === 'latitude' || key === 'longitude') return (val as number).toFixed(6);
+  if (key === "FocalLength" || key === "FocalLengthIn35mmFormat")
+    return `${val}mm`;
+  if (key === "latitude" || key === "longitude")
+    return (val as number).toFixed(6);
   if (val instanceof Date) return val.toLocaleString();
   return String(val);
 }
 
-dom.modalExifBtn.addEventListener('click', () => {
+dom.modalExifBtn.addEventListener("click", () => {
   const idx = state.activeFileIndex;
   if (idx === null) return;
   const exif = state.files[idx]?.exifData;
   if (!exif) return;
 
-  exifDialogBody.innerHTML = '';
-  const dl = document.createElement('dl');
-  dl.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0;';
+  exifDialogBody.innerHTML = "";
+  const dl = document.createElement("dl");
+  dl.style.cssText =
+    "display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0;";
 
   for (const [key, label] of Object.entries(EXIF_LABELS)) {
-    if (!(key in exif) || exif[key] === null || exif[key] === undefined) continue;
+    if (!(key in exif) || exif[key] === null || exif[key] === undefined)
+      continue;
     const formatted = formatExifValue(key, exif[key]);
     if (!formatted) continue;
-    const dt = document.createElement('dt');
-    dt.style.cssText = 'color:var(--text-dim);white-space:nowrap;';
+    const dt = document.createElement("dt");
+    dt.style.cssText = "color:var(--text-dim);white-space:nowrap;";
     dt.textContent = label;
-    const dd = document.createElement('dd');
-    dd.style.cssText = 'margin:0;color:var(--text-main);word-break:break-all;';
+    const dd = document.createElement("dd");
+    dd.style.cssText = "margin:0;color:var(--text-main);word-break:break-all;";
     dd.textContent = formatted;
     dl.append(dt, dd);
   }
 
   if (!dl.children.length) {
-    exifDialogBody.textContent = 'No recognised EXIF fields found.';
+    exifDialogBody.textContent = "No recognised EXIF fields found.";
   } else {
     exifDialogBody.appendChild(dl);
   }
   exifDialog.showModal();
 });
 
-exifDialogClose.addEventListener('click', () => exifDialog.close());
-exifDialog.addEventListener('click', (e) => { if (e.target === exifDialog) exifDialog.close(); });
+exifDialogClose.addEventListener("click", () => exifDialog.close());
+exifDialog.addEventListener("click", (e) => {
+  if (e.target === exifDialog) exifDialog.close();
+});
 
 // ── Settings ────────────────────────────────────────────────────────────────
 const saveSettings = () => {
-  localStorage.setItem('mc_settings', JSON.stringify(state.settings));
+  localStorage.setItem("mc_settings", JSON.stringify(state.settings));
 };
 
 // Sync UI with initial settings
@@ -2381,7 +2872,8 @@ dom.densitySlider.value = state.settings.density.toString();
 dom.drawBudgetSlider.value = state.settings.drawBudget.toString();
 dom.loopToggle.checked = state.settings.loopVideos;
 dom.enableSearchToggle.checked = state.settings.enableTextSearch;
-if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
+if (dom.projectionSelect)
+  dom.projectionSelect.value = state.settings.projectionMethod;
 dom.batchSizeInput.value = state.settings.batchSize.toString();
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
@@ -2391,17 +2883,19 @@ dom.customModelHostInput.value = state.settings.customModelHost;
 dom.modelSelect.value = state.settings.modelVariant;
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
-getChromeAIAvailability().then(avail => {
+getChromeAIAvailability().then((avail) => {
   chromeAIAvailability = avail;
-  const chromeAIOption = dom.modelSelect.querySelector<HTMLOptionElement>('option[value="chrome-ai"]');
+  const chromeAIOption = dom.modelSelect.querySelector<HTMLOptionElement>(
+    'option[value="chrome-ai"]',
+  );
   if (!chromeAIOption) return;
-  if (avail === 'unavailable') {
+  if (avail === "unavailable") {
     chromeAIOption.disabled = true;
-    chromeAIOption.textContent += ' — not available on this browser';
+    chromeAIOption.textContent += " — not available on this browser";
     // If the saved setting was chrome-ai but it's unavailable, fall back to sapiens2-fp16
-    if (state.settings.modelVariant === 'chrome-ai') {
-      state.settings.modelVariant = 'sapiens2-fp16';
-      dom.modelSelect.value = 'sapiens2-fp16';
+    if (state.settings.modelVariant === "chrome-ai") {
+      state.settings.modelVariant = "sapiens2-fp16";
+      dom.modelSelect.value = "sapiens2-fp16";
       saveSettings();
     }
   }
@@ -2409,12 +2903,12 @@ getChromeAIAvailability().then(avail => {
 
 // Initialize Chrome AI prompt textarea with stored value
 const updateChromeAIPromptVisibility = () => {
-  const isChrome = state.settings.modelVariant === 'chrome-ai';
-  dom.chromeAIPromptSetting.style.display = isChrome ? '' : 'none';
+  const isChrome = state.settings.modelVariant === "chrome-ai";
+  dom.chromeAIPromptSetting.style.display = isChrome ? "" : "none";
 };
 if (dom.chromeAIPromptInput) {
   dom.chromeAIPromptInput.value = getChromeAIPrompt();
-  dom.chromeAIPromptInput.addEventListener('input', () => {
+  dom.chromeAIPromptInput.addEventListener("input", () => {
     const val = dom.chromeAIPromptInput.value.trim();
     if (val) {
       localStorage.setItem(CHROME_AI_PROMPT_KEY, val);
@@ -2424,7 +2918,7 @@ if (dom.chromeAIPromptInput) {
   });
 }
 if (dom.chromeAIPromptReset) {
-  dom.chromeAIPromptReset.addEventListener('click', () => {
+  dom.chromeAIPromptReset.addEventListener("click", () => {
     localStorage.removeItem(CHROME_AI_PROMPT_KEY);
     dom.chromeAIPromptInput.value = DEFAULT_DESCRIBE_PROMPT;
   });
@@ -2434,41 +2928,42 @@ updateChromeAIPromptVisibility();
 const updateSearchUI = () => {
   // In viewer mode, always disable search
   if (state.settings.viewerOnly) {
-    dom.bottomPanel.style.display = 'none';
-    dom.headerRecenterBtn.parentElement!.style.display = 'flex';
+    dom.bottomPanel.style.display = "none";
+    dom.headerRecenterBtn.parentElement!.style.display = "flex";
     dom.searchInput.disabled = true;
     return;
   }
 
   if (state.settings.enableTextSearch) {
-    dom.bottomPanel.style.display = 'flex';
-    dom.headerRecenterBtn.parentElement!.style.display = 'none';
+    dom.bottomPanel.style.display = "flex";
+    dom.headerRecenterBtn.parentElement!.style.display = "none";
   } else {
-    dom.bottomPanel.style.display = 'none';
-    dom.headerRecenterBtn.parentElement!.style.display = 'flex';
+    dom.bottomPanel.style.display = "none";
+    dom.headerRecenterBtn.parentElement!.style.display = "flex";
   }
-  dom.searchInput.disabled = !state.settings.enableTextSearch || state.phase !== 'done';
+  dom.searchInput.disabled =
+    !state.settings.enableTextSearch || state.phase !== "done";
 };
 updateSearchUI();
 refreshCacheSize();
 
-dom.settingsBtn.addEventListener('click', () => {
+dom.settingsBtn.addEventListener("click", () => {
   dom.settingsModal.showModal();
 });
 
-dom.settingsClose.addEventListener('click', () => {
+dom.settingsClose.addEventListener("click", () => {
   dom.settingsModal.close();
 });
 
-dom.settingsModal.addEventListener('click', (e) => {
+dom.settingsModal.addEventListener("click", (e) => {
   if (e.target === dom.settingsModal) dom.settingsModal.close();
 });
 
-dom.enableSearchToggle.addEventListener('change', async () => {
+dom.enableSearchToggle.addEventListener("change", async () => {
   // Prevent enabling search in viewer mode
   if (state.settings.viewerOnly && dom.enableSearchToggle.checked) {
     dom.enableSearchToggle.checked = false;
-    setStatus('Text search is not available in viewer mode.');
+    setStatus("Text search is not available in viewer mode.");
     return;
   }
 
@@ -2477,15 +2972,20 @@ dom.enableSearchToggle.addEventListener('change', async () => {
   updateSearchUI();
 
   // If enabled and models are already loaded, load the text model now
-  if (state.settings.enableTextSearch && state.phase !== 'idle' && state.phase !== 'loading_model' && !textExtractor) {
+  if (
+    state.settings.enableTextSearch &&
+    state.phase !== "idle" &&
+    state.phase !== "loading_model" &&
+    !textExtractor
+  ) {
     // We duplicate the text loading logic here for dynamic loading
     dom.settingsModal.close();
-    setStatus('Loading text model for search…');
+    setStatus("Loading text model for search…");
     const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
     const textLoaded = new Map<string, number>();
 
     const textProgressCb = (e: ProgressEvent) => {
-      if (e.status === 'progress') {
+      if (e.status === "progress") {
         textLoaded.set(e.file, e.loaded ?? 0);
         const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
         const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
@@ -2494,26 +2994,27 @@ dom.enableSearchToggle.addEventListener('change', async () => {
       }
     };
 
-    const tryLoadText = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
-      'feature-extraction',
-      'nomic-ai/nomic-embed-text-v1.5',
-      { device, dtype: 'fp32', progress_callback: textProgressCb }
-    ) as Promise<PipelineInstance>;
+    const tryLoadText = (device: "webgpu" | "wasm") =>
+      (pipeline as Pipeline)(
+        "feature-extraction",
+        "nomic-ai/nomic-embed-text-v1.5",
+        { device, dtype: "fp32", progress_callback: textProgressCb },
+      ) as Promise<PipelineInstance>;
 
     try {
-      textExtractor = await tryLoadText('webgpu');
+      textExtractor = await tryLoadText("webgpu");
     } catch (gpuErr) {
-      console.warn('Text model WebGPU failed, using wasm:', gpuErr);
+      console.warn("Text model WebGPU failed, using wasm:", gpuErr);
       textLoaded.clear();
-      textExtractor = await tryLoadText('wasm');
+      textExtractor = await tryLoadText("wasm");
     }
     setProgress(100);
     setTimeout(() => setProgress(0), 500);
-    setStatus('Text model loaded.');
+    setStatus("Text model loaded.");
   }
 });
 
-dom.modelSelect.addEventListener('change', () => {
+dom.modelSelect.addEventListener("change", () => {
   state.settings.modelVariant = dom.modelSelect.value as ModelVariant;
   saveSettings();
   updateChromeAIPromptVisibility();
@@ -2522,28 +3023,31 @@ dom.modelSelect.addEventListener('change', () => {
   }
 });
 
-dom.densitySlider.addEventListener('input', async () => {
+dom.densitySlider.addEventListener("input", async () => {
   state.settings.density = parseFloat(dom.densitySlider.value);
   saveSettings();
-  if (state.phase === 'done' && state.rawPoints && state.files.length) {
-    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density);
+  if (state.phase === "done" && state.rawPoints && state.files.length) {
+    state.points = await spreadPointsAsync(
+      state.rawPoints,
+      state.settings.density,
+    );
     scheduleRender();
   }
 });
 
-dom.drawBudgetSlider.addEventListener('input', () => {
+dom.drawBudgetSlider.addEventListener("input", () => {
   state.settings.drawBudget = parseInt(dom.drawBudgetSlider.value);
   saveSettings();
   scheduleRender();
 });
 
-dom.batchSizeInput.addEventListener('input', () => {
+dom.batchSizeInput.addEventListener("input", () => {
   const v = Math.max(1, parseInt(dom.batchSizeInput.value) || 1);
   state.settings.batchSize = v;
   saveSettings();
 });
 
-const hasMemoryAPI = 'deviceMemory' in navigator || 'memory' in performance;
+const hasMemoryAPI = "deviceMemory" in navigator || "memory" in performance;
 dom.batchSizeAutoBtn.hidden = !hasMemoryAPI;
 
 if (hasMemoryAPI && !savedSettings) {
@@ -2554,42 +3058,44 @@ if (hasMemoryAPI && !savedSettings) {
   saveSettings();
 }
 
-dom.batchSizeAutoBtn.addEventListener('click', () => {
+dom.batchSizeAutoBtn.addEventListener("click", () => {
   const optimal = computeOptimalBatchSize();
   state.settings.batchSize = optimal;
   dom.batchSizeInput.value = optimal.toString();
   saveSettings();
 });
 
-dom.randomSampleSizeInput.addEventListener('input', () => {
+dom.randomSampleSizeInput.addEventListener("input", () => {
   const v = parseInt(dom.randomSampleSizeInput.value) || 0;
   state.settings.randomSampleSize = Math.max(0, v);
   saveSettings();
 });
 
-dom.loopToggle.addEventListener('change', () => {
+dom.loopToggle.addEventListener("change", () => {
   state.settings.loopVideos = dom.loopToggle.checked;
   saveSettings();
 });
 
-dom.lazyCaptionToggle.addEventListener('change', () => {
+dom.lazyCaptionToggle.addEventListener("change", () => {
   state.settings.enableLazyCaption = dom.lazyCaptionToggle.checked;
   saveSettings();
 });
 
-dom.doNotTrackToggle.addEventListener('change', () => {
+dom.doNotTrackToggle.addEventListener("change", () => {
   state.settings.doNotTrack = dom.doNotTrackToggle.checked;
   saveSettings();
 });
 
-dom.customModelHostInput.addEventListener('change', () => {
-  state.settings.customModelHost = normalizeHost(dom.customModelHostInput.value);
+dom.customModelHostInput.addEventListener("change", () => {
+  state.settings.customModelHost = normalizeHost(
+    dom.customModelHostInput.value,
+  );
   dom.customModelHostInput.value = state.settings.customModelHost;
   saveSettings();
   applyModelEnv();
 });
 
-dom.viewerOnlyToggle.addEventListener('change', async () => {
+dom.viewerOnlyToggle.addEventListener("change", async () => {
   state.settings.viewerOnly = dom.viewerOnlyToggle.checked;
   saveSettings();
   updateSearchUI();
@@ -2600,16 +3106,18 @@ dom.viewerOnlyToggle.addEventListener('change', async () => {
     if (modelLoadAbort) {
       modelLoadAbort.abort();
       modelLoadAbort = null;
-      state.phase = 'idle';
+      state.phase = "idle";
     }
-    if (state.phase === 'idle' || state.phase === 'loading_model') {
+    if (state.phase === "idle" || state.phase === "loading_model") {
       dom.loadModelBtn.hidden = true;
       dom.openBtn.disabled = false;
-      dom.openBtn.classList.add('primary');
+      dom.openBtn.classList.add("primary");
       dom.demoBtn.disabled = false;
-      setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+      setStatus(
+        "Viewer mode active — open a folder to browse photos by date and folder.",
+      );
     }
-  } else if (!state.settings.viewerOnly && state.phase === 'idle') {
+  } else if (!state.settings.viewerOnly && state.phase === "idle") {
     // Switching back to AI mode
     dom.loadModelBtn.hidden = false;
     dom.loadModelBtn.disabled = false;
@@ -2617,51 +3125,73 @@ dom.viewerOnlyToggle.addEventListener('change', async () => {
   }
 
   // If changing mode with loaded data, need to reset and reprocess
-  if (state.phase === 'done' && state.files.length > 0) {
-    setStatus('Mode changed. Reset to apply changes, or open a new folder.');
+  if (state.phase === "done" && state.files.length > 0) {
+    setStatus("Mode changed. Reset to apply changes, or open a new folder.");
   }
 });
 
-
 if (dom.projectionSelect) {
-  dom.projectionSelect.addEventListener('change', async (e) => {
+  dom.projectionSelect.addEventListener("change", async (e) => {
     const select = e.target as HTMLSelectElement;
     state.settings.projectionMethod = select.value as ProjectionMethod;
     saveSettings();
-    
-    if (state.vectors.length > 0 && state.phase === 'done') {
+
+    if (state.vectors.length > 0 && state.phase === "done") {
       try {
-        state.phase = 'projecting';
+        state.phase = "projecting";
         dom.recenterBtn.disabled = true;
         if (dom.headerRecenterBtn) dom.headerRecenterBtn.disabled = true;
-        
+
         const nNeighbors = Math.max(2, Math.min(15, state.files.length - 1));
-        const rawPoints = await runProjection(state.vectors, state.settings.projectionMethod, nNeighbors);
+        const rawPoints = await runProjection(
+          state.vectors,
+          state.settings.projectionMethod,
+          nNeighbors,
+        );
         state.rawPoints = rawPoints;
-        
-        setStatus('Clustering…');
-        const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(state.files.length / 2))));
+
+        setStatus("Clustering…");
+        const k = Math.min(
+          8,
+          Math.max(2, Math.ceil(Math.sqrt(state.files.length / 2))),
+        );
         state.clusters = await kmeansAsync(rawPoints, k);
 
-        setStatus('Arranging layout…');
-        state.points = await spreadPointsAsync(rawPoints, state.settings.density);
+        setStatus("Arranging layout…");
+        state.points = await spreadPointsAsync(
+          rawPoints,
+          state.settings.density,
+        );
 
         try {
-          localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
-          localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
-        } catch (_) { showToast('Session state couldn\'t be saved — browser storage is full.', 'warn'); }
+          localStorage.setItem(
+            "po_projectedPoints",
+            JSON.stringify(state.points),
+          );
+          localStorage.setItem(
+            "po_clusters",
+            JSON.stringify(Array.from(state.clusters)),
+          );
+        } catch (_) {
+          showToast(
+            "Session state couldn't be saved — browser storage is full.",
+            "warn",
+          );
+        }
 
         fitCamera();
         scheduleRender();
-        
+
         const finalMsg = `${state.files.length} media files · ${k} clusters`;
-        setStatus(`${state.files.length} media files — tap to view · ${k} clusters`);
+        setStatus(
+          `${state.files.length} media files — tap to view · ${k} clusters`,
+        );
         if (dom.statsEl) dom.statsEl.textContent = finalMsg;
       } catch (err) {
-        console.error('Reprojection error:', err);
+        console.error("Reprojection error:", err);
         setStatus(`Reprojection failed: ${(err as Error).message}`);
       } finally {
-        state.phase = 'done';
+        state.phase = "done";
         dom.recenterBtn.disabled = false;
         if (dom.headerRecenterBtn) dom.headerRecenterBtn.disabled = false;
       }
@@ -2669,33 +3199,33 @@ if (dom.projectionSelect) {
   });
 }
 
-dom.aboutBtn.addEventListener('click', () => {
+dom.aboutBtn.addEventListener("click", () => {
   dom.aboutModal.showModal();
 });
 
-dom.aboutClose.addEventListener('click', () => {
+dom.aboutClose.addEventListener("click", () => {
   dom.aboutModal.close();
 });
 
-dom.aboutModal.addEventListener('click', (e) => {
+dom.aboutModal.addEventListener("click", (e) => {
   if (e.target === dom.aboutModal) dom.aboutModal.close();
 });
 
-window.addEventListener('resize', () => {
+window.addEventListener("resize", () => {
   resizeCanvas();
-  if (state.phase === 'done' && state.points.length) scheduleRender();
+  if (state.phase === "done" && state.points.length) scheduleRender();
 });
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 resizeCanvas();
 
 // Open about modal on first-ever visit
-if (!localStorage.getItem('mc_hasVisited')) {
-  localStorage.setItem('mc_hasVisited', 'true');
+if (!localStorage.getItem("mc_hasVisited")) {
+  localStorage.setItem("mc_hasVisited", "true");
   dom.aboutModal.showModal();
 }
 
-const _savedKeys = localStorage.getItem('po_fileKeys');
+const _savedKeys = localStorage.getItem("po_fileKeys");
 if (_savedKeys) {
   try {
     const n = JSON.parse(_savedKeys).length;
@@ -2703,23 +3233,27 @@ if (_savedKeys) {
     dom.resumeBtn.innerHTML = `🔄 <span class="btn-label">Resume last session (${n} images)</span>`;
   } catch (_) {
     localStorage.clear();
-    showToast('Previous session data was corrupted and has been cleared.', 'warn');
+    showToast(
+      "Previous session data was corrupted and has been cleared.",
+      "warn",
+    );
   }
 }
 
-dom.loadModelBtn.addEventListener('click', async () => {
+dom.loadModelBtn.addEventListener("click", async () => {
   if (extractor || sapiens2Session || chromeAIManager) return;
   dom.loadModelBtn.disabled = true;
   await loadModel();
 });
 
-dom.openBtn.addEventListener('click', async () => {
+dom.openBtn.addEventListener("click", async () => {
   if (window.showDirectoryPicker) {
     try {
-      const dir = await window.showDirectoryPicker({ mode: 'read' });
+      const dir = await window.showDirectoryPicker({ mode: "read" });
       await run(dir);
     } catch (err) {
-      if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);
+      if ((err as Error).name !== "AbortError")
+        setStatus(`Error: ${(err as Error).message}`);
     }
   } else {
     // Fallback for Safari/iOS
@@ -2727,25 +3261,25 @@ dom.openBtn.addEventListener('click', async () => {
   }
 });
 
-dom.fileInput.addEventListener('change', async () => {
+dom.fileInput.addEventListener("change", async () => {
   const fileList = dom.fileInput.files;
   if (!fileList || fileList.length === 0) return;
 
   dom.openBtn.disabled = true;
   setProgress(0);
-  setStatus('Processing files…');
+  setStatus("Processing files…");
 
   const files: PhotoFile[] = [];
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i];
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
     if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
       files.push({
         name: file.webkitRelativePath || file.name,
         size: file.size,
         lastModified: file.lastModified,
         file,
-        objectURL: null
+        objectURL: null,
       });
     }
   }
@@ -2753,9 +3287,9 @@ dom.fileInput.addEventListener('change', async () => {
   await processFiles(files);
 });
 
-dom.demoBtn.addEventListener('click', async () => {
+dom.demoBtn.addEventListener("click", async () => {
   setProgress(0);
-  setStatus('Fetching demo images…');
+  setStatus("Fetching demo images…");
   dom.demoBtn.disabled = true;
 
   try {
@@ -2763,70 +3297,83 @@ dom.demoBtn.addEventListener('click', async () => {
     if (files.length > 0) {
       await processFiles(files);
     } else {
-      setStatus('Failed to load demo images');
+      setStatus("Failed to load demo images");
       dom.demoBtn.disabled = false;
     }
   } catch (e) {
-    console.error('Demo load error:', e);
-    setStatus('Error loading demo images');
+    console.error("Demo load error:", e);
+    setStatus("Error loading demo images");
     dom.demoBtn.disabled = false;
   }
 });
 
-dom.resumeBtn.addEventListener('click', async () => {
-  const savedPoints = JSON.parse(localStorage.getItem('po_projectedPoints') || 'null');
-  const savedClusters = JSON.parse(localStorage.getItem('po_clusters') || 'null');
-  const savedKeys = JSON.parse(localStorage.getItem('po_fileKeys') || 'null');
-  if (!savedPoints || !savedKeys) { await dom.openBtn.click(); return; }
+dom.resumeBtn.addEventListener("click", async () => {
+  const savedPoints = JSON.parse(
+    localStorage.getItem("po_projectedPoints") || "null",
+  );
+  const savedClusters = JSON.parse(
+    localStorage.getItem("po_clusters") || "null",
+  );
+  const savedKeys = JSON.parse(localStorage.getItem("po_fileKeys") || "null");
+  if (!savedPoints || !savedKeys) {
+    await dom.openBtn.click();
+    return;
+  }
 
   try {
     let files: PhotoFile[] = [];
     if (window.showDirectoryPicker) {
-      const dir = await window.showDirectoryPicker({ mode: 'read' });
-      setStatus('Matching files…');
+      const dir = await window.showDirectoryPicker({ mode: "read" });
+      setStatus("Matching files…");
       files = await collectImages(dir);
     } else {
       // Safari/iOS fallback
-      setStatus('Please re-select the folder to resume.');
+      setStatus("Please re-select the folder to resume.");
       const fileList = await new Promise<FileList | null>((resolve) => {
         const handler = () => {
-          dom.fileInput.removeEventListener('change', handler);
+          dom.fileInput.removeEventListener("change", handler);
           resolve(dom.fileInput.files);
         };
-        dom.fileInput.addEventListener('change', handler);
+        dom.fileInput.addEventListener("change", handler);
         dom.fileInput.click();
       });
 
       if (!fileList || fileList.length === 0) return;
       for (let i = 0; i < fileList.length; i++) {
         const file = fileList[i];
-        const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+        const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
         if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
           files.push({
-
             name: file.webkitRelativePath || file.name,
             size: file.size,
             lastModified: file.lastModified,
             file,
-            objectURL: null
+            objectURL: null,
           });
         }
       }
     }
 
-    const keyToFile = new Map(files.map(f => [`${f.name}:${f.size}:${f.lastModified}`, f]));
-    const matched = (savedKeys as string[]).map(k => keyToFile.get(k)).filter((f): f is PhotoFile => !!f);
+    const keyToFile = new Map(
+      files.map((f) => [`${f.name}:${f.size}:${f.lastModified}`, f]),
+    );
+    const matched = (savedKeys as string[])
+      .map((k) => keyToFile.get(k))
+      .filter((f): f is PhotoFile => !!f);
 
     if (matched.length < (savedKeys as string[]).length * 0.8) {
-      await processFiles(files); return;
+      await processFiles(files);
+      return;
     }
 
-    const wasViewerMode = localStorage.getItem('po_viewerMode') === 'true';
+    const wasViewerMode = localStorage.getItem("po_viewerMode") === "true";
 
     state.files = matched;
     state.rawPoints = savedPoints;
     state.points = savedPoints.slice(0, matched.length);
-    state.clusters = savedClusters ? new Int32Array(savedClusters.slice(0, matched.length)) : null;
+    state.clusters = savedClusters
+      ? new Int32Array(savedClusters.slice(0, matched.length))
+      : null;
 
     if (wasViewerMode) {
       // Viewer mode: no vectors needed
@@ -2834,35 +3381,44 @@ dom.resumeBtn.addEventListener('click', async () => {
       dom.searchInput.disabled = true;
     } else {
       // AI mode: restore cached vectors for search + re-projection
-      setStatus('Restoring embeddings…');
-      const resumePrefix = state.settings.modelVariant === 'chrome-ai' ? '@chrome-ai/'
-        : !state.settings.modelVariant.startsWith('sapiens2') ? ''
-        : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
-        : `@${state.settings.modelVariant}/`;
+      setStatus("Restoring embeddings…");
+      const resumePrefix =
+        state.settings.modelVariant === "chrome-ai"
+          ? "@chrome-ai/"
+          : !state.settings.modelVariant.startsWith("sapiens2")
+            ? ""
+            : state.settings.modelVariant === "sapiens2-fp16"
+              ? "@sapiens2/"
+              : `@${state.settings.modelVariant}/`;
       // Chunked reads so large folders show progress instead of a frozen bar,
       // and the main thread gets a breather between IDB transactions.
       const RESUME_CHUNK = 500;
       const cachedVectors: (Float32Array | null)[] = [];
       for (let c = 0; c < matched.length; c += RESUME_CHUNK) {
         const chunk = matched.slice(c, c + RESUME_CHUNK);
-        const { cached, migrate } = await readCachedEmbeddings(chunk, resumePrefix);
+        const { cached, migrate } = await readCachedEmbeddings(
+          chunk,
+          resumePrefix,
+        );
         if (migrate.length > 0) await cachePutBatch(migrate);
         cachedVectors.push(...cached);
-        setStatus(`Restoring embeddings… ${Math.min(c + RESUME_CHUNK, matched.length)} / ${matched.length}`);
+        setStatus(
+          `Restoring embeddings… ${Math.min(c + RESUME_CHUNK, matched.length)} / ${matched.length}`,
+        );
         setProgress(10 + (cachedVectors.length / matched.length) * 85);
         await yieldMain();
       }
-      state.vectors = cachedVectors.map(v => v || new Float32Array(768));
+      state.vectors = cachedVectors.map((v) => v || new Float32Array(768));
       dom.searchInput.disabled = false;
     }
 
     state.thumbnails = initThumbnails(matched);
-    state.phase = 'done';
+    state.phase = "done";
     resizeCanvas();
     fitCamera();
     scheduleRender();
     setProgress(100);
-    const modeSuffix = wasViewerMode ? 'viewer mode' : 'restored';
+    const modeSuffix = wasViewerMode ? "viewer mode" : "restored";
     const finalMsg = `${matched.length} media files · ${modeSuffix}`;
     setStatus(`${matched.length} media files — resumed from session`);
     if (dom.statsEl) dom.statsEl.textContent = finalMsg;
@@ -2870,7 +3426,8 @@ dom.resumeBtn.addEventListener('click', async () => {
     dom.resetBtn.disabled = false;
     dom.headerRecenterBtn.disabled = false;
   } catch (err) {
-    if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);
+    if ((err as Error).name !== "AbortError")
+      setStatus(`Error: ${(err as Error).message}`);
   }
 });
 
@@ -2882,10 +3439,12 @@ if (!state.settings.viewerOnly) {
     try {
       await loadModel(modelLoadAbort!.signal);
     } catch (err) {
-      if ((err as Error).name === 'AbortError') return; // user switched to viewer mode
+      if ((err as Error).name === "AbortError") return; // user switched to viewer mode
       dom.loadModelBtn.hidden = false;
       dom.loadModelBtn.disabled = false;
-      setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
+      setStatus(
+        `Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`,
+      );
     } finally {
       modelLoadAbort = null;
     }
@@ -2894,34 +3453,45 @@ if (!state.settings.viewerOnly) {
   // Viewer mode: update UI to reflect no AI needed
   dom.loadModelBtn.hidden = true;
   dom.openBtn.disabled = false;
-  dom.openBtn.classList.add('primary');
+  dom.openBtn.classList.add("primary");
   dom.demoBtn.disabled = false;
-  setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+  setStatus(
+    "Viewer mode active — open a folder to browse photos by date and folder.",
+  );
   updateDeviceBadge();
 }
 
 // ── Debug overlay (press ` to toggle) ────────────────────────────────────────
-const debugOverlay = document.getElementById('debug-overlay') as HTMLDivElement;
+const debugOverlay = document.getElementById("debug-overlay") as HTMLDivElement;
 
 function formatBytes(b: number) {
   if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)} GB`;
-  if (b >= 1048576)    return `${(b / 1048576).toFixed(0)} MB`;
+  if (b >= 1048576) return `${(b / 1048576).toFixed(0)} MB`;
   return `${(b / 1024).toFixed(0)} KB`;
 }
 
 function buildDebugInfo(): string {
-  const perfMem = (performance as Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
-  const devMem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const perfMem = (
+    performance as Performance & {
+      memory?: {
+        jsHeapSizeLimit: number;
+        usedJSHeapSize: number;
+        totalJSHeapSize: number;
+      };
+    }
+  ).memory;
+  const devMem = (navigator as Navigator & { deviceMemory?: number })
+    .deviceMemory;
   const gpu = (navigator as Navigator & { gpu?: unknown }).gpu;
 
   const lines: string[] = [
     `── state ───────────────────`,
     `phase:       ${state.phase}`,
     `files:       ${state.files.length}`,
-    `viewerOnly:  ${state.settings.viewerOnly ? 'YES' : 'no'}`,
+    `viewerOnly:  ${state.settings.viewerOnly ? "YES" : "no"}`,
     `vectors:     ${state.vectors.length}`,
     `points:      ${state.points.length}`,
-    `searchRes:   ${state.searchResults?.length ?? 'none'}`,
+    `searchRes:   ${state.searchResults?.length ?? "none"}`,
     `thumbs:      ${state.thumbnails.filter(Boolean).length} / ${state.thumbnails.length} decoded`,
     `thumbDecode: ${thumbDecoding.size} in-flight`,
     ``,
@@ -2932,12 +3502,12 @@ function buildDebugInfo(): string {
     `density:     ${state.settings.density}`,
     ``,
     `── models ──────────────────`,
-    `vision:      ${extractor ? `loaded (${modelDevice ?? '?'})` : sapiens2Session ? `sapiens2 (${modelDevice ?? '?'})` : chromeAIManager ? 'chrome-ai (built-in)' : 'none'}`,
-    `text:        ${textExtractor ? 'loaded' : 'none'}`,
+    `vision:      ${extractor ? `loaded (${modelDevice ?? "?"})` : sapiens2Session ? `sapiens2 (${modelDevice ?? "?"})` : chromeAIManager ? "chrome-ai (built-in)" : "none"}`,
+    `text:        ${textExtractor ? "loaded" : "none"}`,
     ``,
     `── memory ──────────────────`,
-    `deviceMemory: ${devMem != null ? devMem + ' GB' : 'unavailable'}`,
-    `webgpu:      ${gpu ? 'available' : 'unavailable'}`,
+    `deviceMemory: ${devMem != null ? devMem + " GB" : "unavailable"}`,
+    `webgpu:      ${gpu ? "available" : "unavailable"}`,
   ];
 
   if (perfMem) {
@@ -2948,30 +3518,38 @@ function buildDebugInfo(): string {
     );
   }
 
-  lines.push(``, `── camera ──────────────────`,
+  lines.push(
+    ``,
+    `── camera ──────────────────`,
     `x: ${camera.x.toFixed(1)}  y: ${camera.y.toFixed(1)}  scale: ${camera.scale.toFixed(3)}`,
-    ``, `[press \` to close]`);
+    ``,
+    `[press \` to close]`,
+  );
 
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 function refreshDebugOverlay() {
-  if (debugOverlay.style.display === 'none') return;
+  if (debugOverlay.style.display === "none") return;
   // Update text node after the copy button (first child)
   const btn = debugOverlay.firstElementChild;
   debugOverlay.textContent = buildDebugInfo();
   if (btn) debugOverlay.insertBefore(btn, debugOverlay.firstChild);
 }
 
-function navigateModal(dir: 'left' | 'right' | 'up' | 'down') {
+function navigateModal(dir: "left" | "right" | "up" | "down") {
   if (state.activeFileIndex === null) return;
-  const nextIndex = getNextImageInDirection(state.activeFileIndex, state.points, dir);
+  const nextIndex = getNextImageInDirection(
+    state.activeFileIndex,
+    state.points,
+    dir,
+  );
   if (nextIndex !== state.activeFileIndex) {
     openFileModal(nextIndex);
   }
 }
 
-function navigateCanvas(dir: 'left' | 'right' | 'up' | 'down') {
+function navigateCanvas(dir: "left" | "right" | "up" | "down") {
   const pts = state.points;
   if (!pts.length) return;
 
@@ -2982,7 +3560,10 @@ function navigateCanvas(dir: 'left' | 'right' | 'up' | 'down') {
       const dx = pts[i][0] - camera.x;
       const dy = pts[i][1] - camera.y;
       const d = dx * dx + dy * dy;
-      if (d < minD) { minD = d; startIndex = i; }
+      if (d < minD) {
+        minD = d;
+        startIndex = i;
+      }
     }
   }
 
@@ -3003,9 +3584,13 @@ function navigateSequential(delta: 1 | -1) {
   if (currentIndex === null) {
     let minD = Infinity;
     for (let i = 0; i < state.points.length; i++) {
-      const dx = state.points[i][0] - camera.x, dy = state.points[i][1] - camera.y;
+      const dx = state.points[i][0] - camera.x,
+        dy = state.points[i][1] - camera.y;
       const d = dx * dx + dy * dy;
-      if (d < minD) { minD = d; currentIndex = i; }
+      if (d < minD) {
+        minD = d;
+        currentIndex = i;
+      }
     }
   }
   if (currentIndex === null) return;
@@ -3035,38 +3620,43 @@ function getChronologicalOrder(): number[] {
     return chronologicalOrderCache;
   }
   chronologicalOrderFilesRef = state.files;
-  chronologicalOrderCache = Array.from({ length: state.files.length }, (_, i) => i)
-    .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
+  chronologicalOrderCache = Array.from(
+    { length: state.files.length },
+    (_, i) => i,
+  ).sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
   return chronologicalOrderCache;
 }
 
-dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1));
-dom.modalNextBtn.addEventListener('click', () => navigateSequential(1));
+dom.modalPrevBtn.addEventListener("click", () => navigateSequential(-1));
+dom.modalNextBtn.addEventListener("click", () => navigateSequential(1));
 
-document.addEventListener('keydown', (e) => {
-  if (e.key === '`') {
-    const open = debugOverlay.style.display === 'none';
-    debugOverlay.style.display = open ? 'block' : 'none';
+document.addEventListener("keydown", (e) => {
+  if (e.key === "`") {
+    const open = debugOverlay.style.display === "none";
+    debugOverlay.style.display = open ? "block" : "none";
     if (open) refreshDebugOverlay();
     return;
   }
-  
-  if (state.activeFileIndex !== null && e.key === 'Escape') {
+
+  if (state.activeFileIndex !== null && e.key === "Escape") {
     closeModal();
     return;
   }
 
-  let dir: 'left' | 'right' | 'up' | 'down' | null = null;
-  if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') dir = 'left';
-  else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') dir = 'right';
-  else if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') dir = 'up';
-  else if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') dir = 'down';
+  let dir: "left" | "right" | "up" | "down" | null = null;
+  if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") dir = "left";
+  else if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") dir = "right";
+  else if (e.key === "ArrowUp" || e.key.toLowerCase() === "w") dir = "up";
+  else if (e.key === "ArrowDown" || e.key.toLowerCase() === "s") dir = "down";
 
   if (dir) {
     if (state.activeFileIndex !== null) {
       e.preventDefault();
       navigateModal(dir);
-    } else if (state.phase === 'done' && document.activeElement?.tagName !== 'INPUT') {
+    } else if (
+      state.phase === "done" &&
+      document.activeElement?.tagName !== "INPUT"
+    ) {
       e.preventDefault();
       navigateCanvas(dir);
     }
@@ -3074,31 +3664,63 @@ document.addEventListener('keydown', (e) => {
 
   // n/p keys for sequential next/previous (in datetime order)
   const key = e.key.toLowerCase();
-  if ((key === 'n' || key === 'p') && state.points.length > 0 && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')) {
+  if (
+    (key === "n" || key === "p") &&
+    state.points.length > 0 &&
+    !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName ?? "")
+  ) {
     e.preventDefault();
-    navigateSequential(key === 'n' ? 1 : -1);
+    navigateSequential(key === "n" ? 1 : -1);
   }
 });
 
-dom.modalNavLeft.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('left'); });
-dom.modalNavRight.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('right'); });
-dom.modalNavUp.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('up'); });
-dom.modalNavDown.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('down'); });
+dom.modalNavLeft.addEventListener("click", (e) => {
+  e.stopPropagation();
+  navigateModal("left");
+});
+dom.modalNavRight.addEventListener("click", (e) => {
+  e.stopPropagation();
+  navigateModal("right");
+});
+dom.modalNavUp.addEventListener("click", (e) => {
+  e.stopPropagation();
+  navigateModal("up");
+});
+dom.modalNavDown.addEventListener("click", (e) => {
+  e.stopPropagation();
+  navigateModal("down");
+});
 
-const debugCopyBtn = document.getElementById('debug-copy-btn') as HTMLButtonElement;
-debugCopyBtn.addEventListener('click', async () => {
+const debugCopyBtn = document.getElementById(
+  "debug-copy-btn",
+) as HTMLButtonElement;
+debugCopyBtn.addEventListener("click", async () => {
   await navigator.clipboard.writeText(buildDebugInfo());
-  debugCopyBtn.textContent = 'Copied!';
-  setTimeout(() => { debugCopyBtn.textContent = 'Copy'; }, 1500);
+  debugCopyBtn.textContent = "Copied!";
+  setTimeout(() => {
+    debugCopyBtn.textContent = "Copy";
+  }, 1500);
 });
 
 // Expose to console for deeper inspection
 (window as Window & { __debug?: unknown }).__debug = {
-  get state() { return state; },
-  get camera() { return camera; },
-  get extractor() { return extractor; },
-  get textExtractor() { return textExtractor; },
-  get chromeAIManager() { return chromeAIManager; },
-  get thumbDecoding() { return thumbDecoding; },
+  get state() {
+    return state;
+  },
+  get camera() {
+    return camera;
+  },
+  get extractor() {
+    return extractor;
+  },
+  get textExtractor() {
+    return textExtractor;
+  },
+  get chromeAIManager() {
+    return chromeAIManager;
+  },
+  get thumbDecoding() {
+    return thumbDecoding;
+  },
   buildDebugInfo,
 };

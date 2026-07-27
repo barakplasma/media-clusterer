@@ -3,7 +3,13 @@
  */
 
 /** Application phase states */
-export type Phase = 'idle' | 'loading_model' | 'model_ready' | 'embedding' | 'projecting' | 'done';
+export type Phase =
+  | "idle"
+  | "loading_model"
+  | "model_ready"
+  | "embedding"
+  | "projecting"
+  | "done";
 
 /** File metadata and object URL */
 export interface PhotoFile {
@@ -27,25 +33,38 @@ export interface Camera {
 }
 
 /** Supported projection methods */
-export type ProjectionMethod = 'UMAP' | 'TSNE' | 'PCA' | 'ISOMAP' | 'LLE' | 'MDS' | 'SAMMON' | 'TriMap';
+export type ProjectionMethod =
+  | "UMAP"
+  | "TSNE"
+  | "PCA"
+  | "ISOMAP"
+  | "LLE"
+  | "MDS"
+  | "SAMMON"
+  | "TriMap";
 
 /** Vision model variant */
-export type ModelVariant = 'nomic' | 'sapiens2-int8' | 'sapiens2-fp16' | 'sapiens2-fp32' | 'chrome-ai';
+export type ModelVariant =
+  | "nomic"
+  | "sapiens2-int8"
+  | "sapiens2-fp16"
+  | "sapiens2-fp32"
+  | "chrome-ai";
 
 /** Application settings */
 export interface Settings {
-  density: number;      // 1.0 = default, smaller = tighter, larger = sparse
+  density: number; // 1.0 = default, smaller = tighter, larger = sparse
   loopVideos: boolean;
-  drawBudget: number;   // MAX_DRAW_PER_FRAME
+  drawBudget: number; // MAX_DRAW_PER_FRAME
   enableTextSearch: boolean;
   projectionMethod: ProjectionMethod;
-  batchSize: number;    // GPU inference batch size (higher = faster, more memory)
+  batchSize: number; // GPU inference batch size (higher = faster, more memory)
   randomSampleSize: number; // 0 = load all; >0 = randomly sample n files when folder has more than n
-  viewerOnly: boolean;  // Skip AI models, arrange by folder/date instead
+  viewerOnly: boolean; // Skip AI models, arrange by folder/date instead
   modelVariant: ModelVariant; // Vision embedding model to use
   enableLazyCaption: boolean; // Generate captions on modal open via Chrome AI (off by default)
-  doNotTrack: boolean;       // Disable BugSink error reporting (default false)
-  customModelHost: string;   // Alternative HuggingFace-compatible host (corporate proxy/mirror); '' = huggingface.co
+  doNotTrack: boolean; // Disable BugSink error reporting (default false)
+  customModelHost: string; // Alternative HuggingFace-compatible host (corporate proxy/mirror); '' = huggingface.co
 }
 
 /** Application state */
@@ -153,7 +172,7 @@ export interface Pipeline {
   (
     task: string,
     model: string,
-    options?: PipelineOptions
+    options?: PipelineOptions,
   ): Promise<PipelineInstance>;
 }
 
@@ -163,25 +182,28 @@ declare global {
   const __APP_VERSION__: string;
   interface Window {
     showDirectoryPicker?: (options?: {
-      mode: 'read' | 'readwrite';
+      mode: "read" | "readwrite";
     }) => Promise<DirectoryHandle>;
   }
 }
 
 export interface PipelineOptions {
-  device?: 'webgpu' | 'wasm' | 'cpu';
-  dtype?: 'fp32' | 'fp16' | 'q8';
+  device?: "webgpu" | "wasm" | "cpu";
+  dtype?: "fp32" | "fp16" | "q8";
   progress_callback?: (progress: ProgressEvent) => void;
-  pooling?: 'mean' | 'cls' | 'max';
+  pooling?: "mean" | "cls" | "max";
   normalize?: boolean;
 }
 
 export interface PipelineInstance {
-  (input: string | URL | Blob | object, options?: InferenceOptions): Promise<PipelineOutput>;
+  (
+    input: string | URL | Blob | object,
+    options?: InferenceOptions,
+  ): Promise<PipelineOutput>;
 }
 
 export interface InferenceOptions extends Record<string, unknown> {
-  pooling?: 'mean' | 'cls' | 'max';
+  pooling?: "mean" | "cls" | "max";
 }
 
 export interface PipelineOutput extends Record<string, unknown> {
@@ -192,7 +214,7 @@ export interface PipelineOutput extends Record<string, unknown> {
 }
 
 export interface ProgressEvent {
-  status: 'progress' | 'done' | 'initiate';
+  status: "progress" | "done" | "initiate";
   file: string;
   loaded?: number;
   progress?: number;

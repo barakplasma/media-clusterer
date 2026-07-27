@@ -4,11 +4,20 @@
 
 export function computeOptimalBatchSize(
   deviceMemoryGB?: number,
-  perfMem?: { jsHeapSizeLimit: number; usedJSHeapSize: number }
+  perfMem?: { jsHeapSizeLimit: number; usedJSHeapSize: number },
 ): number {
   // Use passed in values or fall back to browser globals
-  const memGB = deviceMemoryGB ?? (typeof navigator !== 'undefined' ? (navigator as any).deviceMemory : undefined) ?? 2;
-  const memory = perfMem ?? (typeof performance !== 'undefined' ? (performance as any).memory : undefined);
+  const memGB =
+    deviceMemoryGB ??
+    (typeof navigator !== "undefined"
+      ? (navigator as any).deviceMemory
+      : undefined) ??
+    2;
+  const memory =
+    perfMem ??
+    (typeof performance !== "undefined"
+      ? (performance as any).memory
+      : undefined);
 
   // JS heap headroom is a proxy for total available RAM; GPU memory is not
   // directly queryable from JS. Images are pre-resized to 256px before GPU
@@ -27,8 +36,14 @@ export function computeOptimalBatchSize(
 }
 
 export function getMemoryPressure(): { freeRatio: number } | null {
-  const memory = typeof performance !== 'undefined' ? (performance as any).memory : undefined;
+  const memory =
+    typeof performance !== "undefined"
+      ? (performance as any).memory
+      : undefined;
   if (!memory?.jsHeapSizeLimit) return null;
-  const freeRatio = Math.max(0, (memory.jsHeapSizeLimit - memory.usedJSHeapSize) / memory.jsHeapSizeLimit);
+  const freeRatio = Math.max(
+    0,
+    (memory.jsHeapSizeLimit - memory.usedJSHeapSize) / memory.jsHeapSizeLimit,
+  );
   return { freeRatio };
 }

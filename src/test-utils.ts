@@ -26,16 +26,20 @@ export function createMockVectors(count: number, dim = 768): Float32Array[] {
 /**
  * Create a mock file object
  */
-export function createMockFile(name: string, size = 1024, lastModified = Date.now()): File {
+export function createMockFile(
+  name: string,
+  size = 1024,
+  lastModified = Date.now(),
+): File {
   const content = new Uint8Array(size);
-  return new File([content], name, { type: 'image/jpeg', lastModified });
+  return new File([content], name, { type: "image/jpeg", lastModified });
 }
 
 /**
  * Wait for async operations (debounce, setTimeout, etc.)
  */
 export function wait(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -56,5 +60,5 @@ export function setupTestDOM(): void {
  * Clean up test DOM
  */
 export function cleanupTestDOM(): void {
-  document.body.innerHTML = '';
+  document.body.innerHTML = "";
 }

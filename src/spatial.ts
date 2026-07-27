@@ -1,4 +1,4 @@
-import type { Point } from './types';
+import type { Point } from "./types";
 
 /**
  * Finds the index of the next image in a given direction based on spatial layout.
@@ -7,16 +7,17 @@ import type { Point } from './types';
 export function getNextImageInDirection(
   currentIndex: number,
   points: Point[],
-  direction: 'left' | 'right' | 'up' | 'down'
+  direction: "left" | "right" | "up" | "down",
 ): number {
   if (points.length <= 1) return currentIndex;
 
   const cur = points[currentIndex];
-  let dx = 0, dy = 0;
-  if (direction === 'left') dx = -1;
-  else if (direction === 'right') dx = 1;
-  else if (direction === 'up') dy = -1;
-  else if (direction === 'down') dy = 1;
+  let dx = 0,
+    dy = 0;
+  if (direction === "left") dx = -1;
+  else if (direction === "right") dx = 1;
+  else if (direction === "up") dy = -1;
+  else if (direction === "down") dy = 1;
 
   let bestIdx = -1;
   let minCost = Infinity;
@@ -27,7 +28,7 @@ export function getNextImageInDirection(
     const p = points[i];
     const vx = p[0] - cur[0];
     const vy = p[1] - cur[1];
-    
+
     // Projection of V onto the direction vector D
     const proj = vx * dx + vy * dy;
     // Orthogonal distance from the direction vector D
@@ -56,13 +57,13 @@ export function getNextImageInDirection(
     const p = points[i];
     const vx = p[0] - cur[0];
     const vy = p[1] - cur[1];
-    
+
     const proj = vx * dx + vy * dy;
     const orth = Math.abs(vx * dy - vy * dx);
 
-    // We want the most negative projection (furthest backward). 
+    // We want the most negative projection (furthest backward).
     // We add an orthogonal penalty so it wraps to the same visual "row/column"
-    const score = proj + orth * 2; 
+    const score = proj + orth * 2;
     if (score < minWrapScore) {
       minWrapScore = score;
       wrapIdx = i;

@@ -11,26 +11,34 @@
 // ── Type declarations for Chrome's built-in LanguageModel API ────────────────
 
 export type LanguageModelAvailability =
-  | 'available'
-  | 'downloadable'
-  | 'downloading'
-  | 'unavailable';
+  | "available"
+  | "downloadable"
+  | "downloading"
+  | "unavailable";
 
 // Content items within a message
 type LanguageModelContentItem =
-  | { type: 'text'; value: string }
-  | { type: 'image'; value: ImageBitmap | Blob | HTMLCanvasElement | HTMLImageElement | HTMLVideoElement };
+  | { type: "text"; value: string }
+  | {
+      type: "image";
+      value:
+        | ImageBitmap
+        | Blob
+        | HTMLCanvasElement
+        | HTMLImageElement
+        | HTMLVideoElement;
+    };
 
 // Messages use role/content wrapper per the Prompt API spec
 interface LanguageModelMessage {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: LanguageModelContentItem[];
 }
 
 export interface LanguageModelSession {
   prompt(
     input: LanguageModelMessage[],
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal },
   ): Promise<string>;
   destroy(): void;
 }
@@ -54,10 +62,10 @@ declare global {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const DEFAULT_DESCRIBE_PROMPT =
-  'Describe this image for photo organization and clustering. ' +
-  'Include: main subjects, setting or location, dominant colors, mood, ' +
-  'lighting conditions, and any activity taking place. ' +
-  'Be specific and concise (2-4 sentences).';
+  "Describe this image for photo organization and clustering. " +
+  "Include: main subjects, setting or location, dominant colors, mood, " +
+  "lighting conditions, and any activity taking place. " +
+  "Be specific and concise (2-4 sentences).";
 
 // Recycle the session after this many .prompt() calls to bound context growth.
 const SESSION_RECYCLE_INTERVAL = 15;
@@ -66,23 +74,30 @@ const SESSION_RECYCLE_INTERVAL = 15;
 
 export async function getChromeAIAvailability(): Promise<LanguageModelAvailability> {
   // Support both new global form and legacy window.ai.languageModel (pre-138)
-  const api = (typeof LanguageModel !== 'undefined' ? LanguageModel : undefined)
-    ?? (window as unknown as { ai?: { languageModel?: LanguageModelStatic } }).ai?.languageModel;
-  if (!api) return 'unavailable';
+  const api =
+    (typeof LanguageModel !== "undefined" ? LanguageModel : undefined) ??
+    (window as unknown as { ai?: { languageModel?: LanguageModelStatic } }).ai
+      ?.languageModel;
+  if (!api) return "unavailable";
   try {
     return await api.availability({
-      expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
-      expectedOutputs: [{ type: 'text', languages: ['en'] }],
+      expectedInputs: [{ type: "image" }, { type: "text", languages: ["en"] }],
+      expectedOutputs: [{ type: "text", languages: ["en"] }],
     });
   } catch {
-    return 'unavailable';
+    return "unavailable";
   }
 }
 
 function getAPI(): LanguageModelStatic {
-  const api = (typeof LanguageModel !== 'undefined' ? LanguageModel : undefined)
-    ?? (window as unknown as { ai?: { languageModel?: LanguageModelStatic } }).ai?.languageModel;
-  if (!api) throw new Error('Chrome AI Prompt API not available. Enable chrome://flags/#prompt-api-for-gemini-nano in Chrome 138+.');
+  const api =
+    (typeof LanguageModel !== "undefined" ? LanguageModel : undefined) ??
+    (window as unknown as { ai?: { languageModel?: LanguageModelStatic } }).ai
+      ?.languageModel;
+  if (!api)
+    throw new Error(
+      "Chrome AI Prompt API not available. Enable chrome://flags/#prompt-api-for-gemini-nano in Chrome 138+.",
+    );
   return api;
 }
 
@@ -94,24 +109,39 @@ function getAPI(): LanguageModelStatic {
  * recycling every SESSION_RECYCLE_INTERVAL calls prevents unbounded memory use.
  */
 export class ChromeAISessionManager {
-  private slots: Array<{ session: LanguageModelSession | null; callCount: number }> = [
+  private slots: Array<{
+    session: LanguageModelSession | null;
+    callCount: number;
+  }> = [
     { session: null, callCount: 0 },
     { session: null, callCount: 0 },
   ];
 
-  async describe(image: ImageBitmap | Blob, prompt: string = DEFAULT_DESCRIBE_PROMPT, signal?: AbortSignal, slot = 0): Promise<string> {
+  async describe(
+    image: ImageBitmap | Blob,
+    prompt: string = DEFAULT_DESCRIBE_PROMPT,
+    signal?: AbortSignal,
+    slot = 0,
+  ): Promise<string> {
     const api = getAPI();
     const s = this.slots[slot % this.slots.length];
 
-    if (s.session && s.callCount > 0 && s.callCount % SESSION_RECYCLE_INTERVAL === 0) {
+    if (
+      s.session &&
+      s.callCount > 0 &&
+      s.callCount % SESSION_RECYCLE_INTERVAL === 0
+    ) {
       s.session.destroy();
       s.session = null;
     }
 
     if (!s.session) {
       s.session = await api.create({
-        expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
-        expectedOutputs: [{ type: 'text', languages: ['en'] }],
+        expectedInputs: [
+          { type: "image" },
+          { type: "text", languages: ["en"] },
+        ],
+        expectedOutputs: [{ type: "text", languages: ["en"] }],
         signal,
       });
     }
@@ -120,14 +150,14 @@ export class ChromeAISessionManager {
     const description = await s.session.prompt(
       [
         {
-          role: 'user',
+          role: "user",
           content: [
-            { type: 'image', value: image },
-            { type: 'text', value: prompt },
+            { type: "image", value: image },
+            { type: "text", value: prompt },
           ],
         },
       ],
-      { signal }
+      { signal },
     );
 
     s.callCount++;
