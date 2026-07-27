@@ -30,3 +30,7 @@ Thumbs.db
 
 # ONNX model files (stored in HuggingFace, not git)
 *.onnx
+!package.json
+!package-lock.json
+!tsconfig.json
+!.markdownlint.json

@@ -13,25 +13,25 @@
  * it has access to the DOM and settings.
  */
 
-import { sapiens2Url, type Sapiens2Variant } from './sapiens2';
+import { sapiens2Url, type Sapiens2Variant } from './sapiens2'
 
-export const HF_HOST = 'https://huggingface.co';
+export const HF_HOST = 'https://huggingface.co'
 
 // Files each Transformers.js repo fetches at fp32. Used to show the user exactly
 // what to download and to match locally-uploaded files against request URLs.
-const NOMIC_VISION_REPO = 'nomic-ai/nomic-embed-vision-v1.5';
-const NOMIC_TEXT_REPO = 'nomic-ai/nomic-embed-text-v1.5';
-const VISION_FILES = ['config.json', 'preprocessor_config.json', 'onnx/model.onnx'];
-const TEXT_FILES = ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model.onnx'];
+const NOMIC_VISION_REPO = 'nomic-ai/nomic-embed-vision-v1.5'
+const NOMIC_TEXT_REPO = 'nomic-ai/nomic-embed-text-v1.5'
+const VISION_FILES = ['config.json', 'preprocessor_config.json', 'onnx/model.onnx']
+const TEXT_FILES = ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model.onnx']
 
 /** Trim and strip trailing slashes from a user-entered host. '' if blank. */
 export function normalizeHost(host: string | undefined | null): string {
-  return (host ?? '').trim().replace(/\/+$/, '');
+  return (host ?? '').trim().replace(/\/+$/, '')
 }
 
 function repoUrls(repo: string, files: string[], host: string): string[] {
-  const base = normalizeHost(host) || HF_HOST;
-  return files.map((f) => `${base}/${repo}/resolve/main/${f}`);
+  const base = normalizeHost(host) || HF_HOST
+  return files.map((f) => `${base}/${repo}/resolve/main/${f}`)
 }
 
 /**
@@ -41,20 +41,20 @@ function repoUrls(repo: string, files: string[], host: string): string[] {
  */
 export function modelDownloadUrls(
   variant: string,
-  opts: { host?: string; includeText?: boolean } = {},
+  opts: { host?: string; includeText?: boolean } = {}
 ): string[] {
-  const host = opts.host ?? HF_HOST;
+  const host = opts.host ?? HF_HOST
   if (variant.startsWith('sapiens2')) {
-    const v = (variant.split('-')[1] ?? 'fp16') as Sapiens2Variant;
-    return [sapiens2Url(v, host)];
+    const v = (variant.split('-')[1] ?? 'fp16') as Sapiens2Variant
+    return [sapiens2Url(v, host)]
   }
   if (variant === 'chrome-ai') {
     // Chrome AI itself is browser-managed; only the text model is downloaded.
-    return repoUrls(NOMIC_TEXT_REPO, TEXT_FILES, host);
+    return repoUrls(NOMIC_TEXT_REPO, TEXT_FILES, host)
   }
-  const urls = repoUrls(NOMIC_VISION_REPO, VISION_FILES, host);
-  if (opts.includeText) urls.push(...repoUrls(NOMIC_TEXT_REPO, TEXT_FILES, host));
-  return urls;
+  const urls = repoUrls(NOMIC_VISION_REPO, VISION_FILES, host)
+  if (opts.includeText) urls.push(...repoUrls(NOMIC_TEXT_REPO, TEXT_FILES, host))
+  return urls
 }
 
 /**
@@ -68,52 +68,57 @@ export function modelDownloadUrls(
  * lets Transformers.js fall through to a normal fetch for anything not uploaded.
  */
 export function buildUploadCache(files: Map<string, File>): {
-  match(request: RequestInfo | URL): Promise<Response | undefined>;
-  put(): Promise<void>;
+  match(request: RequestInfo | URL): Promise<Response | undefined>
+  put(): Promise<void>
 } {
-  const entries = [...files.entries()].map(([rel, file]) => [rel.replace(/^\/+/, ''), file] as const);
+  const entries = [...files.entries()].map(
+    ([rel, file]) => [rel.replace(/^\/+/, ''), file] as const
+  )
 
   const wantedPath = (url: string): string =>
-    url.replace(/^.*\/resolve\/[^/]+\//, '').replace(/[?#].*$/, '').replace(/^\/+/, '');
+    url
+      .replace(/^.*\/resolve\/[^/]+\//, '')
+      .replace(/[?#].*$/, '')
+      .replace(/^\/+/, '')
 
   return {
     async match(request: RequestInfo | URL): Promise<Response | undefined> {
       const url =
-        typeof request === 'string' ? request : request instanceof URL ? request.href : request.url;
-      const want = wantedPath(url);
-      const base = want.split('/').pop() ?? want;
+        typeof request === 'string' ? request : request instanceof URL ? request.href : request.url
+      const want = wantedPath(url)
+      const base = want.split('/').pop() ?? want
 
-      let hit: File | undefined;
+      let hit: File | undefined
       for (const [rel, file] of entries) {
         if (rel === want || rel.endsWith('/' + want) || rel === base || rel.endsWith('/' + base)) {
-          hit = file;
-          break;
+          hit = file
+          break
         }
       }
-      if (!hit) return undefined;
+      if (!hit) return undefined
       return new Response(await hit.arrayBuffer(), {
         status: 200,
-        headers: { 'Content-Type': 'application/octet-stream' },
-      });
+        headers: { 'Content-Type': 'application/octet-stream' }
+      })
     },
     async put(): Promise<void> {
       /* no-op: this cache only serves uploaded files, it doesn't persist them */
-    },
-  };
+    }
+  }
 }
 
 /** Heuristic: did this error come from a failed model *download* (vs. compute)? */
 export function isDownloadError(err: unknown): boolean {
-  if (!err) return false;
-  const e = err as Error;
-  if (e.name === 'AbortError') return false;
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+  if (!err) return false
+  const e = err as Error
+  if (e.name === 'AbortError') return false
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true
   // Match by message, not by `TypeError` name: a bare TypeError is just as
   // likely a programming bug during compute as a fetch() network failure.
   // 'failed to fetch' (Chrome/Firefox) and 'load failed' (Safari) are the
   // fetch network-error messages.
-  const m = (e.message || '').toLowerCase();
+  const m = (e.message || '').toLowerCase()
   return /download failed|failed to fetch|load failed|network ?error|could not locate|unauthorized|err_|http error|status (4|5)\d\d|getaddrinfo|enotfound|\b(403|404|429|500|502|503|504)\b/.test(
-    m,
-  );
+    m
+  )
 }

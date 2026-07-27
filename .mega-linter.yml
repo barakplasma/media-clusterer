@@ -1,0 +1,26 @@
+# MegaLinter configuration — https://megalinter.io/latest/config-file/
+# First-run baseline for a repo with no prior lint config; tighten over time
+# (see IMPROVEMENT_PLAN.md, P2-1).
+
+APPLY_FIXES: all
+
+FILTER_REGEX_EXCLUDE: '(dist/|node_modules/|package-lock\.json|megalinter-reports/)'
+
+DISABLE:
+  # jscpd would drown in the duplication already documented in IMPROVEMENT_PLAN.md
+  - COPYPASTE
+  - SPELL
+  # ts-standard linter requires significant refactoring across codebase
+  # (strict-boolean-expressions, explicit-function-return-type, etc.)
+  # Defer comprehensive linting to P2-1 follow-up after code structure improvements
+  - TYPESCRIPT
+
+# Let zizmor's ref-confusion audit query the GitHub API with the workflow token
+ACTION_ZIZMOR_UNSECURED_ENV_VARIABLES:
+  - GITHUB_TOKEN
+
+# The workflow token is contents:read-only, so PR comments would 403
+GITHUB_COMMENT_REPORTER: false
+
+SHOW_ELAPSED_TIME: true
+FILEIO_REPORTER: false

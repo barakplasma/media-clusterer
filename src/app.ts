@@ -2,35 +2,28 @@
  * Main application logic for Media Clusterer
  */
 
-import './sentry';
-import exifr from '@modernized/exifr';
-import { pipeline, env, RawImage } from '@huggingface/transformers';
-import * as druid from '@saehrimnir/druidjs';
-import pLimit from 'p-limit';
-import { loadSapiens2, embedWithSapiens2 } from './sapiens2';
-import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2';
+import './sentry'
+import exifr from '@modernized/exifr'
+import { pipeline, env, RawImage } from '@huggingface/transformers'
+import * as druid from '@saehrimnir/druidjs'
+import pLimit from 'p-limit'
+import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
+import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2'
 import {
   modelDownloadUrls,
   buildUploadCache,
   normalizeHost,
-  isDownloadError,
-} from './modelFallback';
-import { getChromeAIAvailability, ChromeAISessionManager, DEFAULT_DESCRIBE_PROMPT } from './chromeAI';
-import type { LanguageModelAvailability } from './chromeAI';
+  isDownloadError
+} from './modelFallback'
 import {
-  l2normalize,
-  extractVector,
-  extractBatchedVectors,
-  makeCacheKey,
-} from './embeddings';
-import {
-  openDB,
-  cacheGet,
-  cacheGetBatch,
-  cachePutBatch,
-  cacheStats,
-} from './db';
-import { getNextImageInDirection } from './spatial';
+  getChromeAIAvailability,
+  ChromeAISessionManager,
+  DEFAULT_DESCRIBE_PROMPT
+} from './chromeAI'
+import type { LanguageModelAvailability } from './chromeAI'
+import { l2normalize, extractVector, extractBatchedVectors, makeCacheKey } from './embeddings'
+import { openDB, cacheGet, cacheGetBatch, cachePutBatch, cacheStats } from './db'
+import { getNextImageInDirection } from './spatial'
 import {
   THUMB_WORLD,
   kmeansAsync,
@@ -38,11 +31,11 @@ import {
   generateMetadataBasedLayout,
   cullAndPrioritize,
   searchByCosine,
-  formatEta,
-} from './compute';
-import '@picocss/pico/css/pico.conditional.min.css';
-import { computeOptimalBatchSize, getMemoryPressure } from './hardware';
-import { embedBatchAdaptive, createAdaptiveBatcher } from './batching';
+  formatEta
+} from './compute'
+import '@picocss/pico/css/pico.conditional.min.css'
+import { computeOptimalBatchSize, getMemoryPressure } from './hardware'
+import { embedBatchAdaptive, createAdaptiveBatcher } from './batching'
 import type {
   AppState,
   Camera,
@@ -59,36 +52,68 @@ import type {
   PointerState,
   CanvasPointerPos,
   CacheKey,
-  ModelVariant,
-} from './types';
+  ModelVariant
+} from './types'
 
 // Enable caching and local model access for persistent storage
-env.allowLocalModels = false;
-env.allowRemoteModels = true;
-env.cacheDir = 'models';
+env.allowLocalModels = false
+env.allowRemoteModels = true
+env.cacheDir = 'models'
 
 // Point Transformers.js at an alternative HuggingFace-compatible host when the
 // user has configured one (corporate proxy / Artifactory). Called at startup
 // and whenever the setting changes via the download-fallback modal.
 function applyModelEnv() {
-  const host = normalizeHost(state.settings.customModelHost);
-  env.remoteHost = host || 'https://huggingface.co';
+  const host = normalizeHost(state.settings.customModelHost)
+  env.remoteHost = host || 'https://huggingface.co'
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'heic', 'heif']);
-const VIDEO_EXTS = new Set(['mp4', 'webm']);
-const FULL_LOD_SIZE = 120;  // screen px at which we switch from thumb to full-res
-const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-const BATCH_SIZE = IS_MOBILE ? 4 : 16; // fallback before settings load
-const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400;
-const MAX_THUMBNAILS_CACHE = 2000; // Max decoded thumbnails to keep in memory (LRU)
-const MAX_FULL_IMAGES = 100; // Max full-res images to keep in memory (LRU)
-const CLUSTER_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#818cf8', '#f472b6', '#a78bfa'];
+const IMAGE_EXTS = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'avif',
+  'bmp',
+  'tiff',
+  'tif',
+  'heic',
+  'heif'
+])
+const VIDEO_EXTS = new Set(['mp4', 'webm'])
+const FULL_LOD_SIZE = 120 // screen px at which we switch from thumb to full-res
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+const BATCH_SIZE = IS_MOBILE ? 4 : 16 // fallback before settings load
+const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400
+const MAX_THUMBNAILS_CACHE = 2000 // Max decoded thumbnails to keep in memory (LRU)
+const MAX_FULL_IMAGES = 100 // Max full-res images to keep in memory (LRU)
+const CLUSTER_COLORS = [
+  '#f87171',
+  '#fb923c',
+  '#facc15',
+  '#4ade80',
+  '#38bdf8',
+  '#818cf8',
+  '#f472b6',
+  '#a78bfa'
+]
 
 // ── Demo Images (Unsplash API, public authentication) ──────────────────────────
-const UNSPLASH_ACCESS_KEY = 'IeS82UQjZMl96I9pVe3ag7hPn1UltJsR5xSt_orlAk8';
-const DEMO_CATEGORIES = ['dog', 'cat', 'horse', 'butterfly', 'spider', 'chicken', 'elephant', 'sheep', 'cow', 'squirrel'];
+const UNSPLASH_ACCESS_KEY = import.meta.env.VITE_UNSPLASH_ACCESS_KEY || ''
+const DEMO_CATEGORIES = [
+  'dog',
+  'cat',
+  'horse',
+  'butterfly',
+  'spider',
+  'chicken',
+  'elephant',
+  'sheep',
+  'cow',
+  'squirrel'
+]
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
 const dom: DOMElements = {
@@ -156,17 +181,17 @@ const dom: DOMElements = {
   modelFallbackFileHint: document.getElementById('model-fallback-file-hint') as HTMLDivElement,
   modelFallbackHost: document.getElementById('model-fallback-host') as HTMLInputElement,
   modelFallbackCancel: document.getElementById('model-fallback-cancel') as HTMLButtonElement,
-  modelFallbackRetry: document.getElementById('model-fallback-retry') as HTMLButtonElement,
-  };
+  modelFallbackRetry: document.getElementById('model-fallback-retry') as HTMLButtonElement
+}
 
-  // ── Version Info ─────────────────────────────────────────────────────────────
-  const versionEl = document.getElementById('version-info') as HTMLElement | null;
-  if (versionEl) {
-    versionEl.textContent = `${__GIT_BRANCH__}@${__GIT_COMMIT__}`;
-    versionEl.style.display = '';
-  }
+// ── Version Info ─────────────────────────────────────────────────────────────
+const versionEl = document.getElementById('version-info') as HTMLElement | null
+if (versionEl) {
+  versionEl.textContent = `${__GIT_BRANCH__}@${__GIT_COMMIT__}`
+  versionEl.style.display = ''
+}
 
-  // ── Constants ────────────────────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────────────
 // ── Auto batch size ───────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS: Settings = {
@@ -181,23 +206,25 @@ const DEFAULT_SETTINGS: Settings = {
   modelVariant: 'sapiens2-fp16',
   enableLazyCaption: false,
   doNotTrack: false,
-  customModelHost: '',
-};
+  customModelHost: ''
+}
 
-const savedSettings = localStorage.getItem('mc_settings');
+const savedSettings = localStorage.getItem('mc_settings')
 // Migrate legacy modelVariant values to the new named variants
 if (savedSettings) {
-  const parsed = JSON.parse(savedSettings);
+  const parsed = JSON.parse(savedSettings)
   if (!parsed.modelVariant) {
-    parsed.modelVariant = 'sapiens2-fp16';
-    localStorage.setItem('mc_settings', JSON.stringify(parsed));
+    parsed.modelVariant = 'sapiens2-fp16'
+    localStorage.setItem('mc_settings', JSON.stringify(parsed))
   } else if (parsed.modelVariant === 'sapiens2') {
     // 'sapiens2' was the generic name for fp16 — keep pointing at the same model
-    parsed.modelVariant = 'sapiens2-fp16';
-    localStorage.setItem('mc_settings', JSON.stringify(parsed));
+    parsed.modelVariant = 'sapiens2-fp16'
+    localStorage.setItem('mc_settings', JSON.stringify(parsed))
   }
 }
-const settings: Settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem('mc_settings')!) } : DEFAULT_SETTINGS;
+const settings: Settings = savedSettings
+  ? { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem('mc_settings')!) }
+  : DEFAULT_SETTINGS
 
 const state: AppState = {
   phase: 'idle',
@@ -215,216 +242,244 @@ const state: AppState = {
   currentBasePath: '',
   settings,
   activeFileIndex: null,
-  lastViewedIndex: null,
-};
-
-// ── Camera (infinite canvas) ─────────────────────────────────────────────────
-const camera: Camera = { x: 0, y: 0, scale: 1 };
-
-// ── Model singleton ──────────────────────────────────────────────────────────
-let extractor: PipelineInstance | null = null;      // Vision model (for images)
-let textExtractor: PipelineInstance | null = null;  // Text model (for search queries)
-let modelDevice: 'webgpu' | 'cpu' | null = null;
-let modelFallbackReason: Sapiens2FallbackReason | undefined;
-// Set by the download-fallback modal when the user uploads a Sapiens2 .onnx;
-// consumed on the next loadModelOnce() and then cleared.
-let pendingSapiens2Buffer: ArrayBuffer | null = null;
-let sapiens2Session: Sapiens2Session | null = null; // Sapiens2 ONNX session
-let chromeAIManager: ChromeAISessionManager | null = null; // Chrome built-in AI session manager
-let lazyCaptionManager: ChromeAISessionManager | null = null; // On-demand caption for non-chrome-ai modes
-let captionAbortController: AbortController | null = null;   // Cancels in-flight lazy caption
-let captionDebounceTimer: ReturnType<typeof setTimeout> | null = null; // Debounce before starting AI
-let chromeAIAvailability: LanguageModelAvailability = 'unavailable'; // Set at page load
-let modelLoadAbort: AbortController | null = null;  // In-flight auto-start abort handle
-
-const CHROME_AI_PROMPT_KEY = 'mc_chrome_ai_prompt';
-const getChromeAIPrompt = () => localStorage.getItem(CHROME_AI_PROMPT_KEY) ?? DEFAULT_DESCRIBE_PROMPT;
-
-// Progressive projection state
-let progressiveProjectionRunning = false;
-let lastProgressiveCount = 0;
-let lastProgressiveTime = 0;
-const PROGRESSIVE_MIN = 3;       // min vectors before first progressive projection
-const PROGRESSIVE_MIN_MS = 2500; // min time between progressive projections — a
-                                 // per-N-vectors trigger meant PCA + spread ran
-                                 // near-continuously over the whole embed phase
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-const setStatus = (msg: string) => { dom.statusEl.textContent = msg; };
-const setProgress = (pct: number) => { dom.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`; };
-const yieldMain = () => new Promise(resolve => setTimeout(resolve, 0));
-
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
-function showToast(message: string, level: 'info' | 'warn' | 'error' = 'info', durationMs = 5000) {
-  const el = document.getElementById('toast')!;
-  el.textContent = message;
-  el.className = `visible ${level === 'info' ? '' : level}`.trim();
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    el.classList.remove('visible');
-    toastTimer = null;
-  }, durationMs);
+  lastViewedIndex: null
 }
 
-const cacheSizeEl = document.getElementById('cache-size');
-const deviceBadgeEl = document.getElementById('device-badge');
-const storageBadgeEl = document.getElementById('storage-badge');
+// ── Camera (infinite canvas) ─────────────────────────────────────────────────
+const camera: Camera = { x: 0, y: 0, scale: 1 }
+
+// ── Model singleton ──────────────────────────────────────────────────────────
+let extractor: PipelineInstance | null = null // Vision model (for images)
+let textExtractor: PipelineInstance | null = null // Text model (for search queries)
+let modelDevice: 'webgpu' | 'cpu' | null = null
+let modelFallbackReason: Sapiens2FallbackReason | undefined
+// Set by the download-fallback modal when the user uploads a Sapiens2 .onnx;
+// consumed on the next loadModelOnce() and then cleared.
+let pendingSapiens2Buffer: ArrayBuffer | null = null
+let sapiens2Session: Sapiens2Session | null = null // Sapiens2 ONNX session
+let chromeAIManager: ChromeAISessionManager | null = null // Chrome built-in AI session manager
+let lazyCaptionManager: ChromeAISessionManager | null = null // On-demand caption for non-chrome-ai modes
+let captionAbortController: AbortController | null = null // Cancels in-flight lazy caption
+let captionDebounceTimer: ReturnType<typeof setTimeout> | null = null // Debounce before starting AI
+let chromeAIAvailability: LanguageModelAvailability = 'unavailable' // Set at page load
+let modelLoadAbort: AbortController | null = null // In-flight auto-start abort handle
+
+const CHROME_AI_PROMPT_KEY = 'mc_chrome_ai_prompt'
+const getChromeAIPrompt = () =>
+  localStorage.getItem(CHROME_AI_PROMPT_KEY) ?? DEFAULT_DESCRIBE_PROMPT
+
+// Progressive projection state
+let progressiveProjectionRunning = false
+let lastProgressiveCount = 0
+let lastProgressiveTime = 0
+const PROGRESSIVE_MIN = 3 // min vectors before first progressive projection
+const PROGRESSIVE_MIN_MS = 2500 // min time between progressive projections — a
+// per-N-vectors trigger meant PCA + spread ran
+// near-continuously over the whole embed phase
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const setStatus = (msg: string) => {
+  dom.statusEl.textContent = msg
+}
+const setProgress = (pct: number) => {
+  dom.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`
+}
+const yieldMain = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+function showToast(message: string, level: 'info' | 'warn' | 'error' = 'info', durationMs = 5000) {
+  const el = document.getElementById('toast')!
+  el.textContent = message
+  el.className = `visible ${level === 'info' ? '' : level}`.trim()
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    el.classList.remove('visible')
+    toastTimer = null
+  }, durationMs)
+}
+
+const cacheSizeEl = document.getElementById('cache-size')
+const deviceBadgeEl = document.getElementById('device-badge')
+const storageBadgeEl = document.getElementById('storage-badge')
 
 function updateDeviceBadge() {
-  if (!deviceBadgeEl) return;
+  if (!deviceBadgeEl) return
 
   if (state.settings.viewerOnly) {
-    deviceBadgeEl.textContent = 'Viewer';
-    deviceBadgeEl.style.color = '#4ade80';
+    deviceBadgeEl.textContent = 'Viewer'
+    deviceBadgeEl.style.color = '#4ade80'
   } else if (sapiens2Session) {
-    const threads = navigator.hardwareConcurrency || 1;
-    const mt = typeof SharedArrayBuffer !== 'undefined';
-    const variant = state.settings.modelVariant.split('-')[1] ?? 'fp16';
-    let label: string;
+    const threads = navigator.hardwareConcurrency || 1
+    const mt = typeof SharedArrayBuffer !== 'undefined'
+    const variant = state.settings.modelVariant.split('-')[1] ?? 'fp16'
+    let label: string
     if (modelDevice === 'webgpu') {
-      label = `Sapiens2·${variant} · WebGPU`;
+      label = `Sapiens2·${variant} · WebGPU`
     } else {
-      const reason = modelFallbackReason === 'vram-limit'  ? 'VRAM limit'
-                   : modelFallbackReason === 'no-webgpu'   ? 'no WebGPU'
-                   : modelFallbackReason === 'no-adapter'  ? 'no GPU'
-                   : modelFallbackReason === 'device-error' ? 'GPU error'
-                   : modelFallbackReason === 'session-error' ? 'GPU error'
-                   : null;
-      const suffix = reason ? ` · WASM (${reason})` : mt ? ` · ${threads}T` : ' · CPU';
-      label = `Sapiens2·${variant}${suffix}`;
+      const reason =
+        modelFallbackReason === 'vram-limit'
+          ? 'VRAM limit'
+          : modelFallbackReason === 'no-webgpu'
+            ? 'no WebGPU'
+            : modelFallbackReason === 'no-adapter'
+              ? 'no GPU'
+              : modelFallbackReason === 'device-error'
+                ? 'GPU error'
+                : modelFallbackReason === 'session-error'
+                  ? 'GPU error'
+                  : null
+      const suffix = reason ? ` · WASM (${reason})` : mt ? ` · ${threads}T` : ' · CPU'
+      label = `Sapiens2·${variant}${suffix}`
     }
-    deviceBadgeEl.textContent = label;
-    deviceBadgeEl.style.color = modelDevice === 'webgpu' ? '#4ade80' : '#fb923c';
+    deviceBadgeEl.textContent = label
+    deviceBadgeEl.style.color = modelDevice === 'webgpu' ? '#4ade80' : '#fb923c'
   } else if (chromeAIManager) {
-    deviceBadgeEl.textContent = 'Chrome AI · Built-in';
-    deviceBadgeEl.style.color = '#4ade80';
+    deviceBadgeEl.textContent = 'Chrome AI · Built-in'
+    deviceBadgeEl.style.color = '#4ade80'
   } else if (modelDevice === 'webgpu') {
-    deviceBadgeEl.textContent = 'WebGPU';
-    deviceBadgeEl.style.color = '#4ade80';
+    deviceBadgeEl.textContent = 'WebGPU'
+    deviceBadgeEl.style.color = '#4ade80'
   } else if (modelDevice === 'cpu') {
     deviceBadgeEl.innerHTML =
-      'CPU · <a href="https://webgpureport.org/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">check WebGPU</a>';
-    deviceBadgeEl.style.color = '#fb923c';
-    deviceBadgeEl.title = 'WebGPU not available — running on CPU (slower). Open webgpureport.org to check your GPU support.';
+      'CPU · <a href="https://webgpureport.org/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">check WebGPU</a>'
+    deviceBadgeEl.style.color = '#fb923c'
+    deviceBadgeEl.title =
+      'WebGPU not available — running on CPU (slower). Open webgpureport.org to check your GPU support.'
   } else {
-    deviceBadgeEl.textContent = 'Local AI';
-    deviceBadgeEl.style.color = '';
+    deviceBadgeEl.textContent = 'Local AI'
+    deviceBadgeEl.style.color = ''
   }
 }
 
 function currentCachePrefix(): string {
-  const v = state.settings.modelVariant;
-  if (v === 'chrome-ai') return '@chrome-ai/';
-  if (!v.startsWith('sapiens2')) return '';
-  if (v === 'sapiens2-fp16') return '@sapiens2/';
-  return `@${v}/`;
+  const v = state.settings.modelVariant
+  if (v === 'chrome-ai') return '@chrome-ai/'
+  if (!v.startsWith('sapiens2')) return ''
+  if (v === 'sapiens2-fp16') return '@sapiens2/'
+  return `@${v}/`
 }
 
 async function refreshCacheSize() {
   try {
-    const { count } = await cacheStats(currentCachePrefix());
-    const text = count === 0 ? '' : `${count} embeddings`;
-    if (cacheSizeEl) cacheSizeEl.textContent = text;
-    if (storageBadgeEl) { storageBadgeEl.textContent = text; (storageBadgeEl as HTMLElement).style.display = text ? '' : 'none'; }
+    const { count } = await cacheStats(currentCachePrefix())
+    const text = count === 0 ? '' : `${count} embeddings`
+    if (cacheSizeEl) cacheSizeEl.textContent = text
+    if (storageBadgeEl) {
+      storageBadgeEl.textContent = text
+      ;(storageBadgeEl as HTMLElement).style.display = text ? '' : 'none'
+    }
   } catch (err) {
-    if (cacheSizeEl) cacheSizeEl.textContent = '';
-    if (storageBadgeEl) { storageBadgeEl.textContent = ''; (storageBadgeEl as HTMLElement).style.display = 'none'; }
+    if (cacheSizeEl) cacheSizeEl.textContent = ''
+    if (storageBadgeEl) {
+      storageBadgeEl.textContent = ''
+      ;(storageBadgeEl as HTMLElement).style.display = 'none'
+    }
   }
 }
 
 // ── Render scheduling (debounce to one frame) ────────────────────────────────
-let renderPending = false;
+let renderPending = false
 function scheduleRender() {
   if (!renderPending) {
-    renderPending = true;
+    renderPending = true
     requestAnimationFrame(() => {
-      render();
-      renderPending = false;
-    });
+      render()
+      renderPending = false
+    })
   }
 }
 
 // ── File collection ──────────────────────────────────────────────────────────
-async function collectImages(dirHandle: DirectoryHandle, sampleSize: number = 0, basePath: string = ''): Promise<PhotoFile[]> {
+async function collectImages(
+  dirHandle: DirectoryHandle,
+  sampleSize: number = 0,
+  basePath: string = ''
+): Promise<PhotoFile[]> {
   // Phase 1: walk the tree and collect lightweight file references.
   // When sampleSize > 0, use reservoir sampling so memory stays bounded at O(sampleSize).
-  type Ref = { name: string; handle: FileSystemHandle };
-  const refs: Ref[] = [];
-  let seen = 0;
+  type Ref = { name: string; handle: FileSystemHandle }
+  const refs: Ref[] = []
+  let seen = 0
 
   // Navigate to base path if specified
-  let currentHandle = dirHandle;
+  let currentHandle = dirHandle
   if (basePath) {
-    const pathParts = basePath.split('/').filter(p => p);
+    const pathParts = basePath.split('/').filter((p) => p)
     for (const part of pathParts) {
-      currentHandle = await currentHandle.getDirectoryHandle(part);
+      currentHandle = await currentHandle.getDirectoryHandle(part)
     }
   }
 
   async function walk(handle: DirectoryHandle, prefix: string) {
     for await (const [name, entry] of handle as any) {
-      if (name.startsWith('.')) continue;
+      if (name.startsWith('.')) continue
       if (entry.kind === 'directory') {
-        await walk(entry as DirectoryHandle, `${prefix}${name}/`);
+        await walk(entry as DirectoryHandle, `${prefix}${name}/`)
       } else {
-        const ext = name.split('.').pop()?.toLowerCase() ?? '';
+        const ext = name.split('.').pop()?.toLowerCase() ?? ''
         if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
-          const ref: Ref = { name: `${basePath}${prefix}${name}`, handle: entry as FileSystemHandle };
+          const ref: Ref = {
+            name: `${basePath}${prefix}${name}`,
+            handle: entry as FileSystemHandle
+          }
           if (sampleSize <= 0) {
-            refs.push(ref);
+            refs.push(ref)
           } else if (refs.length < sampleSize) {
-            refs.push(ref);
+            refs.push(ref)
           } else {
             // Reservoir sampling (Algorithm R): replace slot j with prob sampleSize/(seen+1)
-            const j = Math.floor(Math.random() * (seen + 1));
-            if (j < sampleSize) refs[j] = ref;
+            const j = Math.floor(Math.random() * (seen + 1))
+            if (j < sampleSize) refs[j] = ref
           }
-          seen++;
+          seen++
         }
       }
     }
   }
-  await walk(currentHandle, '');
+  await walk(currentHandle, '')
 
   // Phase 2: fetch File objects only for the selected refs.
-  const files: PhotoFile[] = [];
+  const files: PhotoFile[] = []
   for (const ref of refs) {
-    const file = await ref.handle.getFile();
+    const file = await ref.handle.getFile()
     files.push({
       name: ref.name,
       size: file.size,
       lastModified: file.lastModified,
       file,
       objectURL: null
-    });
+    })
   }
-  return files;
+  return files
 }
 
 // ── Demo images loader ──────────────────────────────────────────────────────
 async function loadDemoImages(): Promise<PhotoFile[]> {
-  const files: PhotoFile[] = [];
+  const files: PhotoFile[] = []
 
   for (const category of DEMO_CATEGORIES) {
     try {
       // Fetch 3 random images from Unsplash for this category
-      const url = `https://api.unsplash.com/photos/random?client_id=${UNSPLASH_ACCESS_KEY}&query=${category}&count=3&orientation=landscape`;
-      const res = await fetch(url);
+      const url = `https://api.unsplash.com/photos/random?client_id=${UNSPLASH_ACCESS_KEY}&query=${category}&count=3&orientation=landscape`
+      const res = await fetch(url)
 
       if (!res.ok) {
-        console.warn(`Unsplash API error for ${category}:`, res.status);
-        continue;
+        console.warn(`Unsplash API error for ${category}:`, res.status)
+        continue
       }
 
-      const photos = await res.json() as Array<{ id: string; urls: { regular: string } }>;
+      const photos = (await res.json()) as Array<{
+        id: string
+        urls: { regular: string }
+      }>
 
       for (let i = 0; i < photos.length; i++) {
         try {
-          const photoUrl = photos[i].urls.regular;
-          const imgRes = await fetch(photoUrl);
-          const blob = await imgRes.blob();
-          const name = `${category}-${i + 1}.jpg`;
-          const file = new File([blob], name, { type: 'image/jpeg' });
+          const photoUrl = photos[i].urls.regular
+          const imgRes = await fetch(photoUrl)
+          const blob = await imgRes.blob()
+          const name = `${category}-${i + 1}.jpg`
+          const file = new File([blob], name, { type: 'image/jpeg' })
 
           files.push({
             name,
@@ -432,27 +487,27 @@ async function loadDemoImages(): Promise<PhotoFile[]> {
             lastModified: Date.now(),
             file,
             objectURL: null
-          });
+          })
         } catch (e) {
-          console.warn(`Failed to load ${category} image ${i}:`, e);
+          console.warn(`Failed to load ${category} image ${i}:`, e)
         }
       }
     } catch (e) {
-      console.warn(`Failed to fetch ${category} from Unsplash:`, e);
+      console.warn(`Failed to fetch ${category} from Unsplash:`, e)
     }
   }
 
-  return files;
+  return files
 }
 
 // ── Media helpers ────────────────────────────────────────────────────────────
 async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
   return new Promise((resolve) => {
-    const video = document.createElement('video');
-    video.preload = 'metadata';
-    video.muted = true;
-    video.playsInline = true;
-    const url = URL.createObjectURL(file);
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+    video.muted = true
+    video.playsInline = true
+    const url = URL.createObjectURL(file)
 
     // video.remove() is a no-op when the element was never added to the DOM.
     // The only way to release a WebMediaPlayer in Chrome is: pause → clear src → load().
@@ -461,357 +516,412 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
     // Setting video.src='' and video.load() can re-fire onerror on the same
     // handler, turning one failed decode into N cascading error logs.
     const cleanup = () => {
-      video.onloadedmetadata = null;
-      video.onseeked = null;
-      video.onerror = null;
-      URL.revokeObjectURL(url);
-      video.pause();
-      video.src = '';
-      video.load();
-    };
+      video.onloadedmetadata = null
+      video.onseeked = null
+      video.onerror = null
+      URL.revokeObjectURL(url)
+      video.pause()
+      video.src = ''
+      video.load()
+    }
 
     video.onloadedmetadata = () => {
-      video.currentTime = Math.min(1.0, video.duration / 2);
-    };
+      video.currentTime = Math.min(1.0, video.duration / 2)
+    }
 
     video.onseeked = async () => {
       try {
-        const bitmap = await createImageBitmap(video, { resizeWidth: 224, resizeQuality: 'medium' });
-        resolve(bitmap);
+        const bitmap = await createImageBitmap(video, {
+          resizeWidth: 224,
+          resizeQuality: 'medium'
+        })
+        resolve(bitmap)
       } catch (e) {
-        console.warn('Failed to extract video frame:', e);
-        resolve(null);
+        console.warn('Failed to extract video frame:', e)
+        resolve(null)
       } finally {
-        cleanup();
+        cleanup()
       }
-    };
+    }
 
     video.onerror = () => {
-      console.debug('Video load error (unsupported format):', file.name);
-      cleanup();
-      resolve(null);
-    };
+      console.debug('Video load error (unsupported format):', file.name)
+      cleanup()
+      resolve(null)
+    }
 
-    video.src = url;
-  });
+    video.src = url
+  })
 }
 
 // ── Thumbnail preloader ──────────────────────────────────────────────────────
 function initThumbnails(files: PhotoFile[]): (ImageBitmap | null)[] {
   // ObjectURLs are now created lazily on first use to avoid OOM with large folders
-  return new Array<ImageBitmap | null>(files.length).fill(null);
+  return new Array<ImageBitmap | null>(files.length).fill(null)
 }
 
 function lazyDecodeThumbnail(idx: number) {
-  if (thumbDecoding.has(idx) || state.thumbnails[idx] || thumbFailed.has(idx)) return;
-  thumbDecoding.add(idx);
-  const f = state.files[idx];
-  if (!f) { thumbDecoding.delete(idx); return; }
+  if (thumbDecoding.has(idx) || state.thumbnails[idx] || thumbFailed.has(idx)) return
+  thumbDecoding.add(idx)
+  const f = state.files[idx]
+  if (!f) {
+    thumbDecoding.delete(idx)
+    return
+  }
 
   // Create objectURL lazily if needed (for large folders, don't create all upfront)
-  if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
+  if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file)
 
-  const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+  const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
 
   const done = (bm: ImageBitmap | null) => {
-    state.thumbnails[idx] = bm;
-    thumbDecoding.delete(idx);
+    state.thumbnails[idx] = bm
+    thumbDecoding.delete(idx)
 
     // Only track in LRU when we have an actual bitmap — null entries (failed
     // decodes) would crowd out real thumbnails and trigger unnecessary evictions.
-    if (!bm) { scheduleRender(); return; }
+    if (!bm) {
+      scheduleRender()
+      return
+    }
 
-    thumbnailLRU.delete(idx);
-    thumbnailLRU.add(idx);
+    thumbnailLRU.delete(idx)
+    thumbnailLRU.add(idx)
 
     // Evict least recently used thumbnails if over cache limit
     while (thumbnailLRU.size > MAX_THUMBNAILS_CACHE) {
-      const lruIdx = thumbnailLRU.values().next().value; // Get first (oldest)
+      const lruIdx = thumbnailLRU.values().next().value // Get first (oldest)
       if (lruIdx !== undefined) {
-        thumbnailLRU.delete(lruIdx);
-        const oldBm = state.thumbnails[lruIdx];
-        if (oldBm?.close) oldBm.close();
-        state.thumbnails[lruIdx] = null;
+        thumbnailLRU.delete(lruIdx)
+        const oldBm = state.thumbnails[lruIdx]
+        if (oldBm?.close) oldBm.close()
+        state.thumbnails[lruIdx] = null
       }
     }
 
-    scheduleRender();
-  };
+    scheduleRender()
+  }
 
   if (VIDEO_EXTS.has(ext)) {
     videoFrameLimit(() => extractVideoFrame(f.file))
-      .then(result => { if (!result) thumbFailed.add(idx); done(result); })
-      .catch((err) => { thumbFailed.add(idx); done(null); });
+      .then((result) => {
+        if (!result) thumbFailed.add(idx)
+        done(result)
+      })
+      .catch((err) => {
+        thumbFailed.add(idx)
+        done(null)
+      })
   } else {
     createImageBitmap(f.file, { resizeWidth: 96, resizeQuality: 'low' })
-      .then(done).catch(() => done(null));
+      .then(done)
+      .catch(() => done(null))
   }
 }
 
 // ── Text embedding (uses text model with search_query prefix) ────────────────
 async function embedText(text: string): Promise<Float32Array> {
-  if (!textExtractor) throw new Error('Text model not loaded');
+  if (!textExtractor) throw new Error('Text model not loaded')
 
   // Add required task prefix for nomic-embed-text
-  const prefixed = `search_query: ${text}`;
-  const output = await textExtractor(prefixed, { pooling: 'mean', normalize: true });
+  const prefixed = `search_query: ${text}`
+  const output = await textExtractor(prefixed, {
+    pooling: 'mean',
+    normalize: true
+  })
 
-  return Float32Array.from(output.data);
+  return Float32Array.from(output.data)
 }
 
 // ── Text search (exact cosine scan over normalized vectors) ─────────────────
 async function searchImages(query: string) {
   if (!query.trim() || !state.vectors.length) {
-    state.searchResults = null;
-    state.searchQuery = '';
-    state.searchScores = null;
-    dom.searchWrap.classList.remove('loading');
-    return;
+    state.searchResults = null
+    state.searchQuery = ''
+    state.searchScores = null
+    dom.searchWrap.classList.remove('loading')
+    return
   }
 
-  dom.searchWrap.classList.add('loading');
-  setStatus(`Searching for "${query}"…`);
+  dom.searchWrap.classList.add('loading')
+  setStatus(`Searching for "${query}"…`)
 
   try {
-    const queryVector = await embedText(query);
-    state.searchQuery = query;
+    const queryVector = await embedText(query)
+    state.searchQuery = query
 
-    const { indices, scores } = searchByCosine(queryVector, state.vectors);
-    state.searchScores = scores;
-    state.searchResults = indices;
+    const { indices, scores } = searchByCosine(queryVector, state.vectors)
+    state.searchScores = scores
+    state.searchResults = indices
 
-    const topScore = scores[indices[0]] ?? 0;
-    const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`;
-    setStatus(statusMsg);
-    if (dom.statsEl) dom.statsEl.textContent = statusMsg;
+    const topScore = scores[indices[0]] ?? 0
+    const statusMsg = `${state.vectors.length} media files · top match: ${(topScore * 100).toFixed(0)}% similar`
+    setStatus(statusMsg)
+    if (dom.statsEl) dom.statsEl.textContent = statusMsg
   } catch (err) {
-    console.error('Search failed:', err);
-    setStatus('Search failed. Check console.');
+    console.error('Search failed:', err)
+    setStatus('Search failed. Check console.')
   } finally {
-    dom.searchWrap.classList.remove('loading');
+    dom.searchWrap.classList.remove('loading')
   }
 }
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
-const fullImages = new Map<number, HTMLImageElement>(); // index → HTMLImageElement
-const fullImageLRU = new Set<number>();                // LRU tracking for full-res images
-const thumbDecoding = new Set<number>();               // indices currently being decoded
-const thumbFailed = new Set<number>();                 // indices where video frame extraction permanently failed
-const thumbnailLRU = new Set<number>();                // indices in LRU order (most recently used at end)
+const fullImages = new Map<number, HTMLImageElement>() // index → HTMLImageElement
+const fullImageLRU = new Set<number>() // LRU tracking for full-res images
+const thumbDecoding = new Set<number>() // indices currently being decoded
+const thumbFailed = new Set<number>() // indices where video frame extraction permanently failed
+const thumbnailLRU = new Set<number>() // indices in LRU order (most recently used at end)
 
 // Chrome limits concurrent WebMediaPlayers to ~75; cap video frame extraction
 // well below that so the render loop + embedAll can't together exceed the limit.
-const videoFrameLimit = pLimit(4);
+const videoFrameLimit = pLimit(4)
 
 function resizeCanvas() {
-  dom.canvas.width = window.innerWidth || 800;
-  dom.canvas.height = window.innerHeight || 600;
+  dom.canvas.width = window.innerWidth || 800
+  dom.canvas.height = window.innerHeight || 600
 }
 
 function fitCamera() {
-  const pts = state.points;
-  if (!pts.length) return;
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  const pts = state.points
+  if (!pts.length) return
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity
   for (const [x, y] of pts) {
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
   }
-  const pad = THUMB_WORLD + 16;
-  const scX = (dom.canvas.width - pad * 2) / ((maxX - minX) || 1);
-  const scY = (dom.canvas.height - pad * 2) / ((maxY - minY) || 1);
-  camera.x = (minX + maxX) / 2;
-  camera.y = (minY + maxY) / 2;
-  camera.scale = Math.min(scX, scY);
+  const pad = THUMB_WORLD + 16
+  const scX = (dom.canvas.width - pad * 2) / (maxX - minX || 1)
+  const scY = (dom.canvas.height - pad * 2) / (maxY - minY || 1)
+  camera.x = (minX + maxX) / 2
+  camera.y = (minY + maxY) / 2
+  camera.scale = Math.min(scX, scY)
 }
 
 function resetAll() {
-  for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
-  for (const img of fullImages.values()) img.src = '';
-  fullImages.clear();
-  fullImageLRU.clear();
-  thumbDecoding.clear();
-  thumbFailed.clear();
-  thumbnailLRU.clear();
-  for (const f of state.files) {
-    if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
+  for (const bmp of state.thumbnails) {
+    if (bmp?.close) bmp.close()
   }
-  state.phase = 'idle'; state.files = []; state.vectors = [];
-  state.points = []; state.clusters = null; state.thumbnails = []; state.captions = [];
-  state.searchResults = null;
-  state.searchQuery = '';
-  state.searchScores = null;
-  state.activeFileIndex = null;
-  state.lastViewedIndex = null;
-  localStorage.removeItem('po_fileKeys');
-  localStorage.removeItem('po_umapPoints');
-  localStorage.removeItem('po_projectedPoints');
-  localStorage.removeItem('po_clusters');
-  localStorage.removeItem('po_viewerMode');
-  camera.x = 0; camera.y = 0; camera.scale = 1;
-  const ctx = dom.canvas.getContext('2d');
-  if (ctx) ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
-  dom.recenterBtn.disabled = true;
-  dom.resetBtn.disabled = true;
-  dom.headerRecenterBtn.disabled = true;
-  dom.searchInput.disabled = true;
-  dom.searchInput.value = '';
-  dom.searchClearBtn.hidden = true;
-  dom.resumeBtn.hidden = true;
-  dom.resumeBtn.disabled = true;
-  dom.resumeBtn.classList.remove('primary');
-  dom.openBtn.disabled = false;
-  dom.demoBtn.disabled = false;
-  setProgress(0);
-  setStatus('Cleared. Open a folder to start.');
-  refreshCacheSize();
+  for (const img of fullImages.values()) img.src = ''
+  fullImages.clear()
+  fullImageLRU.clear()
+  thumbDecoding.clear()
+  thumbFailed.clear()
+  thumbnailLRU.clear()
+  for (const f of state.files) {
+    if (f.objectURL) {
+      URL.revokeObjectURL(f.objectURL)
+      f.objectURL = null
+    }
+  }
+  state.phase = 'idle'
+  state.files = []
+  state.vectors = []
+  state.points = []
+  state.clusters = null
+  state.thumbnails = []
+  state.captions = []
+  state.searchResults = null
+  state.searchQuery = ''
+  state.searchScores = null
+  state.activeFileIndex = null
+  state.lastViewedIndex = null
+  localStorage.removeItem('po_fileKeys')
+  localStorage.removeItem('po_umapPoints')
+  localStorage.removeItem('po_projectedPoints')
+  localStorage.removeItem('po_clusters')
+  localStorage.removeItem('po_viewerMode')
+  camera.x = 0
+  camera.y = 0
+  camera.scale = 1
+  const ctx = dom.canvas.getContext('2d')
+  if (ctx) ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height)
+  dom.recenterBtn.disabled = true
+  dom.resetBtn.disabled = true
+  dom.headerRecenterBtn.disabled = true
+  dom.searchInput.disabled = true
+  dom.searchInput.value = ''
+  dom.searchClearBtn.hidden = true
+  dom.resumeBtn.hidden = true
+  dom.resumeBtn.disabled = true
+  dom.resumeBtn.classList.remove('primary')
+  dom.openBtn.disabled = false
+  dom.demoBtn.disabled = false
+  setProgress(0)
+  setStatus('Cleared. Open a folder to start.')
+  refreshCacheSize()
 }
 
 function render() {
-  const ctx = dom.canvas.getContext('2d');
-  if (!ctx) return;
-  ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
-  const pts = state.points;
-  const thumbs = state.thumbnails;
-  if (!pts.length) return;
+  const ctx = dom.canvas.getContext('2d')
+  if (!ctx) return
+  ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height)
+  const pts = state.points
+  const thumbs = state.thumbnails
+  if (!pts.length) return
 
-  const rank = new Int32Array(pts.length).fill(pts.length);
+  const rank = new Int32Array(pts.length).fill(pts.length)
   if (state.searchResults) {
     for (let i = 0; i < state.searchResults.length; i++) {
-      rank[state.searchResults[i]] = i;
+      rank[state.searchResults[i]] = i
     }
   }
 
-  const s = camera.scale;
-  const cxW = dom.canvas.width / 2;
-  const cyW = dom.canvas.height / 2;
-  const drawSize = THUMB_WORLD * s;
-  const half = drawSize / 2;
-  const useFull = drawSize > FULL_LOD_SIZE;
-  const drawnFull = useFull ? new Set<number>() : null;
+  const s = camera.scale
+  const cxW = dom.canvas.width / 2
+  const cyW = dom.canvas.height / 2
+  const drawSize = THUMB_WORLD * s
+  const half = drawSize / 2
+  const useFull = drawSize > FULL_LOD_SIZE
+  const drawnFull = useFull ? new Set<number>() : null
 
   // Find index closest to center for highlighting if nothing viewed yet
-  let currentActive = state.lastViewedIndex;
+  let currentActive = state.lastViewedIndex
   if (currentActive === null && pts.length > 0) {
-    let minD = Infinity;
+    let minD = Infinity
     for (let i = 0; i < pts.length; i++) {
-      const dx = pts[i][0] - camera.x;
-      const dy = pts[i][1] - camera.y;
-      const d = dx * dx + dy * dy;
-      if (d < minD) { minD = d; currentActive = i; }
+      const dx = pts[i][0] - camera.x
+      const dy = pts[i][1] - camera.y
+      const d = dx * dx + dy * dy
+      if (d < minD) {
+        minD = d
+        currentActive = i
+      }
     }
   }
 
   // Frustum culling + draw prioritization (search results first, then center distance)
   const visibleIndices = cullAndPrioritize(
-    pts, camera, dom.canvas.width, dom.canvas.height, half,
-    state.searchResults ? rank : null, state.settings.drawBudget,
-  );
+    pts,
+    camera,
+    dom.canvas.width,
+    dom.canvas.height,
+    half,
+    state.searchResults ? rank : null,
+    state.settings.drawBudget
+  )
 
   for (const i of visibleIndices) {
-    const sx = (pts[i][0] - camera.x) * s + cxW;
-    const sy = (pts[i][1] - camera.y) * s + cyW;
+    const sx = (pts[i][0] - camera.x) * s + cxW
+    const sy = (pts[i][1] - camera.y) * s + cyW
 
-    let alphaMultiplier = 1.0;
-    let highlightBorder = null;
-    let isSelected = i === currentActive;
+    let alphaMultiplier = 1.0
+    let highlightBorder = null
+    let isSelected = i === currentActive
 
     if (state.searchResults) {
-      const r = rank[i];
+      const r = rank[i]
       if (r < 20) {
-        highlightBorder = '#facc15'; // Bright yellow for top results
-        alphaMultiplier = 1.0;
+        highlightBorder = '#facc15' // Bright yellow for top results
+        alphaMultiplier = 1.0
       } else if (r < 100) {
-        alphaMultiplier = 0.4;
+        alphaMultiplier = 0.4
       } else {
-        alphaMultiplier = 0.1;
+        alphaMultiplier = 0.1
       }
     }
 
     if (isSelected) {
-      highlightBorder = '#fff';
-      alphaMultiplier = 1.0;
+      highlightBorder = '#fff'
+      alphaMultiplier = 1.0
     }
 
-    const clr = highlightBorder ?? (state.clusters?.length ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length] : '#6b7280');
-    let drawn = false;
+    const clr =
+      highlightBorder ??
+      (state.clusters?.length
+        ? CLUSTER_COLORS[state.clusters[i] % CLUSTER_COLORS.length]
+        : '#6b7280')
+    let drawn = false
 
     if (useFull && drawnFull) {
-      drawnFull.add(i);
-      let fullImg = fullImages.get(i);
+      drawnFull.add(i)
+      let fullImg = fullImages.get(i)
       if (!fullImg) {
         // Evict LRU full images if over limit
         while (fullImageLRU.size >= MAX_FULL_IMAGES) {
-          const lruIdx = fullImageLRU.values().next().value;
+          const lruIdx = fullImageLRU.values().next().value
           if (lruIdx !== undefined) {
-            fullImageLRU.delete(lruIdx);
-            const oldImg = fullImages.get(lruIdx);
-            if (oldImg) oldImg.src = '';
-            fullImages.delete(lruIdx);
+            fullImageLRU.delete(lruIdx)
+            const oldImg = fullImages.get(lruIdx)
+            if (oldImg) oldImg.src = ''
+            fullImages.delete(lruIdx)
           }
         }
 
         // Ensure objectURL exists
-        const f = state.files[i];
-        if (!f) continue;
-        if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
+        const f = state.files[i]
+        if (!f) continue
+        if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file)
 
-        fullImg = new Image();
+        fullImg = new Image()
         fullImg.onload = () => {
           if (fullImg) {
-            fullImg.decode().then(() => scheduleRender()).catch(() => scheduleRender());
+            fullImg
+              .decode()
+              .then(() => scheduleRender())
+              .catch(() => scheduleRender())
           }
-        };
-        fullImg.src = f.objectURL;
-        fullImages.set(i, fullImg);
+        }
+        fullImg.src = f.objectURL
+        fullImages.set(i, fullImg)
       }
 
       // Update LRU for full image access
-      fullImageLRU.delete(i);
-      fullImageLRU.add(i);
+      fullImageLRU.delete(i)
+      fullImageLRU.add(i)
 
       if (fullImg.complete && fullImg.naturalWidth > 0) {
-        const ratio = fullImg.naturalWidth / fullImg.naturalHeight;
-        const dw = ratio >= 1 ? drawSize : drawSize * ratio;
-        const dh = ratio >= 1 ? drawSize / ratio : drawSize;
-        ctx.globalAlpha = 0.9 * alphaMultiplier;
-        ctx.drawImage(fullImg, sx - dw / 2, sy - dh / 2, dw, dh);
-        ctx.globalAlpha = 1.0;
-        ctx.strokeStyle = clr;
-        ctx.lineWidth = isSelected ? Math.max(3, 4 * Math.min(s, 1)) : Math.max(1.5, 2 * Math.min(s, 1));
-        ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
-        drawn = true;
+        const ratio = fullImg.naturalWidth / fullImg.naturalHeight
+        const dw = ratio >= 1 ? drawSize : drawSize * ratio
+        const dh = ratio >= 1 ? drawSize / ratio : drawSize
+        ctx.globalAlpha = 0.9 * alphaMultiplier
+        ctx.drawImage(fullImg, sx - dw / 2, sy - dh / 2, dw, dh)
+        ctx.globalAlpha = 1.0
+        ctx.strokeStyle = clr
+        ctx.lineWidth = isSelected
+          ? Math.max(3, 4 * Math.min(s, 1))
+          : Math.max(1.5, 2 * Math.min(s, 1))
+        ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh)
+        drawn = true
       }
     }
 
     if (!drawn) {
-      const thumb = thumbs[i];
-      if (!thumb) lazyDecodeThumbnail(i);
+      const thumb = thumbs[i]
+      if (!thumb) lazyDecodeThumbnail(i)
       if (thumb && thumb.width > 0) {
         // Update LRU when thumbnail is actually used for rendering
-        thumbnailLRU.delete(i);
-        thumbnailLRU.add(i);
+        thumbnailLRU.delete(i)
+        thumbnailLRU.add(i)
 
-        const ratio = thumb.width / thumb.height;
-        const dw = ratio >= 1 ? drawSize : drawSize * ratio;
-        const dh = ratio >= 1 ? drawSize / ratio : drawSize;
-        ctx.globalAlpha = 0.9 * alphaMultiplier;
-        ctx.drawImage(thumb, sx - dw / 2, sy - dh / 2, dw, dh);
-        ctx.globalAlpha = 1.0;
-        ctx.strokeStyle = clr;
-        ctx.lineWidth = isSelected ? Math.max(3, 4 * Math.min(s, 1)) : Math.max(1.5, 2 * Math.min(s, 1));
-        ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh);
+        const ratio = thumb.width / thumb.height
+        const dw = ratio >= 1 ? drawSize : drawSize * ratio
+        const dh = ratio >= 1 ? drawSize / ratio : drawSize
+        ctx.globalAlpha = 0.9 * alphaMultiplier
+        ctx.drawImage(thumb, sx - dw / 2, sy - dh / 2, dw, dh)
+        ctx.globalAlpha = 1.0
+        ctx.strokeStyle = clr
+        ctx.lineWidth = isSelected
+          ? Math.max(3, 4 * Math.min(s, 1))
+          : Math.max(1.5, 2 * Math.min(s, 1))
+        ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh)
       } else {
-        const r = isSelected ? Math.max(5, half * 0.4) : Math.max(3, half * 0.3);
-        ctx.beginPath();
-        ctx.arc(sx, sy, r, 0, Math.PI * 2);
-        ctx.fillStyle = clr;
-        ctx.globalAlpha = 0.8;
-        ctx.fill();
-        ctx.globalAlpha = 1;
+        const r = isSelected ? Math.max(5, half * 0.4) : Math.max(3, half * 0.3)
+        ctx.beginPath()
+        ctx.arc(sx, sy, r, 0, Math.PI * 2)
+        ctx.fillStyle = clr
+        ctx.globalAlpha = 0.8
+        ctx.fill()
+        ctx.globalAlpha = 1
         if (isSelected) {
-          ctx.strokeStyle = '#fff';
-          ctx.lineWidth = 2;
-          ctx.stroke();
+          ctx.strokeStyle = '#fff'
+          ctx.lineWidth = 2
+          ctx.stroke()
         }
       }
     }
@@ -821,398 +931,429 @@ function render() {
     // Evict full images that weren't drawn this frame
     for (const [idx, img] of fullImages) {
       if (!drawnFull.has(idx)) {
-        img.src = '';
-        fullImages.delete(idx);
-        fullImageLRU.delete(idx);
+        img.src = ''
+        fullImages.delete(idx)
+        fullImageLRU.delete(idx)
       }
     }
   } else {
     // Full-res disabled, clear all
-    for (const img of fullImages.values()) img.src = '';
-    fullImages.clear();
-    fullImageLRU.clear();
+    for (const img of fullImages.values()) img.src = ''
+    fullImages.clear()
+    fullImageLRU.clear()
   }
 }
 
 // ── Projection ───────────────────────────────────────────────────────────────
-async function runProjection(vectors: Float32Array[], method: ProjectionMethod, nNeighbors: number, { silent = false } = {}): Promise<number[][]> {
+async function runProjection(
+  vectors: Float32Array[],
+  method: ProjectionMethod,
+  nNeighbors: number,
+  { silent = false } = {}
+): Promise<number[][]> {
   try {
-    if (!silent) setStatus(`Projecting with ${method}…`);
+    if (!silent) setStatus(`Projecting with ${method}…`)
     // Druid accepts Float64Array rows directly; copy each f32 row to f64
     // transiently instead of materializing a number[][] of the whole dataset.
-    const matrix = druid.Matrix.from(vectors.map(v => Float64Array.from(v)));
-    let result: druid.Matrix;
+    const matrix = druid.Matrix.from(vectors.map((v) => Float64Array.from(v)))
+    let result: druid.Matrix
 
     // Small yield to allow UI update
-    await yieldMain();
+    await yieldMain()
 
     switch (method) {
       case 'TSNE':
-        result = new druid.TSNE(matrix, { d: 2, perplexity: Math.min(30, Math.floor(vectors.length / 3)) }).transform();
-        break;
+        result = new druid.TSNE(matrix, {
+          d: 2,
+          perplexity: Math.min(30, Math.floor(vectors.length / 3))
+        }).transform()
+        break
       case 'PCA':
-        result = new druid.PCA(matrix, { d: 2 }).transform();
-        break;
+        result = new druid.PCA(matrix, { d: 2 }).transform()
+        break
       case 'ISOMAP':
-        result = new druid.ISOMAP(matrix, { d: 2, neighbors: nNeighbors }).transform();
-        break;
+        result = new druid.ISOMAP(matrix, {
+          d: 2,
+          neighbors: nNeighbors
+        }).transform()
+        break
       case 'LLE':
-        result = new druid.LLE(matrix, { d: 2, neighbors: nNeighbors }).transform();
-        break;
+        result = new druid.LLE(matrix, {
+          d: 2,
+          neighbors: nNeighbors
+        }).transform()
+        break
       case 'MDS':
-        result = new druid.MDS(matrix, { d: 2 }).transform();
-        break;
+        result = new druid.MDS(matrix, { d: 2 }).transform()
+        break
       case 'SAMMON':
-        result = new druid.SAMMON(matrix, { d: 2 }).transform();
-        break;
+        result = new druid.SAMMON(matrix, { d: 2 }).transform()
+        break
       case 'TriMap':
-        result = new druid.TriMap(matrix, { d: 2 }).transform();
-        break;
+        result = new druid.TriMap(matrix, { d: 2 }).transform()
+        break
       case 'UMAP':
       default:
-        result = new druid.UMAP(matrix, { d: 2, n_neighbors: nNeighbors, local_connectivity: 1 }).transform();
-        break;
+        result = new druid.UMAP(matrix, {
+          d: 2,
+          n_neighbors: nNeighbors,
+          local_connectivity: 1
+        }).transform()
+        break
     }
 
-    return result.to2dArray().map(row => Array.from(row));
+    return result.to2dArray().map((row) => Array.from(row))
   } catch (err) {
-    setStatus(`${method} projection failed: ${(err as Error).message}`);
-    throw err;
+    setStatus(`${method} projection failed: ${(err as Error).message}`)
+    throw err
   }
 }
 
 // ── Model singleton ──────────────────────────────────────────────────────────
 async function loadModelOnce(signal?: AbortSignal) {
-  applyModelEnv();
-  state.phase = 'loading_model';
-  setStatus('Loading model…');
-  setProgress(0);
+  applyModelEnv()
+  state.phase = 'loading_model'
+  setStatus('Loading model…')
+  setProgress(0)
 
   if (state.settings.modelVariant === 'chrome-ai') {
-    setStatus('Checking Chrome AI availability…');
-    const availability = await getChromeAIAvailability();
+    setStatus('Checking Chrome AI availability…')
+    const availability = await getChromeAIAvailability()
 
     if (availability === 'unavailable') {
       setStatus(
         'Chrome AI unavailable. Enable chrome://flags/#prompt-api-for-gemini-nano in Chrome 138+.'
-      );
-      dom.loadModelBtn.hidden = false;
-      state.phase = 'idle';
-      return;
+      )
+      dom.loadModelBtn.hidden = false
+      state.phase = 'idle'
+      return
     }
 
     if (availability === 'downloadable' || availability === 'downloading') {
-      setStatus('Chrome AI model downloading (managed by Chrome, this happens once)…');
-      let polls = 0;
+      setStatus('Chrome AI model downloading (managed by Chrome, this happens once)…')
+      let polls = 0
       while (polls < 60) {
-        signal?.throwIfAborted();
-        await new Promise(r => setTimeout(r, 2000));
-        signal?.throwIfAborted();
-        const current = await getChromeAIAvailability();
-        if (current === 'available') break;
-        setStatus(`Chrome AI model downloading… (${++polls * 2}s elapsed)`);
+        signal?.throwIfAborted()
+        await new Promise((r) => setTimeout(r, 2000))
+        signal?.throwIfAborted()
+        const current = await getChromeAIAvailability()
+        if (current === 'available') break
+        setStatus(`Chrome AI model downloading… (${++polls * 2}s elapsed)`)
       }
-      if (await getChromeAIAvailability() !== 'available') {
-        setStatus('Chrome AI model download timed out. Try again later.');
-        dom.loadModelBtn.hidden = false;
-        state.phase = 'idle';
-        return;
+      if ((await getChromeAIAvailability()) !== 'available') {
+        setStatus('Chrome AI model download timed out. Try again later.')
+        dom.loadModelBtn.hidden = false
+        state.phase = 'idle'
+        return
       }
     }
 
-    setStatus('Initializing Chrome AI session…');
-    chromeAIManager = new ChromeAISessionManager();
+    setStatus('Initializing Chrome AI session…')
+    chromeAIManager = new ChromeAISessionManager()
 
     if (!textExtractor) {
-      setStatus('Loading text embedding model (134 MB)…');
-      const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
-      const textLoaded = new Map<string, number>();
+      setStatus('Loading text embedding model (134 MB)…')
+      const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024
+      const textLoaded = new Map<string, number>()
 
       const textProgressCb = (e: ProgressEvent) => {
         if (e.status === 'progress') {
-          textLoaded.set(e.file, e.loaded ?? 0);
-          const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
-          const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
-          setProgress(pct);
-          setStatus(`Loading text model… ${pct.toFixed(0)}%`);
+          textLoaded.set(e.file, e.loaded ?? 0)
+          const total = [...textLoaded.values()].reduce((a, b) => a + b, 0)
+          const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100)
+          setProgress(pct)
+          setStatus(`Loading text model… ${pct.toFixed(0)}%`)
         }
-      };
+      }
 
       const tryLoadText = (device: 'webgpu' | 'wasm') =>
-        (pipeline as Pipeline)(
-          'feature-extraction',
-          'nomic-ai/nomic-embed-text-v1.5',
-          { device, dtype: 'fp32', progress_callback: textProgressCb }
-        ) as Promise<PipelineInstance>;
+        (pipeline as Pipeline)('feature-extraction', 'nomic-ai/nomic-embed-text-v1.5', {
+          device,
+          dtype: 'fp32',
+          progress_callback: textProgressCb
+        }) as Promise<PipelineInstance>
 
       try {
-        textExtractor = await tryLoadText('webgpu');
+        textExtractor = await tryLoadText('webgpu')
       } catch {
-        textLoaded.clear();
-        textExtractor = await tryLoadText('wasm');
+        textLoaded.clear()
+        textExtractor = await tryLoadText('wasm')
       }
     }
 
-    updateDeviceBadge();
-    setProgress(100);
-    state.phase = 'model_ready';
-    setProgress(0);
-    dom.loadModelBtn.hidden = true;
-    dom.modelSelect.disabled = false;
-    dom.openBtn.disabled = false;
-    dom.openBtn.classList.add('primary');
-    dom.demoBtn.disabled = false;
+    updateDeviceBadge()
+    setProgress(100)
+    state.phase = 'model_ready'
+    setProgress(0)
+    dom.loadModelBtn.hidden = true
+    dom.modelSelect.disabled = false
+    dom.openBtn.disabled = false
+    dom.openBtn.classList.add('primary')
+    dom.demoBtn.disabled = false
     if (!dom.resumeBtn.hidden) {
-      dom.resumeBtn.disabled = false;
-      dom.resumeBtn.classList.add('primary');
-      setStatus('Chrome AI ready — resume or open a folder.');
+      dom.resumeBtn.disabled = false
+      dom.resumeBtn.classList.add('primary')
+      setStatus('Chrome AI ready — resume or open a folder.')
     } else {
-      setStatus('Chrome AI ready — open a folder to start.');
+      setStatus('Chrome AI ready — open a folder to start.')
     }
-    return;
+    return
   }
 
   if (state.settings.modelVariant.startsWith('sapiens2')) {
-    const sapiens2Variant = state.settings.modelVariant.split('-')[1] as Sapiens2Variant;
-    let result: Awaited<ReturnType<typeof loadSapiens2>>;
+    const sapiens2Variant = state.settings.modelVariant.split('-')[1] as Sapiens2Variant
+    let result: Awaited<ReturnType<typeof loadSapiens2>>
     try {
-      result = await loadSapiens2(sapiens2Variant, (pct, fromCache) => {
-        setProgress(pct);
-        setStatus(fromCache
-          ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
-          : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`);
-      }, signal, {
-        host: state.settings.customModelHost,
-        uploadedBuffer: pendingSapiens2Buffer ?? undefined,
-      });
+      result = await loadSapiens2(
+        sapiens2Variant,
+        (pct, fromCache) => {
+          setProgress(pct)
+          setStatus(
+            fromCache
+              ? `Loading Sapiens2 (${sapiens2Variant}) from cache…`
+              : `Downloading Sapiens2 (${sapiens2Variant})… ${pct.toFixed(0)}%`
+          )
+        },
+        signal,
+        {
+          host: state.settings.customModelHost,
+          uploadedBuffer: pendingSapiens2Buffer ?? undefined
+        }
+      )
     } finally {
       // Always release the uploaded buffer — even if loading threw — so it
       // isn't held in memory or silently reused on the next attempt.
-      pendingSapiens2Buffer = null;
+      pendingSapiens2Buffer = null
     }
-    sapiens2Session = result.session;
-    modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu';
-    modelFallbackReason = result.fallbackReason;
-    updateDeviceBadge();
-    setProgress(100);
-    state.phase = 'model_ready';
-    setProgress(0);
-    dom.loadModelBtn.hidden = true;
-    dom.modelSelect.disabled = false;
-    dom.openBtn.disabled = false;
-    dom.openBtn.classList.add('primary');
-    dom.demoBtn.disabled = false;
+    sapiens2Session = result.session
+    modelDevice = result.device === 'webgpu' ? 'webgpu' : 'cpu'
+    modelFallbackReason = result.fallbackReason
+    updateDeviceBadge()
+    setProgress(100)
+    state.phase = 'model_ready'
+    setProgress(0)
+    dom.loadModelBtn.hidden = true
+    dom.modelSelect.disabled = false
+    dom.openBtn.disabled = false
+    dom.openBtn.classList.add('primary')
+    dom.demoBtn.disabled = false
     if (!dom.resumeBtn.hidden) {
-      dom.resumeBtn.disabled = false;
-      dom.resumeBtn.classList.add('primary');
-      setStatus('Sapiens2 ready — resume or open a folder.');
+      dom.resumeBtn.disabled = false
+      dom.resumeBtn.classList.add('primary')
+      setStatus('Sapiens2 ready — resume or open a folder.')
     } else {
-      setStatus('Sapiens2 ready — open a folder to start.');
+      setStatus('Sapiens2 ready — open a folder to start.')
     }
-    return;
+    return
   }
 
-  const MODEL_SIZE_BYTES = 380 * 1024 * 1024 + 134 * 1024 * 1024;
-  const loaded = new Map<string, number>();
+  const MODEL_SIZE_BYTES = 380 * 1024 * 1024 + 134 * 1024 * 1024
+  const loaded = new Map<string, number>()
 
   const progressCb = (e: ProgressEvent) => {
     if (e.status === 'progress') {
-      loaded.set(e.file, e.loaded ?? 0);
-      const total = [...loaded.values()].reduce((a, b) => a + b, 0);
-      const pct = Math.min(99, (total / MODEL_SIZE_BYTES) * 100);
-      setProgress(pct);
-      setStatus(`Loading model… ${pct.toFixed(0)}%`);
+      loaded.set(e.file, e.loaded ?? 0)
+      const total = [...loaded.values()].reduce((a, b) => a + b, 0)
+      const pct = Math.min(99, (total / MODEL_SIZE_BYTES) * 100)
+      setProgress(pct)
+      setStatus(`Loading model… ${pct.toFixed(0)}%`)
     }
-  };
+  }
 
-  const tryLoad = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
-    'image-feature-extraction',
-    'nomic-ai/nomic-embed-vision-v1.5',
-    { device, dtype: 'fp32', progress_callback: progressCb, pooling: 'mean', normalize: true }
-  ) as Promise<PipelineInstance>;
+  const tryLoad = (device: 'webgpu' | 'wasm') =>
+    (pipeline as Pipeline)('image-feature-extraction', 'nomic-ai/nomic-embed-vision-v1.5', {
+      device,
+      dtype: 'fp32',
+      progress_callback: progressCb,
+      pooling: 'mean',
+      normalize: true
+    }) as Promise<PipelineInstance>
 
   try {
-    extractor = await tryLoad('webgpu');
-    modelDevice = 'webgpu';
+    extractor = await tryLoad('webgpu')
+    modelDevice = 'webgpu'
   } catch (gpuErr) {
-    console.warn('WebGPU init failed, falling back to wasm:', gpuErr);
-    setStatus('WebGPU unavailable — using CPU (slower)…');
-    loaded.clear();
-    extractor = await tryLoad('wasm');
-    modelDevice = 'cpu';
+    console.warn('WebGPU init failed, falling back to wasm:', gpuErr)
+    setStatus('WebGPU unavailable — using CPU (slower)…')
+    loaded.clear()
+    extractor = await tryLoad('wasm')
+    modelDevice = 'cpu'
   }
-  updateDeviceBadge();
-  setProgress(100);
+  updateDeviceBadge()
+  setProgress(100)
 
   if (state.settings.enableTextSearch) {
-    setStatus('Loading text model for search…');
-    const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
-    const textLoaded = new Map<string, number>();
+    setStatus('Loading text model for search…')
+    const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024
+    const textLoaded = new Map<string, number>()
 
     const textProgressCb = (e: ProgressEvent) => {
       if (e.status === 'progress') {
-        textLoaded.set(e.file, e.loaded ?? 0);
-        const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
-        const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
-        setProgress(pct);
-        setStatus(`Loading text model… ${pct.toFixed(0)}%`);
+        textLoaded.set(e.file, e.loaded ?? 0)
+        const total = [...textLoaded.values()].reduce((a, b) => a + b, 0)
+        const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100)
+        setProgress(pct)
+        setStatus(`Loading text model… ${pct.toFixed(0)}%`)
       }
-    };
+    }
 
-    const tryLoadText = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
-      'feature-extraction',
-      'nomic-ai/nomic-embed-text-v1.5',
-      { device, dtype: 'fp32', progress_callback: textProgressCb }
-    ) as Promise<PipelineInstance>;
+    const tryLoadText = (device: 'webgpu' | 'wasm') =>
+      (pipeline as Pipeline)('feature-extraction', 'nomic-ai/nomic-embed-text-v1.5', {
+        device,
+        dtype: 'fp32',
+        progress_callback: textProgressCb
+      }) as Promise<PipelineInstance>
 
     try {
-      textExtractor = await tryLoadText('webgpu');
+      textExtractor = await tryLoadText('webgpu')
     } catch (gpuErr) {
-      console.warn('Text model WebGPU failed, using wasm:', gpuErr);
-      textLoaded.clear();
-      textExtractor = await tryLoadText('wasm');
+      console.warn('Text model WebGPU failed, using wasm:', gpuErr)
+      textLoaded.clear()
+      textExtractor = await tryLoadText('wasm')
     }
-    setProgress(100);
+    setProgress(100)
   }
 
-  state.phase = 'model_ready';
-  setProgress(0);
-  dom.loadModelBtn.hidden = true;
-  dom.modelSelect.disabled = true;
-  dom.openBtn.disabled = false;
-  dom.openBtn.classList.add('primary');
-  dom.demoBtn.disabled = false;
+  state.phase = 'model_ready'
+  setProgress(0)
+  dom.loadModelBtn.hidden = true
+  dom.modelSelect.disabled = true
+  dom.openBtn.disabled = false
+  dom.openBtn.classList.add('primary')
+  dom.demoBtn.disabled = false
   if (!dom.resumeBtn.hidden) {
-    dom.resumeBtn.disabled = false;
-    dom.resumeBtn.classList.add('primary');
-    setStatus('Model ready — resume or open a folder.');
+    dom.resumeBtn.disabled = false
+    dom.resumeBtn.classList.add('primary')
+    setStatus('Model ready — resume or open a folder.')
   } else {
-    setStatus('Model ready — open a folder to start.');
+    setStatus('Model ready — open a folder to start.')
   }
 }
 
 // ── Model download fallback (offline / corporate proxy) ──────────────────────
 interface FallbackChoice {
-  host?: string;                  // alternative HuggingFace-compatible host (may be '')
-  sapiensBuffer?: ArrayBuffer;    // uploaded single .onnx (Sapiens2)
-  uploadFiles?: Map<string, File>; // uploaded model folder (Transformers.js)
+  host?: string // alternative HuggingFace-compatible host (may be '')
+  sapiensBuffer?: ArrayBuffer // uploaded single .onnx (Sapiens2)
+  uploadFiles?: Map<string, File> // uploaded model folder (Transformers.js)
 }
 
 // Show the recovery modal after a download failure. Resolves with the user's
 // choice, or null if they cancelled.
 function showModelFallbackModal(variant: string): Promise<FallbackChoice | null> {
-  const isSapiens = variant.startsWith('sapiens2');
+  const isSapiens = variant.startsWith('sapiens2')
 
   // Visible, copy/curl-friendly direct links (always against the canonical Hub).
   const urls = modelDownloadUrls(variant, {
-    includeText: variant === 'nomic' && state.settings.enableTextSearch,
-  });
+    includeText: variant === 'nomic' && state.settings.enableTextSearch
+  })
   dom.modelFallbackUrls.innerHTML = urls
     .map((u) => `<li>🔗 <a href="${u}" target="_blank" rel="noopener">${u}</a></li>`)
-    .join('');
+    .join('')
 
   // Single .onnx for Sapiens2; whole model folder for Transformers.js repos.
   if (isSapiens) {
-    dom.modelFallbackFile.accept = '.onnx';
-    dom.modelFallbackFile.removeAttribute('webkitdirectory');
-    dom.modelFallbackFile.multiple = false;
-    dom.modelFallbackFileHint.textContent = 'Select the single .onnx file listed above.';
+    dom.modelFallbackFile.accept = '.onnx'
+    dom.modelFallbackFile.removeAttribute('webkitdirectory')
+    dom.modelFallbackFile.multiple = false
+    dom.modelFallbackFileHint.textContent = 'Select the single .onnx file listed above.'
   } else {
-    dom.modelFallbackFile.removeAttribute('accept');
-    dom.modelFallbackFile.setAttribute('webkitdirectory', '');
-    dom.modelFallbackFile.multiple = true;
+    dom.modelFallbackFile.removeAttribute('accept')
+    dom.modelFallbackFile.setAttribute('webkitdirectory', '')
+    dom.modelFallbackFile.multiple = true
     dom.modelFallbackFileHint.textContent =
-      'Select the downloaded model folder (must contain config.json and the onnx/ folder).';
+      'Select the downloaded model folder (must contain config.json and the onnx/ folder).'
   }
-  dom.modelFallbackFile.value = '';
-  dom.modelFallbackHost.value = state.settings.customModelHost || '';
-  dom.modelFallbackModal.showModal();
+  dom.modelFallbackFile.value = ''
+  dom.modelFallbackHost.value = state.settings.customModelHost || ''
+  dom.modelFallbackModal.showModal()
 
   return new Promise((resolve) => {
     const finish = (choice: FallbackChoice | null) => {
-      dom.modelFallbackModal.close();
-      dom.modelFallbackRetry.onclick = null;
-      dom.modelFallbackCancel.onclick = null;
-      dom.modelFallbackClose.onclick = null;
-      dom.modelFallbackModal.oncancel = null;
-      dom.modelFallbackRetry.disabled = false;
-      dom.modelFallbackCancel.disabled = false;
-      resolve(choice);
-    };
+      dom.modelFallbackModal.close()
+      dom.modelFallbackRetry.onclick = null
+      dom.modelFallbackCancel.onclick = null
+      dom.modelFallbackClose.onclick = null
+      dom.modelFallbackModal.oncancel = null
+      dom.modelFallbackRetry.disabled = false
+      dom.modelFallbackCancel.disabled = false
+      resolve(choice)
+    }
 
     dom.modelFallbackRetry.onclick = async () => {
       // Reading uploaded files is async — disable both buttons so a double-click
       // can't trigger redundant file reads or a second finish() call.
-      dom.modelFallbackRetry.disabled = true;
-      dom.modelFallbackCancel.disabled = true;
+      dom.modelFallbackRetry.disabled = true
+      dom.modelFallbackCancel.disabled = true
       try {
-        const choice: FallbackChoice = { host: dom.modelFallbackHost.value.trim() };
-        const files = dom.modelFallbackFile.files;
+        const choice: FallbackChoice = {
+          host: dom.modelFallbackHost.value.trim()
+        }
+        const files = dom.modelFallbackFile.files
         if (files && files.length) {
           if (isSapiens) {
-            choice.sapiensBuffer = await files[0].arrayBuffer();
+            choice.sapiensBuffer = await files[0].arrayBuffer()
           } else {
-            const map = new Map<string, File>();
+            const map = new Map<string, File>()
             for (let i = 0; i < files.length; i++) {
-              map.set(files[i].webkitRelativePath || files[i].name, files[i]);
+              map.set(files[i].webkitRelativePath || files[i].name, files[i])
             }
-            choice.uploadFiles = map;
+            choice.uploadFiles = map
           }
         }
-        finish(choice);
+        finish(choice)
       } catch (err) {
         // File read failed — re-enable so the user can try again.
-        dom.modelFallbackRetry.disabled = false;
-        dom.modelFallbackCancel.disabled = false;
-        showToast(`Couldn't read the uploaded file: ${(err as Error).message}`, 'error');
+        dom.modelFallbackRetry.disabled = false
+        dom.modelFallbackCancel.disabled = false
+        showToast(`Couldn't read the uploaded file: ${(err as Error).message}`, 'error')
       }
-    };
-    dom.modelFallbackCancel.onclick = () => finish(null);
-    dom.modelFallbackClose.onclick = () => finish(null);
-    dom.modelFallbackModal.oncancel = () => finish(null); // Esc key
-  });
+    }
+    dom.modelFallbackCancel.onclick = () => finish(null)
+    dom.modelFallbackClose.onclick = () => finish(null)
+    dom.modelFallbackModal.oncancel = () => finish(null) // Esc key
+  })
 }
 
 function applyFallbackChoice(choice: FallbackChoice) {
   if (choice.host !== undefined) {
-    state.settings.customModelHost = normalizeHost(choice.host);
-    saveSettings();
-    applyModelEnv();
+    state.settings.customModelHost = normalizeHost(choice.host)
+    saveSettings()
+    applyModelEnv()
   }
-  if (choice.sapiensBuffer) pendingSapiens2Buffer = choice.sapiensBuffer;
+  if (choice.sapiensBuffer) pendingSapiens2Buffer = choice.sapiensBuffer
   if (choice.uploadFiles) {
     // Feed the uploaded files to Transformers.js via a custom Web Cache.
-    (env as unknown as { useCustomCache: boolean }).useCustomCache = true;
-    (env as unknown as { customCache: unknown }).customCache = buildUploadCache(choice.uploadFiles);
+    ;(env as unknown as { useCustomCache: boolean }).useCustomCache = true
+    ;(env as unknown as { customCache: unknown }).customCache = buildUploadCache(choice.uploadFiles)
   }
 }
 
 // Load the model, retrying through the fallback modal on download failures.
 async function loadModel(signal?: AbortSignal) {
-  if (extractor || sapiens2Session || chromeAIManager) return;
+  if (extractor || sapiens2Session || chromeAIManager) return
   // Clear any custom upload cache from a previous run — env is a global
   // singleton, so a stale cache would otherwise keep serving old files when the
   // user switches models or starts a new session. A fresh upload re-sets it
   // inside the retry loop below via applyFallbackChoice().
-  (env as unknown as { useCustomCache: boolean }).useCustomCache = false;
-  (env as unknown as { customCache: unknown }).customCache = null;
+  ;(env as unknown as { useCustomCache: boolean }).useCustomCache = false
+  ;(env as unknown as { customCache: unknown }).customCache = null
   while (true) {
     try {
-      await loadModelOnce(signal);
-      return;
+      await loadModelOnce(signal)
+      return
     } catch (err) {
-      if ((err as Error)?.name === 'AbortError') throw err;
+      if ((err as Error)?.name === 'AbortError') throw err
       if (isDownloadError(err)) {
-        const choice = await showModelFallbackModal(state.settings.modelVariant);
+        const choice = await showModelFallbackModal(state.settings.modelVariant)
         if (choice) {
-          applyFallbackChoice(choice);
-          continue; // retry with the new host / uploaded files
+          applyFallbackChoice(choice)
+          continue // retry with the new host / uploaded files
         }
       }
-      setStatus(`Failed to load model: ${(err as Error).message}`);
-      dom.loadModelBtn.hidden = false;
-      dom.loadModelBtn.disabled = false;
-      throw err;
+      setStatus(`Failed to load model: ${(err as Error).message}`)
+      dom.loadModelBtn.hidden = false
+      dom.loadModelBtn.disabled = false
+      throw err
     }
   }
 }
@@ -1224,20 +1365,23 @@ async function loadModel(signal?: AbortSignal) {
 // full-res, to avoid the OOM this fix is meant to prevent).
 async function resizeForEmbedding(file: File): Promise<RawImage | null> {
   try {
-    const bmp = await createImageBitmap(file, { resizeWidth: 256, resizeQuality: 'medium' });
+    const bmp = await createImageBitmap(file, {
+      resizeWidth: 256,
+      resizeQuality: 'medium'
+    })
     try {
-      const cvs = document.createElement('canvas');
-      cvs.width = bmp.width;
-      cvs.height = bmp.height;
-      const ctx2d = cvs.getContext('2d');
-      if (!ctx2d) return null;
-      ctx2d.drawImage(bmp, 0, 0);
-      return await RawImage.fromCanvas(cvs);
+      const cvs = document.createElement('canvas')
+      cvs.width = bmp.width
+      cvs.height = bmp.height
+      const ctx2d = cvs.getContext('2d')
+      if (!ctx2d) return null
+      ctx2d.drawImage(bmp, 0, 0)
+      return await RawImage.fromCanvas(cvs)
     } finally {
-      bmp.close();
+      bmp.close()
     }
   } catch {
-    return null;
+    return null
   }
 }
 
@@ -1248,146 +1392,165 @@ async function resizeForEmbedding(file: File): Promise<RawImage | null> {
 // future parent/child opens hit directly.
 async function readCachedEmbeddings(
   files: PhotoFile[],
-  cachePrefix: string,
-): Promise<{ keys: CacheKey[]; cached: (Float32Array | null)[]; migrate: [CacheKey, Float32Array][] }> {
-  const keys = files.map(f => `${cachePrefix}${makeCacheKey(f)}` as CacheKey);
+  cachePrefix: string
+): Promise<{
+  keys: CacheKey[]
+  cached: (Float32Array | null)[]
+  migrate: [CacheKey, Float32Array][]
+}> {
+  const keys = files.map((f) => `${cachePrefix}${makeCacheKey(f)}` as CacheKey)
 
   // Query new and legacy keys in a single IDB transaction. Legacy keys only
   // differ for files inside a subfolder (basename !== full path), so we only
   // append those — keeping the extra reads minimal while avoiding a second
   // transaction per batch (which matters when batchSize is 1, e.g. Sapiens2).
-  const queryKeys = [...keys];
-  const legacyForFile: number[] = []; // queryKeys index -> file index
+  const queryKeys = [...keys]
+  const legacyForFile: number[] = [] // queryKeys index -> file index
   files.forEach((f, i) => {
     if (f.name.includes('/')) {
-      legacyForFile[queryKeys.length] = i;
-      queryKeys.push(`${cachePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+      legacyForFile[queryKeys.length] = i
+      queryKeys.push(`${cachePrefix}${f.name}:${f.size}:${f.lastModified}` as CacheKey)
     }
-  });
+  })
 
-  const results = await cacheGetBatch(queryKeys);
-  const cached = results.slice(0, files.length);
-  const migrate: [CacheKey, Float32Array][] = [];
+  const results = await cacheGetBatch(queryKeys)
+  const cached = results.slice(0, files.length)
+  const migrate: [CacheKey, Float32Array][] = []
 
   for (let q = files.length; q < results.length; q++) {
-    const i = legacyForFile[q];
-    if (i === undefined || cached[i]) continue; // new key already hit
-    const v = results[q];
-    if (v) { cached[i] = v; migrate.push([keys[i], v]); } // migrate to new key
+    const i = legacyForFile[q]
+    if (i === undefined || cached[i]) continue // new key already hit
+    const v = results[q]
+    if (v) {
+      cached[i] = v
+      migrate.push([keys[i], v])
+    } // migrate to new key
   }
-  return { keys, cached, migrate };
+  return { keys, cached, migrate }
 }
 
 // ── Embedding loop ───────────────────────────────────────────────────────────
 async function embedAll(files: PhotoFile[]) {
-  state.phase = 'embedding';
-  const vectors = new Array<Float32Array>(files.length);
-  let cacheHits = 0;
-  const writeQueue: [CacheKey, Float32Array][] = [];
-  lastProgressiveCount = 0;
-  lastProgressiveTime = 0;
-  const embedStart = performance.now();
+  state.phase = 'embedding'
+  const vectors = new Array<Float32Array>(files.length)
+  let cacheHits = 0
+  const writeQueue: [CacheKey, Float32Array][] = []
+  lastProgressiveCount = 0
+  lastProgressiveTime = 0
+  const embedStart = performance.now()
 
-  const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2');
-  const isChromeAI = state.settings.modelVariant === 'chrome-ai';
+  const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2')
+  const isChromeAI = state.settings.modelVariant === 'chrome-ai'
   // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel
   // session speedup. The transformers path adapts: the working batch size
   // halves after a GPU failure and creeps back up after sustained successes.
-  const batcher = createAdaptiveBatcher(state.settings.batchSize);
+  const batcher = createAdaptiveBatcher(state.settings.batchSize)
   // Separate cache namespace per variant so vectors don't collide across models.
   // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
-  const cachePrefix = isChromeAI ? '@chrome-ai/'
-    : !isSapiens2 ? ''
-    : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
-    : `@${state.settings.modelVariant}/`;
+  const cachePrefix = isChromeAI
+    ? '@chrome-ai/'
+    : !isSapiens2
+      ? ''
+      : state.settings.modelVariant === 'sapiens2-fp16'
+        ? '@sapiens2/'
+        : `@${state.settings.modelVariant}/`
 
-  for (let i = 0; i < files.length;) {
-    const batchSize = isChromeAI ? 2 : isSapiens2 ? 1 : batcher.size;
-    const batch = files.slice(i, Math.min(i + batchSize, files.length));
+  for (let i = 0; i < files.length; ) {
+    const batchSize = isChromeAI ? 2 : isSapiens2 ? 1 : batcher.size
+    const batch = files.slice(i, Math.min(i + batchSize, files.length))
 
     // One IDB transaction for the whole batch, with legacy-key fallback so
     // embeddings cached by older builds (full-path keys) are reused and migrated.
-    const { keys, cached, migrate } = await readCachedEmbeddings(batch, cachePrefix);
-    if (migrate.length > 0) writeQueue.push(...migrate);
+    const { keys, cached, migrate } = await readCachedEmbeddings(batch, cachePrefix)
+    if (migrate.length > 0) writeQueue.push(...migrate)
 
     // Resolve inputs for cache misses
-    const missIndices: number[] = [];
-    const missInputs: (File | RawImage | ImageBitmap)[] = [];
+    const missIndices: number[] = []
+    const missInputs: (File | RawImage | ImageBitmap)[] = []
 
-    await Promise.all(batch.map(async (f, bi) => {
-      if (cached[bi]) return; // cache hit — handled below
-      const idx = i + bi;
-      const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-      if (VIDEO_EXTS.has(ext)) {
-        // Use cached thumbnail if available, otherwise extract frame now
-        let thumb: ImageBitmap | null = state.thumbnails[idx] ?? null;
-        if (!thumb && !thumbFailed.has(idx)) {
-          thumb = await videoFrameLimit(() => extractVideoFrame(f.file));
-          if (!thumb) thumbFailed.add(idx);
-        }
-        if (thumb) {
-          if (!state.thumbnails[idx]) {
-            state.thumbnails[idx] = thumb;
-            thumbDecoding.delete(idx);
+    await Promise.all(
+      batch.map(async (f, bi) => {
+        if (cached[bi]) return // cache hit — handled below
+        const idx = i + bi
+        const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+        if (VIDEO_EXTS.has(ext)) {
+          // Use cached thumbnail if available, otherwise extract frame now
+          let thumb: ImageBitmap | null = state.thumbnails[idx] ?? null
+          if (!thumb && !thumbFailed.has(idx)) {
+            thumb = await videoFrameLimit(() => extractVideoFrame(f.file))
+            if (!thumb) thumbFailed.add(idx)
           }
-          if (isSapiens2) {
-            missInputs.push(thumb);
-          } else if (isChromeAI) {
-            // Clone so Chrome AI doesn't close the bitmap that's cached in state.thumbnails
-            missInputs.push(await createImageBitmap(thumb));
-          } else {
-            const canvas = document.createElement('canvas');
-            canvas.width = thumb.width;
-            canvas.height = thumb.height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              ctx.drawImage(thumb, 0, 0);
-              missInputs.push(await RawImage.fromCanvas(canvas));
-            } else {
-              missInputs.push(f.file);
+          if (thumb) {
+            if (!state.thumbnails[idx]) {
+              state.thumbnails[idx] = thumb
+              thumbDecoding.delete(idx)
             }
+            if (isSapiens2) {
+              missInputs.push(thumb)
+            } else if (isChromeAI) {
+              // Clone so Chrome AI doesn't close the bitmap that's cached in state.thumbnails
+              missInputs.push(await createImageBitmap(thumb))
+            } else {
+              const canvas = document.createElement('canvas')
+              canvas.width = thumb.width
+              canvas.height = thumb.height
+              const ctx = canvas.getContext('2d')
+              if (ctx) {
+                ctx.drawImage(thumb, 0, 0)
+                missInputs.push(await RawImage.fromCanvas(canvas))
+              } else {
+                missInputs.push(f.file)
+              }
+            }
+          } else {
+            missInputs.push(f.file)
+          }
+        } else if (isSapiens2) {
+          // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
+          missInputs.push(f.file)
+        } else if (isChromeAI) {
+          // Use cached thumbnail if already decoded, else create a small bitmap.
+          // Always create a fresh bitmap for the inference queue — never share the
+          // state.thumbnails reference, because Chrome AI closes the bitmap after use.
+          const cached = state.thumbnails[idx]
+          try {
+            missInputs.push(
+              cached
+                ? await createImageBitmap(cached) // clone so the canvas copy stays intact
+                : await createImageBitmap(f.file, {
+                    resizeWidth: 128,
+                    resizeQuality: 'medium'
+                  })
+            )
+          } catch {
+            missInputs.push(f.file)
+            missIndices.push(bi)
+            return
           }
         } else {
-          missInputs.push(f.file);
+          const resized = await resizeForEmbedding(f.file)
+          if (resized !== null) {
+            missInputs.push(resized)
+          } else {
+            // Cannot resize — use zero vector rather than risking OOM with full-res
+            vectors[i + bi] = new Float32Array(768)
+            return
+          }
         }
-      } else if (isSapiens2) {
-        // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
-        missInputs.push(f.file);
-      } else if (isChromeAI) {
-        // Use cached thumbnail if already decoded, else create a small bitmap.
-        // Always create a fresh bitmap for the inference queue — never share the
-        // state.thumbnails reference, because Chrome AI closes the bitmap after use.
-        const cached = state.thumbnails[idx];
-        try {
-          missInputs.push(cached
-            ? await createImageBitmap(cached)  // clone so the canvas copy stays intact
-            : await createImageBitmap(f.file, { resizeWidth: 128, resizeQuality: 'medium' }));
-        } catch {
-          missInputs.push(f.file);
-          missIndices.push(bi);
-          return;
-        }
-      } else {
-        const resized = await resizeForEmbedding(f.file);
-        if (resized !== null) {
-          missInputs.push(resized);
-        } else {
-          // Cannot resize — use zero vector rather than risking OOM with full-res
-          vectors[i + bi] = new Float32Array(768);
-          return;
-        }
-      }
-      missIndices.push(bi);
-    }));
+        missIndices.push(bi)
+      })
+    )
 
     // Apply cache hits
     for (let bi = 0; bi < batch.length; bi++) {
       if (cached[bi]) {
-        vectors[i + bi] = cached[bi]!;
-        cacheHits++;
+        vectors[i + bi] = cached[bi]!
+        cacheHits++
         if (isChromeAI) {
-          const f = batch[bi];
-          state.captions[i + bi] = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
+          const f = batch[bi]
+          state.captions[i + bi] = localStorage.getItem(
+            `@caption/${f.name}:${f.size}:${f.lastModified}`
+          )
         }
       }
     }
@@ -1397,318 +1560,358 @@ async function embedAll(files: PhotoFile[]) {
       // Inputs that failed even alone get a zero vector in RAM for this
       // session but must NOT be written to the cache — a cached zero would
       // permanently poison that file's embedding.
-      const failedInputs = new Set<File | RawImage | ImageBitmap>();
+      const failedInputs = new Set<File | RawImage | ImageBitmap>()
       try {
-        let extracted: Float32Array[];
+        let extracted: Float32Array[]
         if (isSapiens2) {
-          if (!sapiens2Session) throw new Error('Sapiens2 session not loaded');
-          extracted = await embedWithSapiens2(
-            sapiens2Session,
-            missInputs as (File | ImageBitmap)[],
-          );
+          if (!sapiens2Session) throw new Error('Sapiens2 session not loaded')
+          extracted = await embedWithSapiens2(sapiens2Session, missInputs as (File | ImageBitmap)[])
         } else if (isChromeAI) {
-          if (!chromeAIManager) throw new Error('Chrome AI not initialized');
-          if (!textExtractor) throw new Error('Text embedding model not loaded');
-          extracted = [];
+          if (!chromeAIManager) throw new Error('Chrome AI not initialized')
+          if (!textExtractor) throw new Error('Text embedding model not loaded')
+          extracted = []
           // Fire all describes in parallel (each using its own session slot)
-          const prompt = getChromeAIPrompt();
+          const prompt = getChromeAIPrompt()
           const descs = await Promise.all(
             missInputs.map((input, m) =>
               chromeAIManager!.describe(input as ImageBitmap | Blob, prompt, undefined, m)
             )
-          );
+          )
           for (let m = 0; m < descs.length; m++) {
-            const description = descs[m];
-            const f = batch[missIndices[m]];
-            state.captions[i + missIndices[m]] = description;
-            try { localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description); } catch (_) { console.warn('Caption cache full'); }
+            const description = descs[m]
+            const f = batch[missIndices[m]]
+            state.captions[i + missIndices[m]] = description
+            try {
+              localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description)
+            } catch (_) {
+              console.warn('Caption cache full')
+            }
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
-            const output = await textExtractor(`search_document: ${description}`, { pooling: 'mean', normalize: true });
-            extracted.push(extractVector(output));
+            const output = await textExtractor(`search_document: ${description}`, {
+              pooling: 'mean',
+              normalize: true
+            })
+            extracted.push(extractVector(output))
           }
         } else {
-          if (!extractor) throw new Error('Extractor not loaded');
-          const ex = extractor;
+          if (!extractor) throw new Error('Extractor not loaded')
+          const ex = extractor
           // On failure (typically GPU OOM) bisect the batch and retry, so a
           // whole batch is never zero-filled because of one bad input or a
           // transient memory spike.
           extracted = await embedBatchAdaptive(
             missInputs,
             async (chunk) => {
-              const output = await ex(chunk.length === 1 ? chunk[0] : chunk, { pooling: 'mean', normalize: true });
-              const vecs = chunk.length === 1
-                ? [extractVector(output)]
-                : extractBatchedVectors(output, chunk.length);
-              batcher.recordSuccess();
-              return vecs;
+              const output = await ex(chunk.length === 1 ? chunk[0] : chunk, {
+                pooling: 'mean',
+                normalize: true
+              })
+              const vecs =
+                chunk.length === 1
+                  ? [extractVector(output)]
+                  : extractBatchedVectors(output, chunk.length)
+              batcher.recordSuccess()
+              return vecs
             },
             (input, err) => {
-              failedInputs.add(input);
-              console.warn('Embedding failed for one file, using zero vector:', (err as Error).message);
-              return new Float32Array(768);
+              failedInputs.add(input)
+              console.warn(
+                'Embedding failed for one file, using zero vector:',
+                (err as Error).message
+              )
+              return new Float32Array(768)
             },
             (len, err) => {
-              batcher.recordFailure();
-              console.warn(`Inference failed at batch size ${len}, retrying smaller (working size now ${batcher.size}):`, (err as Error).message);
-            },
-          );
+              batcher.recordFailure()
+              console.warn(
+                `Inference failed at batch size ${len}, retrying smaller (working size now ${batcher.size}):`,
+                (err as Error).message
+              )
+            }
+          )
         }
 
         for (let m = 0; m < missIndices.length; m++) {
-          const bi = missIndices[m];
-          const idx = i + bi;
-          vectors[idx] = extracted[m];
+          const bi = missIndices[m]
+          const idx = i + bi
+          vectors[idx] = extracted[m]
           if (!failedInputs.has(missInputs[m])) {
-            writeQueue.push([keys[bi], vectors[idx]]);
+            writeQueue.push([keys[bi], vectors[idx]])
           }
         }
       } catch (err) {
-        console.warn('Batch inference failed, filling zeros:', (err as Error).message);
+        console.warn('Batch inference failed, filling zeros:', (err as Error).message)
         for (const bi of missIndices) {
-          vectors[i + bi] = new Float32Array(768);
+          vectors[i + bi] = new Float32Array(768)
         }
       }
     }
 
     if (writeQueue.length > 0) {
-      await cachePutBatch(writeQueue);
-      writeQueue.length = 0;
+      await cachePutBatch(writeQueue)
+      writeQueue.length = 0
     }
 
-    const done = i + batch.length;
+    const done = i + batch.length
 
     if (done < PROGRESSIVE_MIN) {
       // Too few vectors for projection — show a simple grid
-      resizeCanvas();
-      const cols = Math.ceil(Math.sqrt(files.length));
+      resizeCanvas()
+      const cols = Math.ceil(Math.sqrt(files.length))
       state.points = Array.from({ length: done }, (_, j) => [
-        (j % cols) * 60, Math.floor(j / cols) * 60
-      ]) as Point[];
-      fitCamera();
-      scheduleRender();
+        (j % cols) * 60,
+        Math.floor(j / cols) * 60
+      ]) as Point[]
+      fitCamera()
+      scheduleRender()
     } else if (
       !progressiveProjectionRunning &&
       done > lastProgressiveCount &&
       (lastProgressiveCount === 0 || performance.now() - lastProgressiveTime >= PROGRESSIVE_MIN_MS)
     ) {
-      const isFirst = lastProgressiveCount === 0; // first progressive projection → fit camera
-      lastProgressiveCount = done;
-      lastProgressiveTime = performance.now();
-      progressiveProjectionRunning = true;
-      const partialVecs = vectors.slice(0, done);
-      const nNeigh = Math.max(2, Math.min(15, done - 1));
+      const isFirst = lastProgressiveCount === 0 // first progressive projection → fit camera
+      lastProgressiveCount = done
+      lastProgressiveTime = performance.now()
+      progressiveProjectionRunning = true
+      const partialVecs = vectors.slice(0, done)
+      const nNeigh = Math.max(2, Math.min(15, done - 1))
       runProjection(partialVecs, 'PCA', nNeigh, { silent: true })
-        .then(rawPts => spreadPointsAsync(rawPts, state.settings.density))
-        .then(spreadPts => {
+        .then((rawPts) => spreadPointsAsync(rawPts, state.settings.density))
+        .then((spreadPts) => {
           if (state.phase === 'embedding') {
-            state.points = spreadPts;
-            resizeCanvas();
-            if (isFirst) fitCamera();
-            scheduleRender();
+            state.points = spreadPts
+            resizeCanvas()
+            if (isFirst) fitCamera()
+            scheduleRender()
           }
         })
-        .catch((err) => { console.error('Progressive projection failed:', err); })
-        .finally(() => { progressiveProjectionRunning = false; });
+        .catch((err) => {
+          console.error('Progressive projection failed:', err)
+        })
+        .finally(() => {
+          progressiveProjectionRunning = false
+        })
     }
-    const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : '';
+    const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : ''
     // Overall rate self-corrects as cache-hit bursts fade; only show the ETA
     // once a few seconds have passed so early estimates aren't nonsense.
-    const elapsedSec = (performance.now() - embedStart) / 1000;
-    const eta = elapsedSec > 3 && done > 0
-      ? ` · ${(done / elapsedSec).toFixed(1)}/s · ${formatEta((files.length - done) * elapsedSec / done)}`
-      : '';
-    setStatus(`Embedding ${done} / ${files.length} images…${eta}${fromCache}`);
-    setProgress(10 + (done / files.length) * 80); // 10% to 90%
+    const elapsedSec = (performance.now() - embedStart) / 1000
+    const eta =
+      elapsedSec > 3 && done > 0
+        ? ` · ${(done / elapsedSec).toFixed(1)}/s · ${formatEta(((files.length - done) * elapsedSec) / done)}`
+        : ''
+    setStatus(`Embedding ${done} / ${files.length} images…${eta}${fromCache}`)
+    setProgress(10 + (done / files.length) * 80) // 10% to 90%
 
-    const pressure = getMemoryPressure();
-    if (pressure !== null && pressure.freeRatio < 0.20) {
-      setStatus(`Low memory (${(pressure.freeRatio * 100).toFixed(0)}% free) — stopping at ${done} / ${files.length} files…`);
-      await cachePutBatch(writeQueue);
-      writeQueue.length = 0;
-      return vectors.slice(0, done);
+    const pressure = getMemoryPressure()
+    if (pressure !== null && pressure.freeRatio < 0.2) {
+      setStatus(
+        `Low memory (${(pressure.freeRatio * 100).toFixed(0)}% free) — stopping at ${done} / ${files.length} files…`
+      )
+      await cachePutBatch(writeQueue)
+      writeQueue.length = 0
+      return vectors.slice(0, done)
     }
 
-    i = done;
-    await yieldMain();
+    i = done
+    await yieldMain()
   }
 
-  refreshCacheSize();
-  return vectors;
+  refreshCacheSize()
+  return vectors
 }
 
 // ── Main run ─────────────────────────────────────────────────────────────────
 async function processFiles(files: PhotoFile[]) {
   if (files.length === 0) {
-    setStatus('No images found.');
-    return;
+    setStatus('No images found.')
+    return
   }
 
   // Clean up old resources before processing new files (prevents blob URL errors)
-  for (const bmp of state.thumbnails) { if (bmp?.close) bmp.close(); }
-  for (const f of state.files) {
-    if (f.objectURL) { URL.revokeObjectURL(f.objectURL); f.objectURL = null; }
+  for (const bmp of state.thumbnails) {
+    if (bmp?.close) bmp.close()
   }
-  thumbDecoding.clear();
-  thumbFailed.clear();
-  thumbnailLRU.clear();
+  for (const f of state.files) {
+    if (f.objectURL) {
+      URL.revokeObjectURL(f.objectURL)
+      f.objectURL = null
+    }
+  }
+  thumbDecoding.clear()
+  thumbFailed.clear()
+  thumbnailLRU.clear()
 
   // Clear points immediately so render() exits early while state.files is being replaced.
   // Without this, a render triggered during async embedding would iterate old point indices
   // against the new (possibly shorter) files array, causing objectURL access on undefined.
-  state.points = [];
+  state.points = []
 
-  state.files = files;
+  state.files = files
 
   // VIEWER MODE: Skip all AI processing
   if (state.settings.viewerOnly) {
-    setStatus(`Viewer mode: ${files.length} files (no AI)`);
-    setProgress(10);
+    setStatus(`Viewer mode: ${files.length} files (no AI)`)
+    setProgress(10)
 
     // Sort files by folder then date to match visual grid layout
     // This ensures n/p navigation follows the visual order
-    const folderGroups = new Map<string, PhotoFile[]>();
+    const folderGroups = new Map<string, PhotoFile[]>()
     for (const f of files) {
-      const pathParts = f.name.split('/');
-      const folder = pathParts.slice(0, -1).join('/') || '(root)';
-      if (!folderGroups.has(folder)) folderGroups.set(folder, []);
-      folderGroups.get(folder)!.push(f);
+      const pathParts = f.name.split('/')
+      const folder = pathParts.slice(0, -1).join('/') || '(root)'
+      if (!folderGroups.has(folder)) folderGroups.set(folder, [])
+      folderGroups.get(folder)!.push(f)
     }
-    const sortedFolders = Array.from(folderGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const sortedFolders = Array.from(folderGroups.entries()).sort((a, b) =>
+      a[0].localeCompare(b[0])
+    )
     for (const [, folderFiles] of sortedFolders) {
-      folderFiles.sort((a, b) => a.lastModified - b.lastModified);
+      folderFiles.sort((a, b) => a.lastModified - b.lastModified)
     }
-    const sortedFiles = sortedFolders.flatMap(([, files]) => files);
-    state.files = sortedFiles;
+    const sortedFiles = sortedFolders.flatMap(([, files]) => files)
+    state.files = sortedFiles
 
-    state.thumbnails = initThumbnails(sortedFiles);
+    state.thumbnails = initThumbnails(sortedFiles)
 
     // Generate metadata-based grid layout (already sorted)
-    setProgress(50);
-    const layoutPoints = generateMetadataBasedLayout(sortedFiles);
-    state.rawPoints = layoutPoints.map(p => [p[0], p[1]]);
+    setProgress(50)
+    const layoutPoints = generateMetadataBasedLayout(sortedFiles)
+    state.rawPoints = layoutPoints.map((p) => [p[0], p[1]])
 
     // No semantic clustering in viewer mode - use folder-based colors if needed
-    state.clusters = null;
-    state.vectors = [];
+    state.clusters = null
+    state.vectors = []
 
-    resizeCanvas();
-    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density);
-    state.phase = 'done';  // Set after async work completes
-    fitCamera();
-    scheduleRender();
-    setProgress(100);
+    resizeCanvas()
+    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density)
+    state.phase = 'done' // Set after async work completes
+    fitCamera()
+    scheduleRender()
+    setProgress(100)
 
-    setStatus(`${sortedFiles.length} media files — viewer mode (arranged by folder & date)`);
-    if (dom.statsEl) dom.statsEl.textContent = `${sortedFiles.length} files · viewer mode`;
-    dom.recenterBtn.disabled = false;
-    dom.resetBtn.disabled = false;
-    dom.headerRecenterBtn.disabled = false;
-    dom.searchInput.disabled = true;  // No search in viewer mode
+    setStatus(`${sortedFiles.length} media files — viewer mode (arranged by folder & date)`)
+    if (dom.statsEl) dom.statsEl.textContent = `${sortedFiles.length} files · viewer mode`
+    dom.recenterBtn.disabled = false
+    dom.resetBtn.disabled = false
+    dom.headerRecenterBtn.disabled = false
+    dom.searchInput.disabled = true // No search in viewer mode
 
     // Save session state for resume (viewer mode)
-    const fileKeys = sortedFiles.map(f => `${f.name}:${f.size}:${f.lastModified}` as CacheKey);
+    const fileKeys = sortedFiles.map((f) => `${f.name}:${f.size}:${f.lastModified}` as CacheKey)
     try {
-      localStorage.setItem('po_fileKeys', JSON.stringify(fileKeys));
-      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
-      localStorage.setItem('po_clusters', JSON.stringify([])); // No semantic clusters in viewer mode
-      localStorage.setItem('po_viewerMode', 'true'); // Flag for resume handler
-    } catch (_) { showToast('Session state couldn\'t be saved — browser storage is full. Results are visible but won\'t be resumable.', 'warn'); }
+      localStorage.setItem('po_fileKeys', JSON.stringify(fileKeys))
+      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points))
+      localStorage.setItem('po_clusters', JSON.stringify([])) // No semantic clusters in viewer mode
+      localStorage.setItem('po_viewerMode', 'true') // Flag for resume handler
+    } catch (_) {
+      showToast(
+        "Session state couldn't be saved — browser storage is full. Results are visible but won't be resumable.",
+        'warn'
+      )
+    }
 
-    dom.openBtn.disabled = false;
-    return;
+    dom.openBtn.disabled = false
+    return
   }
 
   // AI MODE: Full embedding and projection pipeline
-  setStatus(`Found ${files.length} media files. Loading thumbnails…`);
+  setStatus(`Found ${files.length} media files. Loading thumbnails…`)
 
   try {
-    state.thumbnails = initThumbnails(files);
+    state.thumbnails = initThumbnails(files)
 
-    const vectors = await embedAll(files);
+    const vectors = await embedAll(files)
 
     if (vectors.length < files.length) {
-      const n = vectors.length;
-      state.files = state.files.slice(0, n);
-      state.thumbnails = state.thumbnails.slice(0, n);
-      files = state.files;
+      const n = vectors.length
+      state.files = state.files.slice(0, n)
+      state.thumbnails = state.thumbnails.slice(0, n)
+      files = state.files
     }
 
-    state.vectors = vectors;
+    state.vectors = vectors
 
-    state.phase = 'projecting';
-    setStatus(`Projecting with ${state.settings.projectionMethod}…`);
-    setProgress(90);
-    const nNeighbors = Math.max(2, Math.min(15, files.length - 1));
-    const rawPoints = await runProjection(vectors, state.settings.projectionMethod, nNeighbors);
-    state.rawPoints = rawPoints;
-    setProgress(94);
+    state.phase = 'projecting'
+    setStatus(`Projecting with ${state.settings.projectionMethod}…`)
+    setProgress(90)
+    const nNeighbors = Math.max(2, Math.min(15, files.length - 1))
+    const rawPoints = await runProjection(vectors, state.settings.projectionMethod, nNeighbors)
+    state.rawPoints = rawPoints
+    setProgress(94)
 
-    setStatus('Clustering…');
-    const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(files.length / 2))));
-    state.clusters = await kmeansAsync(rawPoints, k, 60, undefined, f => setProgress(94 + f * 2));
+    setStatus('Clustering…')
+    const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(files.length / 2))))
+    state.clusters = await kmeansAsync(rawPoints, k, 60, undefined, (f) => setProgress(94 + f * 2))
 
-    state.phase = 'done';
-    resizeCanvas();
-    setStatus('Arranging layout…');
-    state.points = await spreadPointsAsync(rawPoints, state.settings.density, undefined, f => setProgress(96 + f * 4));
-    fitCamera();
-    scheduleRender();
-    setProgress(100);
-    const finalMsg = `${files.length} media files · ${k} clusters`;
-    setStatus(`${files.length} media files — tap to view · ${k} clusters`);
-    if (dom.statsEl) dom.statsEl.textContent = finalMsg;
-    dom.recenterBtn.disabled = false;
-    dom.resetBtn.disabled = false;
-    dom.headerRecenterBtn.disabled = false;
-    dom.searchInput.disabled = false;
+    state.phase = 'done'
+    resizeCanvas()
+    setStatus('Arranging layout…')
+    state.points = await spreadPointsAsync(rawPoints, state.settings.density, undefined, (f) =>
+      setProgress(96 + f * 4)
+    )
+    fitCamera()
+    scheduleRender()
+    setProgress(100)
+    const finalMsg = `${files.length} media files · ${k} clusters`
+    setStatus(`${files.length} media files — tap to view · ${k} clusters`)
+    if (dom.statsEl) dom.statsEl.textContent = finalMsg
+    dom.recenterBtn.disabled = false
+    dom.resetBtn.disabled = false
+    dom.headerRecenterBtn.disabled = false
+    dom.searchInput.disabled = false
 
-    state.fileKeys = files.map(f => `${f.name}:${f.size}:${f.lastModified}`);
+    state.fileKeys = files.map((f) => `${f.name}:${f.size}:${f.lastModified}`)
     try {
-      localStorage.setItem('po_fileKeys', JSON.stringify(state.fileKeys));
-      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
-      localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
-    } catch (_) { showToast('Session state couldn\'t be saved — browser storage is full. Results are visible but won\'t be resumable.', 'warn'); }
-
+      localStorage.setItem('po_fileKeys', JSON.stringify(state.fileKeys))
+      localStorage.setItem('po_projectedPoints', JSON.stringify(state.points))
+      localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)))
+    } catch (_) {
+      showToast(
+        "Session state couldn't be saved — browser storage is full. Results are visible but won't be resumable.",
+        'warn'
+      )
+    }
   } catch (err) {
-    console.error(err);
-    setStatus(`Error: ${(err as Error).message}`);
+    console.error(err)
+    setStatus(`Error: ${(err as Error).message}`)
   } finally {
-    dom.openBtn.disabled = false;
+    dom.openBtn.disabled = false
   }
 }
 
 async function run(dirHandle: DirectoryHandle, basePath: string = '') {
-  dom.openBtn.disabled = true;
-  setProgress(0);
+  dom.openBtn.disabled = true
+  setProgress(0)
 
   try {
-    state.currentDirHandle = dirHandle;
-    state.currentBasePath = basePath;
-    setStatus('Scanning folder…');
-    const files = await collectImages(dirHandle, state.settings.randomSampleSize, basePath);
-    await processFiles(files);
+    state.currentDirHandle = dirHandle
+    state.currentBasePath = basePath
+    setStatus('Scanning folder…')
+    const files = await collectImages(dirHandle, state.settings.randomSampleSize, basePath)
+    await processFiles(files)
 
     // Update URL to show current folder (clears any filter state)
-    updateURL({ type: 'folder', path: basePath });
+    updateURL({ type: 'folder', path: basePath })
   } catch (err) {
-    console.error(err);
-    setStatus(`Error: ${(err as Error).message}`);
-    dom.openBtn.disabled = false;
+    console.error(err)
+    setStatus(`Error: ${(err as Error).message}`)
+    dom.openBtn.disabled = false
   }
 }
 
 // Navigate to a subfolder (reuses current directory handle)
 async function navigateToFolder(targetPath: string) {
-  if (!state.currentDirHandle) return;
+  if (!state.currentDirHandle) return
 
   // Close modal first
-  closeModal();
+  closeModal()
 
   // Re-run with new base path
-  await run(state.currentDirHandle, targetPath);
+  await run(state.currentDirHandle, targetPath)
 
   // Update URL for bookmarking/back-forward
-  updateURL({ type: 'folder', path: targetPath });
+  updateURL({ type: 'folder', path: targetPath })
 }
 
 // Filter files by datetime range - rescans original folder
@@ -1720,106 +1923,124 @@ async function filterByDateTime(
   hour?: number,
   minute?: number
 ) {
-  if (!state.currentDirHandle) return;
+  if (!state.currentDirHandle) return
 
   // Close modal first
-  closeModal();
+  closeModal()
 
   // Re-scan the original folder (no random sample, get all files)
-  setStatus(`Scanning folder for ${granularity}…`);
-  const allFiles = await collectImages(state.currentDirHandle, 0, state.currentBasePath);
+  setStatus(`Scanning folder for ${granularity}…`)
+  const allFiles = await collectImages(state.currentDirHandle, 0, state.currentBasePath)
 
   // Filter by datetime range
-  const filtered = allFiles.filter(f => {
-    const d = new Date(f.lastModified);
-    if (d.getFullYear() !== year) return false;
-    if (month !== undefined && d.getMonth() !== month) return false;
-    if (day !== undefined && d.getDate() !== day) return false;
-    if (hour !== undefined && d.getHours() !== hour) return false;
-    if (minute !== undefined && d.getMinutes() !== minute) return false;
-    return true;
-  });
+  const filtered = allFiles.filter((f) => {
+    const d = new Date(f.lastModified)
+    if (d.getFullYear() !== year) return false
+    if (month !== undefined && d.getMonth() !== month) return false
+    if (day !== undefined && d.getDate() !== day) return false
+    if (hour !== undefined && d.getHours() !== hour) return false
+    if (minute !== undefined && d.getMinutes() !== minute) return false
+    return true
+  })
 
   if (filtered.length === 0) {
-    setStatus('No files found in this time range.');
-    return;
+    setStatus('No files found in this time range.')
+    return
   }
 
   // Apply random sample limit if configured and filtered results exceed it
-  let finalFiles = filtered;
-  const sampleLimit = state.settings.randomSampleSize;
+  let finalFiles = filtered
+  const sampleLimit = state.settings.randomSampleSize
   if (sampleLimit > 0 && filtered.length > sampleLimit) {
     // Reservoir sampling on filtered results
-    const sampled: PhotoFile[] = filtered.slice(0, sampleLimit);
+    const sampled: PhotoFile[] = filtered.slice(0, sampleLimit)
     for (let i = sampleLimit; i < filtered.length; i++) {
-      const j = Math.floor(Math.random() * (i + 1));
-      if (j < sampleLimit) sampled[j] = filtered[i];
+      const j = Math.floor(Math.random() * (i + 1))
+      if (j < sampleLimit) sampled[j] = filtered[i]
     }
-    finalFiles = sampled;
+    finalFiles = sampled
   }
 
   // Update display name for status
   const rangeDesc =
-    granularity === 'year' ? year.toString() :
-    granularity === 'month' ? `${year}-${(month! + 1).toString().padStart(2, '0')}` :
-    granularity === 'day' ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}` :
-    granularity === 'hour' ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:00` :
-    `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:${minute!.toString().padStart(2, '0')}`;
+    granularity === 'year'
+      ? year.toString()
+      : granularity === 'month'
+        ? `${year}-${(month! + 1).toString().padStart(2, '0')}`
+        : granularity === 'day'
+          ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}`
+          : granularity === 'hour'
+            ? `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:00`
+            : `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')} ${hour!.toString().padStart(2, '0')}:${minute!.toString().padStart(2, '0')}`
 
   // Clear current state and process filtered files
-  state.phase = 'idle';
-  state.files = [];
-  state.vectors = [];
-  state.points = [];
-  state.rawPoints = null;
-  state.clusters = null;
-  state.thumbnails = [];
-  state.searchResults = null;
-  state.searchQuery = '';
-  state.searchScores = null;
+  state.phase = 'idle'
+  state.files = []
+  state.vectors = []
+  state.points = []
+  state.rawPoints = null
+  state.clusters = null
+  state.thumbnails = []
+  state.searchResults = null
+  state.searchQuery = ''
+  state.searchScores = null
 
   // If extractor isn't loaded, ensure we're in viewer-only mode for filtering
-  const wasViewerOnly = state.settings.viewerOnly;
+  const wasViewerOnly = state.settings.viewerOnly
   if (!extractor) {
-    state.settings.viewerOnly = true;
+    state.settings.viewerOnly = true
   }
 
-  const sampleNote = finalFiles.length < filtered.length ? ` (sampled ${finalFiles.length} of ${filtered.length})` : '';
-  setStatus(`Found ${filtered.length} files from ${rangeDesc}.${sampleNote} Processing...`);
+  const sampleNote =
+    finalFiles.length < filtered.length
+      ? ` (sampled ${finalFiles.length} of ${filtered.length})`
+      : ''
+  setStatus(`Found ${filtered.length} files from ${rangeDesc}.${sampleNote} Processing...`)
 
   try {
-    await processFiles(finalFiles);
+    await processFiles(finalFiles)
   } finally {
     // Restore original viewer-only setting if we temporarily forced it
     if (!extractor && !wasViewerOnly) {
-      state.settings.viewerOnly = wasViewerOnly;
+      state.settings.viewerOnly = wasViewerOnly
     }
   }
 
   // Update URL for bookmarking/back-forward
-  updateURL({ type: 'datetime', granularity, year, month, day, hour, minute });
+  updateURL({ type: 'datetime', granularity, year, month, day, hour, minute })
 }
 
 // ── URL State Management ───────────────────────────────────────────────────────
 // URL format: #folder:path/to/folder or #dt:2025-01-15T14:30
 
-type URLState = { type: 'folder'; path: string } | { type: 'datetime'; granularity: string; year: number; month?: number; day?: number; hour?: number; minute?: number } | null;
+type URLState =
+  | { type: 'folder'; path: string }
+  | {
+      type: 'datetime'
+      granularity: string
+      year: number
+      month?: number
+      day?: number
+      hour?: number
+      minute?: number
+    }
+  | null
 
 function parseURLHash(hash: string): URLState {
-  if (!hash || hash === '#') return null;
+  if (!hash || hash === '#') return null
 
-  const content = hash.slice(1); // Remove #
+  const content = hash.slice(1) // Remove #
 
   if (content.startsWith('folder:')) {
-    return { type: 'folder', path: content.slice(7) };
+    return { type: 'folder', path: content.slice(7) }
   }
 
   if (content.startsWith('dt:')) {
-    const dtStr = content.slice(3);
+    const dtStr = content.slice(3)
     // Parse datetime: 2025-01-15T14:30
-    const parts = dtStr.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}))?(?::(\d{2}))?$/);
+    const parts = dtStr.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}))?(?::(\d{2}))?$/)
     if (parts) {
-      const [, year, month, day, hour, minute] = parts;
+      const [, year, month, day, hour, minute] = parts
       return {
         type: 'datetime',
         granularity: minute ? 'minute' : hour ? 'hour' : 'day',
@@ -1828,45 +2049,48 @@ function parseURLHash(hash: string): URLState {
         day: parseInt(day),
         hour: hour ? parseInt(hour) : undefined,
         minute: minute ? parseInt(minute) : undefined
-      };
+      }
     }
   }
 
-  return null;
+  return null
 }
 
 function updateURL(state: URLState) {
   if (!state) {
-    history.replaceState(null, '', '#');
-    return;
+    history.replaceState(null, '', '#')
+    return
   }
 
-  let hash = '';
+  let hash = ''
   if (state.type === 'folder') {
-    hash = `#folder:${state.path}`;
+    hash = `#folder:${state.path}`
   } else if (state.type === 'datetime') {
-    const { year, month, day, hour, minute } = state;
-    const datePart = `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}`;
-    const timePart = hour !== undefined ? `T${hour.toString().padStart(2, '0')}${minute !== undefined ? ':' + minute.toString().padStart(2, '0') : ''}` : '';
-    hash = `#dt:${datePart}${timePart}`;
+    const { year, month, day, hour, minute } = state
+    const datePart = `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}`
+    const timePart =
+      hour !== undefined
+        ? `T${hour.toString().padStart(2, '0')}${minute !== undefined ? ':' + minute.toString().padStart(2, '0') : ''}`
+        : ''
+    hash = `#dt:${datePart}${timePart}`
   }
 
-  history.pushState(state, '', hash);
+  history.pushState(state, '', hash)
 }
 
 // Handle back/forward navigation
 window.addEventListener('popstate', (e) => {
-  const urlState = parseURLHash(window.location.hash);
+  const urlState = parseURLHash(window.location.hash)
   if (!urlState) {
     // No state - reset to original folder
     if (state.currentBasePath) {
-      navigateToFolder('');
+      navigateToFolder('')
     }
-    return;
+    return
   }
 
   if (urlState.type === 'folder') {
-    navigateToFolder(urlState.path);
+    navigateToFolder(urlState.path)
   } else if (urlState.type === 'datetime') {
     filterByDateTime(
       urlState.granularity as 'year' | 'month' | 'day' | 'hour' | 'minute',
@@ -1875,870 +2099,962 @@ window.addEventListener('popstate', (e) => {
       urlState.day,
       urlState.hour,
       urlState.minute
-    );
+    )
   }
-});
+})
 
 // ── Interaction ──────────────────────────────────────────────────────────────
-const pointers = new Map<number, PointerState>();
-let lastPinchDist = 0;
-let dragMoved = 0;
+const pointers = new Map<number, PointerState>()
+let lastPinchDist = 0
+let dragMoved = 0
 
 function pointerPos(e: PointerEvent): CanvasPointerPos {
-  const rect = dom.canvas.getBoundingClientRect();
+  const rect = dom.canvas.getBoundingClientRect()
   return {
     cx: (e.clientX - rect.left) * (dom.canvas.width / rect.width),
-    cy: (e.clientY - rect.top) * (dom.canvas.height / rect.height),
-  };
+    cy: (e.clientY - rect.top) * (dom.canvas.height / rect.height)
+  }
 }
 
 dom.canvas.addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  dom.canvas.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  dragMoved = 0;
-});
+  e.preventDefault()
+  dom.canvas.setPointerCapture(e.pointerId)
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  dragMoved = 0
+})
 
 dom.canvas.addEventListener('pointermove', (e) => {
-  e.preventDefault();
-  const prev = pointers.get(e.pointerId);
-  if (!prev) return;
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  e.preventDefault()
+  const prev = pointers.get(e.pointerId)
+  if (!prev) return
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
   if (pointers.size === 1) {
-    const dx = e.clientX - prev.x;
-    const dy = e.clientY - prev.y;
-    dragMoved += Math.abs(dx) + Math.abs(dy);
-    camera.x -= dx / camera.scale;
-    camera.y -= dy / camera.scale;
-    state.lastViewedIndex = null;
-    scheduleRender();
+    const dx = e.clientX - prev.x
+    const dy = e.clientY - prev.y
+    dragMoved += Math.abs(dx) + Math.abs(dy)
+    camera.x -= dx / camera.scale
+    camera.y -= dy / camera.scale
+    state.lastViewedIndex = null
+    scheduleRender()
   } else if (pointers.size === 2) {
-    const pts = [...pointers.values()];
-    const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    const pts = [...pointers.values()]
+    const dx = pts[0].x - pts[1].x,
+      dy = pts[0].y - pts[1].y
+    const dist = Math.sqrt(dx * dx + dy * dy)
     if (lastPinchDist > 0) {
-      const midX = (pts[0].x + pts[1].x) / 2;
-      const midY = (pts[0].y + pts[1].y) / 2;
-      const rect = dom.canvas.getBoundingClientRect();
-      const scaleRatio = dom.canvas.width / rect.width;
-      const px = (midX - rect.left) * scaleRatio - dom.canvas.width / 2;
-      const py = (midY - rect.top) * scaleRatio - dom.canvas.height / 2;
-      const ratio = dist / lastPinchDist;
-      camera.x += px / camera.scale - px / (camera.scale * ratio);
-      camera.y += py / camera.scale - py / (camera.scale * ratio);
-      camera.scale = Math.max(0.05, Math.min(20, camera.scale * ratio));
-      state.lastViewedIndex = null;
-      scheduleRender();
+      const midX = (pts[0].x + pts[1].x) / 2
+      const midY = (pts[0].y + pts[1].y) / 2
+      const rect = dom.canvas.getBoundingClientRect()
+      const scaleRatio = dom.canvas.width / rect.width
+      const px = (midX - rect.left) * scaleRatio - dom.canvas.width / 2
+      const py = (midY - rect.top) * scaleRatio - dom.canvas.height / 2
+      const ratio = dist / lastPinchDist
+      camera.x += px / camera.scale - px / (camera.scale * ratio)
+      camera.y += py / camera.scale - py / (camera.scale * ratio)
+      camera.scale = Math.max(0.05, Math.min(20, camera.scale * ratio))
+      state.lastViewedIndex = null
+      scheduleRender()
     }
-    lastPinchDist = dist;
+    lastPinchDist = dist
   }
-});
+})
 
 dom.canvas.addEventListener('pointerup', (e) => {
-  e.preventDefault();
-  const wasSingleTap = pointers.size === 1 && dragMoved < 15;
-  pointers.delete(e.pointerId);
-  if (pointers.size < 2) lastPinchDist = 0;
+  e.preventDefault()
+  const wasSingleTap = pointers.size === 1 && dragMoved < 15
+  pointers.delete(e.pointerId)
+  if (pointers.size < 2) lastPinchDist = 0
 
   if (wasSingleTap && state.points.length) {
-    const { cx, cy } = pointerPos(e);
-    const wx = (cx - dom.canvas.width / 2) / camera.scale + camera.x;
-    const wy = (cy - dom.canvas.height / 2) / camera.scale + camera.y;
-    const hitRadius = (THUMB_WORLD / 2) ** 2;
-    let closest = -1, minD = hitRadius * 4;
+    const { cx, cy } = pointerPos(e)
+    const wx = (cx - dom.canvas.width / 2) / camera.scale + camera.x
+    const wy = (cy - dom.canvas.height / 2) / camera.scale + camera.y
+    const hitRadius = (THUMB_WORLD / 2) ** 2
+    let closest = -1,
+      minD = hitRadius * 4
     for (let i = 0; i < state.points.length; i++) {
-      const ddx = state.points[i][0] - wx, ddy = state.points[i][1] - wy;
-      const d = ddx * ddx + ddy * ddy;
-      if (d < minD) { minD = d; closest = i; }
+      const ddx = state.points[i][0] - wx,
+        ddy = state.points[i][1] - wy
+      const d = ddx * ddx + ddy * ddy
+      if (d < minD) {
+        minD = d
+        closest = i
+      }
     }
     if (closest >= 0) {
-      openFileModal(closest);
+      openFileModal(closest)
     }
   }
-});
+})
 
 dom.canvas.addEventListener('pointercancel', (e) => {
-  pointers.delete(e.pointerId);
-  if (pointers.size < 2) lastPinchDist = 0;
-});
+  pointers.delete(e.pointerId)
+  if (pointers.size < 2) lastPinchDist = 0
+})
 
-dom.canvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const factor = e.deltaY > 0 ? 0.88 : 1.14;
-  const rect = dom.canvas.getBoundingClientRect();
-  const px = (e.clientX - rect.left) * (dom.canvas.width / rect.width) - dom.canvas.width / 2;
-  const py = (e.clientY - rect.top) * (dom.canvas.height / rect.height) - dom.canvas.height / 2;
-  camera.x += px / camera.scale - px / (camera.scale * factor);
-  camera.y += py / camera.scale - py / (camera.scale * factor);
-  camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor));
-  state.lastViewedIndex = null;
-  scheduleRender();
-}, { passive: false });
+dom.canvas.addEventListener(
+  'wheel',
+  (e) => {
+    e.preventDefault()
+    const factor = e.deltaY > 0 ? 0.88 : 1.14
+    const rect = dom.canvas.getBoundingClientRect()
+    const px = (e.clientX - rect.left) * (dom.canvas.width / rect.width) - dom.canvas.width / 2
+    const py = (e.clientY - rect.top) * (dom.canvas.height / rect.height) - dom.canvas.height / 2
+    camera.x += px / camera.scale - px / (camera.scale * factor)
+    camera.y += py / camera.scale - py / (camera.scale * factor)
+    camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor))
+    state.lastViewedIndex = null
+    scheduleRender()
+  },
+  { passive: false }
+)
 
-dom.recenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
-dom.resetBtn.addEventListener('click', resetAll);
-dom.headerRecenterBtn.addEventListener('click', () => { fitCamera(); scheduleRender(); });
+dom.recenterBtn.addEventListener('click', () => {
+  fitCamera()
+  scheduleRender()
+})
+dom.resetBtn.addEventListener('click', resetAll)
+dom.headerRecenterBtn.addEventListener('click', () => {
+  fitCamera()
+  scheduleRender()
+})
 
 // ── Search input ─────────────────────────────────────────────────────────────
-let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+let searchDebounce: ReturnType<typeof setTimeout> | null = null
 
 dom.searchInput.addEventListener('input', () => {
-  dom.searchClearBtn.hidden = !dom.searchInput.value.trim();
+  dom.searchClearBtn.hidden = !dom.searchInput.value.trim()
 
-  if (searchDebounce) clearTimeout(searchDebounce);
+  if (searchDebounce) clearTimeout(searchDebounce)
   searchDebounce = setTimeout(async () => {
     if (dom.searchInput.value.trim()) {
-      await searchImages(dom.searchInput.value);
+      await searchImages(dom.searchInput.value)
     } else {
-      state.searchResults = null;
-      state.searchQuery = '';
-      state.searchScores = null;
-      dom.searchClearBtn.hidden = true;
-      setStatus(`${state.files.length} images · tap to view`);
+      state.searchResults = null
+      state.searchQuery = ''
+      state.searchScores = null
+      dom.searchClearBtn.hidden = true
+      setStatus(`${state.files.length} images · tap to view`)
     }
-    scheduleRender();
-  }, 300);
-});
+    scheduleRender()
+  }, 300)
+})
 
 dom.searchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    dom.searchInput.value = '';
-    state.searchResults = null;
-    state.searchQuery = '';
-    state.searchScores = null;
-    dom.searchClearBtn.hidden = true;
-    setStatus(`${state.files.length} images · tap to view`);
-    scheduleRender();
+    dom.searchInput.value = ''
+    state.searchResults = null
+    state.searchQuery = ''
+    state.searchScores = null
+    dom.searchClearBtn.hidden = true
+    setStatus(`${state.files.length} images · tap to view`)
+    scheduleRender()
   }
-});
+})
 
 dom.searchClearBtn.addEventListener('click', () => {
-  dom.searchInput.value = '';
-  state.searchResults = null;
-  state.searchQuery = '';
-  state.searchScores = null;
-  dom.searchClearBtn.hidden = true;
-  dom.searchInput.focus();
-  setStatus(`${state.files.length} images · tap to view`);
-  scheduleRender();
-});
+  dom.searchInput.value = ''
+  state.searchResults = null
+  state.searchQuery = ''
+  state.searchScores = null
+  dom.searchClearBtn.hidden = true
+  dom.searchInput.focus()
+  setStatus(`${state.files.length} images · tap to view`)
+  scheduleRender()
+})
 
 const openFileModal = (index: number) => {
-  const f = state.files[index];
-  const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+  const f = state.files[index]
+  const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
 
   if (VIDEO_EXTS.has(ext)) {
-    dom.modalImg.style.display = 'none';
-    dom.modalVideo.style.display = 'block';
-    dom.modalVideo.loop = state.settings.loopVideos;
+    dom.modalImg.style.display = 'none'
+    dom.modalVideo.style.display = 'block'
+    dom.modalVideo.loop = state.settings.loopVideos
     // Ensure objectURL exists (created lazily during thumbnail decode)
-    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
-    dom.modalVideo.src = f.objectURL;
-    dom.modalVideo.play().catch(() => {}); // Autoplay when opened
+    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file)
+    dom.modalVideo.src = f.objectURL
+    dom.modalVideo.play().catch(() => {}) // Autoplay when opened
   } else {
-    dom.modalVideo.style.display = 'none';
-    dom.modalVideo.pause();
-    dom.modalVideo.src = '';
-    dom.modalImg.style.display = 'block';
+    dom.modalVideo.style.display = 'none'
+    dom.modalVideo.pause()
+    dom.modalVideo.src = ''
+    dom.modalImg.style.display = 'block'
     // Ensure objectURL exists (created lazily during thumbnail decode); without
     // this, navigating (n/p) to an image not yet rendered on-canvas shows blank.
-    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file);
-    dom.modalImg.src = f.objectURL;
+    if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file)
+    dom.modalImg.src = f.objectURL
   }
 
   // Populate modal footer with metadata
-  const pathParts = f.name.split('/');
-  const filename = pathParts.pop() || '';
+  const pathParts = f.name.split('/')
+  const filename = pathParts.pop() || ''
 
-  dom.modalFilename.textContent = filename;
+  dom.modalFilename.textContent = filename
 
   // Clear and create clickable breadcrumb navigation
   while (dom.modalPath.firstChild) {
-    dom.modalPath.removeChild(dom.modalPath.firstChild);
+    dom.modalPath.removeChild(dom.modalPath.firstChild)
   }
 
   if (pathParts.length === 0) {
-    const rootSpan = document.createElement('span');
-    rootSpan.className = 'modal-link';
-    rootSpan.textContent = '(root)';
-    rootSpan.onclick = () => navigateToFolder('');
-    dom.modalPath.appendChild(rootSpan);
+    const rootSpan = document.createElement('span')
+    rootSpan.className = 'modal-link'
+    rootSpan.textContent = '(root)'
+    rootSpan.onclick = () => navigateToFolder('')
+    dom.modalPath.appendChild(rootSpan)
   } else {
     pathParts.forEach((part, i) => {
       if (i > 0) {
-        const sep = document.createElement('span');
-        sep.className = 'modal-sep';
-        sep.textContent = ' / ';
-        dom.modalPath.appendChild(sep);
+        const sep = document.createElement('span')
+        sep.className = 'modal-sep'
+        sep.textContent = ' / '
+        dom.modalPath.appendChild(sep)
       }
-      const link = document.createElement('span');
-      link.className = 'modal-link';
-      link.textContent = part;
-      const targetPath = pathParts.slice(0, i + 1).join('/');
-      link.onclick = () => navigateToFolder(targetPath);
-      dom.modalPath.appendChild(link);
-    });
+      const link = document.createElement('span')
+      link.className = 'modal-link'
+      link.textContent = part
+      const targetPath = pathParts.slice(0, i + 1).join('/')
+      link.onclick = () => navigateToFolder(targetPath)
+      dom.modalPath.appendChild(link)
+    })
   }
 
   // Up one level button
   if (pathParts.length > 0) {
-    dom.modalUp.style.visibility = 'visible';
+    dom.modalUp.style.visibility = 'visible'
     dom.modalUp.onclick = () => {
-      const upPath = pathParts.slice(0, -1).join('/');
-      navigateToFolder(upPath);
-    };
+      const upPath = pathParts.slice(0, -1).join('/')
+      navigateToFolder(upPath)
+    }
   } else {
-    dom.modalUp.style.visibility = 'hidden';
+    dom.modalUp.style.visibility = 'hidden'
   }
 
   // Create clickable datetime breadcrumbs
-  const date = new Date(f.lastModified);
+  const date = new Date(f.lastModified)
   while (dom.modalDatetime.firstChild) {
-    dom.modalDatetime.removeChild(dom.modalDatetime.firstChild);
+    dom.modalDatetime.removeChild(dom.modalDatetime.firstChild)
   }
 
   // Year
-  const yearLink = document.createElement('span');
-  yearLink.className = 'modal-link';
-  yearLink.textContent = date.getFullYear().toString();
-  yearLink.onclick = () => filterByDateTime('year', date.getFullYear());
-  dom.modalDatetime.appendChild(yearLink);
+  const yearLink = document.createElement('span')
+  yearLink.className = 'modal-link'
+  yearLink.textContent = date.getFullYear().toString()
+  yearLink.onclick = () => filterByDateTime('year', date.getFullYear())
+  dom.modalDatetime.appendChild(yearLink)
 
   // Month
-  const monthSep = document.createElement('span');
-  monthSep.className = 'modal-sep';
-  monthSep.textContent = '/';
-  dom.modalDatetime.appendChild(monthSep);
-  const monthLink = document.createElement('span');
-  monthLink.className = 'modal-link';
-  monthLink.textContent = (date.getMonth() + 1).toString().padStart(2, '0');
-  monthLink.onclick = () => filterByDateTime('month', date.getFullYear(), date.getMonth());
-  dom.modalDatetime.appendChild(monthLink);
+  const monthSep = document.createElement('span')
+  monthSep.className = 'modal-sep'
+  monthSep.textContent = '/'
+  dom.modalDatetime.appendChild(monthSep)
+  const monthLink = document.createElement('span')
+  monthLink.className = 'modal-link'
+  monthLink.textContent = (date.getMonth() + 1).toString().padStart(2, '0')
+  monthLink.onclick = () => filterByDateTime('month', date.getFullYear(), date.getMonth())
+  dom.modalDatetime.appendChild(monthLink)
 
   // Day
-  const daySep = document.createElement('span');
-  daySep.className = 'modal-sep';
-  daySep.textContent = '/';
-  dom.modalDatetime.appendChild(daySep);
-  const dayLink = document.createElement('span');
-  dayLink.className = 'modal-link';
-  dayLink.textContent = date.getDate().toString().padStart(2, '0');
-  dayLink.onclick = () => filterByDateTime('day', date.getFullYear(), date.getMonth(), date.getDate());
-  dom.modalDatetime.appendChild(dayLink);
+  const daySep = document.createElement('span')
+  daySep.className = 'modal-sep'
+  daySep.textContent = '/'
+  dom.modalDatetime.appendChild(daySep)
+  const dayLink = document.createElement('span')
+  dayLink.className = 'modal-link'
+  dayLink.textContent = date.getDate().toString().padStart(2, '0')
+  dayLink.onclick = () =>
+    filterByDateTime('day', date.getFullYear(), date.getMonth(), date.getDate())
+  dom.modalDatetime.appendChild(dayLink)
 
   // Hour
-  const hourSep = document.createElement('span');
-  hourSep.className = 'modal-sep';
-  hourSep.textContent = ' ';
-  dom.modalDatetime.appendChild(hourSep);
-  const hourLink = document.createElement('span');
-  hourLink.className = 'modal-link';
-  hourLink.textContent = date.getHours().toString().padStart(2, '0');
-  hourLink.onclick = () => filterByDateTime('hour', date.getFullYear(), date.getMonth(), date.getDate(), date.getHours());
-  dom.modalDatetime.appendChild(hourLink);
+  const hourSep = document.createElement('span')
+  hourSep.className = 'modal-sep'
+  hourSep.textContent = ' '
+  dom.modalDatetime.appendChild(hourSep)
+  const hourLink = document.createElement('span')
+  hourLink.className = 'modal-link'
+  hourLink.textContent = date.getHours().toString().padStart(2, '0')
+  hourLink.onclick = () =>
+    filterByDateTime('hour', date.getFullYear(), date.getMonth(), date.getDate(), date.getHours())
+  dom.modalDatetime.appendChild(hourLink)
 
   // Minute
-  const minSep = document.createElement('span');
-  minSep.className = 'modal-sep';
-  minSep.textContent = ':';
-  dom.modalDatetime.appendChild(minSep);
-  const minLink = document.createElement('span');
-  minLink.className = 'modal-link';
-  minLink.textContent = date.getMinutes().toString().padStart(2, '0');
-  minLink.onclick = () => filterByDateTime('minute', date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes());
-  dom.modalDatetime.appendChild(minLink);
+  const minSep = document.createElement('span')
+  minSep.className = 'modal-sep'
+  minSep.textContent = ':'
+  dom.modalDatetime.appendChild(minSep)
+  const minLink = document.createElement('span')
+  minLink.className = 'modal-link'
+  minLink.textContent = date.getMinutes().toString().padStart(2, '0')
+  minLink.onclick = () =>
+    filterByDateTime(
+      'minute',
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+      date.getHours(),
+      date.getMinutes()
+    )
+  dom.modalDatetime.appendChild(minLink)
 
   // Store date for updateSizeInfo closure
-  const fileDate = date;
+  const fileDate = date
 
   // Update size and resolution after media loads
   const updateSizeInfo = () => {
-    const width = dom.modalImg.style.display !== 'none'
-      ? dom.modalImg.naturalWidth
-      : dom.modalVideo.videoWidth;
-    const height = dom.modalImg.style.display !== 'none'
-      ? dom.modalImg.naturalHeight
-      : dom.modalVideo.videoHeight;
+    const width =
+      dom.modalImg.style.display !== 'none' ? dom.modalImg.naturalWidth : dom.modalVideo.videoWidth
+    const height =
+      dom.modalImg.style.display !== 'none'
+        ? dom.modalImg.naturalHeight
+        : dom.modalVideo.videoHeight
 
     if (width && height) {
-      const sizeMB = (f.size / (1024 * 1024)).toFixed(f.size < 1024 * 1024 ? 2 : 1);
-      const sizeKB = (f.size / 1024).toFixed(0);
-      const sizeStr = f.size < 1024 * 1024 ? `${sizeKB} KB` : `${sizeMB} MB`;
-      dom.modalMeta.textContent = `${width}×${height} · ${sizeStr}`;
+      const sizeMB = (f.size / (1024 * 1024)).toFixed(f.size < 1024 * 1024 ? 2 : 1)
+      const sizeKB = (f.size / 1024).toFixed(0)
+      const sizeStr = f.size < 1024 * 1024 ? `${sizeKB} KB` : `${sizeMB} MB`
+      dom.modalMeta.textContent = `${width}×${height} · ${sizeStr}`
     }
-  };
+  }
 
   // Try immediately (might be cached), otherwise wait for load
-  updateSizeInfo();
+  updateSizeInfo()
   if (dom.modalImg.style.display !== 'none') {
-    dom.modalImg.onload = updateSizeInfo;
+    dom.modalImg.onload = updateSizeInfo
   } else {
-    dom.modalVideo.onloadedmetadata = updateSizeInfo;
+    dom.modalVideo.onloadedmetadata = updateSizeInfo
   }
 
   // EXIF: full parse lazily; result feeds footer GPS and detail dialog
-  const gpsSep = document.getElementById('modal-gps-sep') as HTMLSpanElement;
-  const exifSep = document.getElementById('modal-exif-sep') as HTMLSpanElement;
+  const gpsSep = document.getElementById('modal-gps-sep') as HTMLSpanElement
+  const exifSep = document.getElementById('modal-exif-sep') as HTMLSpanElement
   const applyExif = (exif: Record<string, unknown> | null) => {
-    const lat = exif?.latitude as number | undefined;
-    const lon = exif?.longitude as number | undefined;
+    const lat = exif?.latitude as number | undefined
+    const lon = exif?.longitude as number | undefined
     if (typeof lat === 'number' && typeof lon === 'number') {
-      dom.modalGps.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-      dom.modalGps.href = `https://www.openstreetmap.org/?mlat=${lat.toFixed(5)}&mlon=${lon.toFixed(5)}&zoom=15`;
-      dom.modalGps.style.display = '';
-      gpsSep.style.display = '';
+      dom.modalGps.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`
+      dom.modalGps.href = `https://www.openstreetmap.org/?mlat=${lat.toFixed(5)}&mlon=${lon.toFixed(5)}&zoom=15`
+      dom.modalGps.style.display = ''
+      gpsSep.style.display = ''
     } else {
-      dom.modalGps.style.display = 'none';
-      gpsSep.style.display = 'none';
+      dom.modalGps.style.display = 'none'
+      gpsSep.style.display = 'none'
     }
-    const hasExif = exif && Object.keys(exif).length > 0;
-    dom.modalExifBtn.style.display = hasExif ? '' : 'none';
-    exifSep.style.display = hasExif ? '' : 'none';
-  };
+    const hasExif = exif && Object.keys(exif).length > 0
+    dom.modalExifBtn.style.display = hasExif ? '' : 'none'
+    exifSep.style.display = hasExif ? '' : 'none'
+  }
 
   if (f.exifData !== undefined) {
-    applyExif(f.exifData);
+    applyExif(f.exifData)
   } else {
-    applyExif(null);
-    exifr.parse(f.file, { gps: true, exif: true, iptc: false, xmp: false, icc: false, jfif: false })
-      .then(exif => {
-        f.exifData = exif ?? null;
-        f.gps = (typeof exif?.latitude === 'number' && typeof exif?.longitude === 'number')
-          ? { latitude: exif.latitude as number, longitude: exif.longitude as number } : null;
-        if (state.activeFileIndex === index) applyExif(f.exifData ?? null);
-      }).catch((err) => { console.warn('EXIF parse failed:', err); f.exifData = null; f.gps = null; });
+    applyExif(null)
+    exifr
+      .parse(f.file, {
+        gps: true,
+        exif: true,
+        iptc: false,
+        xmp: false,
+        icc: false,
+        jfif: false
+      })
+      .then((exif) => {
+        f.exifData = exif ?? null
+        f.gps =
+          typeof exif?.latitude === 'number' && typeof exif?.longitude === 'number'
+            ? {
+                latitude: exif.latitude as number,
+                longitude: exif.longitude as number
+              }
+            : null
+        if (state.activeFileIndex === index) applyExif(f.exifData ?? null)
+      })
+      .catch((err) => {
+        console.warn('EXIF parse failed:', err)
+        f.exifData = null
+        f.gps = null
+      })
   }
 
   // Cancel any in-flight lazy caption and pending debounce from a previous modal open
-  captionAbortController?.abort();
-  captionAbortController = null;
-  if (captionDebounceTimer !== null) { clearTimeout(captionDebounceTimer); captionDebounceTimer = null; }
+  captionAbortController?.abort()
+  captionAbortController = null
+  if (captionDebounceTimer !== null) {
+    clearTimeout(captionDebounceTimer)
+    captionDebounceTimer = null
+  }
 
   // Warm from localStorage so captions survive page reload in all modes
   if (!state.captions[index]) {
-    const stored = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`);
-    if (stored) state.captions[index] = stored;
+    const stored = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`)
+    if (stored) state.captions[index] = stored
   }
 
-  const caption = state.captions[index] ?? null;
+  const caption = state.captions[index] ?? null
   if (caption) {
-    dom.modalCaption.textContent = caption;
-    dom.modalCaption.style.display = 'block';
-    dom.modalFooter.style.borderRadius = '0';
+    dom.modalCaption.textContent = caption
+    dom.modalCaption.style.display = 'block'
+    dom.modalFooter.style.borderRadius = '0'
   } else if (state.settings.enableLazyCaption && chromeAIAvailability !== 'unavailable') {
     // Hide until the debounce fires — no flash when quickly flipping images
-    dom.modalCaption.style.display = 'none';
-    dom.modalFooter.style.borderRadius = '';
+    dom.modalCaption.style.display = 'none'
+    dom.modalFooter.style.borderRadius = ''
 
-    const ac = new AbortController();
-    captionAbortController = ac;
-    const captureIndex = index;
-    const captureFile = f;
+    const ac = new AbortController()
+    captionAbortController = ac
+    const captureIndex = index
+    const captureFile = f
 
     captionDebounceTimer = setTimeout(async () => {
-      captionDebounceTimer = null;
-      if (ac.signal.aborted) return;
+      captionDebounceTimer = null
+      if (ac.signal.aborted) return
 
       // Show placeholder now that the user has paused on this image
-      dom.modalCaption.textContent = 'Generating caption…';
-      dom.modalCaption.style.display = 'block';
-      dom.modalFooter.style.borderRadius = '0';
+      dom.modalCaption.textContent = 'Generating caption…'
+      dom.modalCaption.style.display = 'block'
+      dom.modalFooter.style.borderRadius = '0'
 
       try {
-        if (!lazyCaptionManager) lazyCaptionManager = new ChromeAISessionManager();
-        const thumb = state.thumbnails[captureIndex];
+        if (!lazyCaptionManager) lazyCaptionManager = new ChromeAISessionManager()
+        const thumb = state.thumbnails[captureIndex]
         const img = thumb
           ? await createImageBitmap(thumb)
-          : await createImageBitmap(captureFile.file, { resizeWidth: 128, resizeQuality: 'medium' });
-        if (ac.signal.aborted) { img.close(); return; }
-        const desc = await lazyCaptionManager.describe(img, getChromeAIPrompt(), ac.signal);
-        img.close();
-        if (ac.signal.aborted) return;
-        state.captions[captureIndex] = desc;
-        try { localStorage.setItem(`@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`, desc); } catch (_) { console.warn('Caption cache full'); }
+          : await createImageBitmap(captureFile.file, {
+              resizeWidth: 128,
+              resizeQuality: 'medium'
+            })
+        if (ac.signal.aborted) {
+          img.close()
+          return
+        }
+        const desc = await lazyCaptionManager.describe(img, getChromeAIPrompt(), ac.signal)
+        img.close()
+        if (ac.signal.aborted) return
+        state.captions[captureIndex] = desc
+        try {
+          localStorage.setItem(
+            `@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`,
+            desc
+          )
+        } catch (_) {
+          console.warn('Caption cache full')
+        }
         if (state.activeFileIndex === captureIndex) {
-          dom.modalCaption.textContent = desc;
+          dom.modalCaption.textContent = desc
         }
       } catch {
         if (!ac.signal.aborted && state.activeFileIndex === captureIndex) {
-          dom.modalCaption.style.display = 'none';
-          dom.modalFooter.style.borderRadius = '';
+          dom.modalCaption.style.display = 'none'
+          dom.modalFooter.style.borderRadius = ''
         }
       }
-    }, 400);
+    }, 400)
   } else {
-    dom.modalCaption.style.display = 'none';
-    dom.modalFooter.style.borderRadius = '';
+    dom.modalCaption.style.display = 'none'
+    dom.modalFooter.style.borderRadius = ''
   }
 
-  dom.modal.showModal();
-  state.activeFileIndex = index;
-  state.lastViewedIndex = index;
+  dom.modal.showModal()
+  state.activeFileIndex = index
+  state.lastViewedIndex = index
 
   // Center camera on the active image
-  const pt = state.points[index];
+  const pt = state.points[index]
   if (pt) {
-    camera.x = pt[0];
-    camera.y = pt[1];
-    scheduleRender();
+    camera.x = pt[0]
+    camera.y = pt[1]
+    scheduleRender()
   }
-};
+}
 
 const closeModal = () => {
-  dom.modal.close();
-};
+  dom.modal.close()
+}
 
 // Cleanup happens on the native close event (handles X button, Escape, and backdrop click)
 dom.modal.addEventListener('close', () => {
-  dom.modalVideo.pause();
-  dom.modalVideo.src = '';
-  state.activeFileIndex = null;
-  if (captionDebounceTimer !== null) { clearTimeout(captionDebounceTimer); captionDebounceTimer = null; }
-  captionAbortController?.abort();
-  captionAbortController = null;
-});
+  dom.modalVideo.pause()
+  dom.modalVideo.src = ''
+  state.activeFileIndex = null
+  if (captionDebounceTimer !== null) {
+    clearTimeout(captionDebounceTimer)
+    captionDebounceTimer = null
+  }
+  captionAbortController?.abort()
+  captionAbortController = null
+})
 
-dom.modalClose.addEventListener('click', closeModal);
+dom.modalClose.addEventListener('click', closeModal)
 
 // Backdrop click: dialog is fullscreen overlay, click on dialog outside content closes it
 dom.modal.addEventListener('click', (e) => {
-  if (e.target === dom.modal) closeModal();
-});
+  if (e.target === dom.modal) closeModal()
+})
 
 // ── EXIF detail dialog ───────────────────────────────────────────────────────
-const exifDialog = document.getElementById('exif-dialog') as HTMLDialogElement;
-const exifDialogBody = document.getElementById('exif-dialog-body') as HTMLDivElement;
-const exifDialogClose = document.getElementById('exif-dialog-close') as HTMLButtonElement;
+const exifDialog = document.getElementById('exif-dialog') as HTMLDialogElement
+const exifDialogBody = document.getElementById('exif-dialog-body') as HTMLDivElement
+const exifDialogClose = document.getElementById('exif-dialog-close') as HTMLButtonElement
 
 const EXIF_LABELS: Record<string, string> = {
-  Make: 'Camera Make', Model: 'Camera Model', LensModel: 'Lens',
-  FNumber: 'Aperture', ExposureTime: 'Shutter Speed', ISO: 'ISO',
-  FocalLength: 'Focal Length', FocalLengthIn35mmFormat: '35mm Equiv.',
-  DateTimeOriginal: 'Date Taken', CreateDate: 'Date Created',
-  ImageWidth: 'Width', ImageHeight: 'Height', Orientation: 'Orientation',
-  Flash: 'Flash', WhiteBalance: 'White Balance', ExposureMode: 'Exposure Mode',
-  ExposureProgram: 'Exposure Program', MeteringMode: 'Metering Mode',
-  ColorSpace: 'Color Space', Software: 'Software',
-  Artist: 'Artist', Copyright: 'Copyright',
-  latitude: 'Latitude', longitude: 'Longitude',
-};
+  Make: 'Camera Make',
+  Model: 'Camera Model',
+  LensModel: 'Lens',
+  FNumber: 'Aperture',
+  ExposureTime: 'Shutter Speed',
+  ISO: 'ISO',
+  FocalLength: 'Focal Length',
+  FocalLengthIn35mmFormat: '35mm Equiv.',
+  DateTimeOriginal: 'Date Taken',
+  CreateDate: 'Date Created',
+  ImageWidth: 'Width',
+  ImageHeight: 'Height',
+  Orientation: 'Orientation',
+  Flash: 'Flash',
+  WhiteBalance: 'White Balance',
+  ExposureMode: 'Exposure Mode',
+  ExposureProgram: 'Exposure Program',
+  MeteringMode: 'Metering Mode',
+  ColorSpace: 'Color Space',
+  Software: 'Software',
+  Artist: 'Artist',
+  Copyright: 'Copyright',
+  latitude: 'Latitude',
+  longitude: 'Longitude'
+}
 
 function formatExifValue(key: string, val: unknown): string {
-  if (val === null || val === undefined) return '';
-  if (key === 'FNumber') return `f/${val}`;
+  if (val === null || val === undefined) return ''
+  if (key === 'FNumber') return `f/${val}`
   if (key === 'ExposureTime') {
-    const s = val as number;
-    return s < 1 ? `1/${Math.round(1 / s)}s` : `${s}s`;
+    const s = val as number
+    return s < 1 ? `1/${Math.round(1 / s)}s` : `${s}s`
   }
-  if (key === 'FocalLength' || key === 'FocalLengthIn35mmFormat') return `${val}mm`;
-  if (key === 'latitude' || key === 'longitude') return (val as number).toFixed(6);
-  if (val instanceof Date) return val.toLocaleString();
-  return String(val);
+  if (key === 'FocalLength' || key === 'FocalLengthIn35mmFormat') return `${val}mm`
+  if (key === 'latitude' || key === 'longitude') return (val as number).toFixed(6)
+  if (val instanceof Date) return val.toLocaleString()
+  return String(val)
 }
 
 dom.modalExifBtn.addEventListener('click', () => {
-  const idx = state.activeFileIndex;
-  if (idx === null) return;
-  const exif = state.files[idx]?.exifData;
-  if (!exif) return;
+  const idx = state.activeFileIndex
+  if (idx === null) return
+  const exif = state.files[idx]?.exifData
+  if (!exif) return
 
-  exifDialogBody.innerHTML = '';
-  const dl = document.createElement('dl');
-  dl.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0;';
+  exifDialogBody.innerHTML = ''
+  const dl = document.createElement('dl')
+  dl.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0;'
 
   for (const [key, label] of Object.entries(EXIF_LABELS)) {
-    if (!(key in exif) || exif[key] === null || exif[key] === undefined) continue;
-    const formatted = formatExifValue(key, exif[key]);
-    if (!formatted) continue;
-    const dt = document.createElement('dt');
-    dt.style.cssText = 'color:var(--text-dim);white-space:nowrap;';
-    dt.textContent = label;
-    const dd = document.createElement('dd');
-    dd.style.cssText = 'margin:0;color:var(--text-main);word-break:break-all;';
-    dd.textContent = formatted;
-    dl.append(dt, dd);
+    if (!(key in exif) || exif[key] === null || exif[key] === undefined) continue
+    const formatted = formatExifValue(key, exif[key])
+    if (!formatted) continue
+    const dt = document.createElement('dt')
+    dt.style.cssText = 'color:var(--text-dim);white-space:nowrap;'
+    dt.textContent = label
+    const dd = document.createElement('dd')
+    dd.style.cssText = 'margin:0;color:var(--text-main);word-break:break-all;'
+    dd.textContent = formatted
+    dl.append(dt, dd)
   }
 
   if (!dl.children.length) {
-    exifDialogBody.textContent = 'No recognised EXIF fields found.';
+    exifDialogBody.textContent = 'No recognised EXIF fields found.'
   } else {
-    exifDialogBody.appendChild(dl);
+    exifDialogBody.appendChild(dl)
   }
-  exifDialog.showModal();
-});
+  exifDialog.showModal()
+})
 
-exifDialogClose.addEventListener('click', () => exifDialog.close());
-exifDialog.addEventListener('click', (e) => { if (e.target === exifDialog) exifDialog.close(); });
+exifDialogClose.addEventListener('click', () => exifDialog.close())
+exifDialog.addEventListener('click', (e) => {
+  if (e.target === exifDialog) exifDialog.close()
+})
 
 // ── Settings ────────────────────────────────────────────────────────────────
 const saveSettings = () => {
-  localStorage.setItem('mc_settings', JSON.stringify(state.settings));
-};
+  localStorage.setItem('mc_settings', JSON.stringify(state.settings))
+}
 
 // Sync UI with initial settings
-dom.densitySlider.value = state.settings.density.toString();
-dom.drawBudgetSlider.value = state.settings.drawBudget.toString();
-dom.loopToggle.checked = state.settings.loopVideos;
-dom.enableSearchToggle.checked = state.settings.enableTextSearch;
-if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod;
-dom.batchSizeInput.value = state.settings.batchSize.toString();
-dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString();
-dom.viewerOnlyToggle.checked = state.settings.viewerOnly;
-dom.lazyCaptionToggle.checked = state.settings.enableLazyCaption;
-dom.doNotTrackToggle.checked = state.settings.doNotTrack;
-dom.customModelHostInput.value = state.settings.customModelHost;
-dom.modelSelect.value = state.settings.modelVariant;
+dom.densitySlider.value = state.settings.density.toString()
+dom.drawBudgetSlider.value = state.settings.drawBudget.toString()
+dom.loopToggle.checked = state.settings.loopVideos
+dom.enableSearchToggle.checked = state.settings.enableTextSearch
+if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod
+dom.batchSizeInput.value = state.settings.batchSize.toString()
+dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString()
+dom.viewerOnlyToggle.checked = state.settings.viewerOnly
+dom.lazyCaptionToggle.checked = state.settings.enableLazyCaption
+dom.doNotTrackToggle.checked = state.settings.doNotTrack
+dom.customModelHostInput.value = state.settings.customModelHost
+dom.modelSelect.value = state.settings.modelVariant
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
-getChromeAIAvailability().then(avail => {
-  chromeAIAvailability = avail;
-  const chromeAIOption = dom.modelSelect.querySelector<HTMLOptionElement>('option[value="chrome-ai"]');
-  if (!chromeAIOption) return;
+getChromeAIAvailability().then((avail) => {
+  chromeAIAvailability = avail
+  const chromeAIOption = dom.modelSelect.querySelector<HTMLOptionElement>(
+    'option[value="chrome-ai"]'
+  )
+  if (!chromeAIOption) return
   if (avail === 'unavailable') {
-    chromeAIOption.disabled = true;
-    chromeAIOption.textContent += ' — not available on this browser';
+    chromeAIOption.disabled = true
+    chromeAIOption.textContent += ' — not available on this browser'
     // If the saved setting was chrome-ai but it's unavailable, fall back to sapiens2-fp16
     if (state.settings.modelVariant === 'chrome-ai') {
-      state.settings.modelVariant = 'sapiens2-fp16';
-      dom.modelSelect.value = 'sapiens2-fp16';
-      saveSettings();
+      state.settings.modelVariant = 'sapiens2-fp16'
+      dom.modelSelect.value = 'sapiens2-fp16'
+      saveSettings()
     }
   }
-});
+})
 
 // Initialize Chrome AI prompt textarea with stored value
 const updateChromeAIPromptVisibility = () => {
-  const isChrome = state.settings.modelVariant === 'chrome-ai';
-  dom.chromeAIPromptSetting.style.display = isChrome ? '' : 'none';
-};
+  const isChrome = state.settings.modelVariant === 'chrome-ai'
+  dom.chromeAIPromptSetting.style.display = isChrome ? '' : 'none'
+}
 if (dom.chromeAIPromptInput) {
-  dom.chromeAIPromptInput.value = getChromeAIPrompt();
+  dom.chromeAIPromptInput.value = getChromeAIPrompt()
   dom.chromeAIPromptInput.addEventListener('input', () => {
-    const val = dom.chromeAIPromptInput.value.trim();
+    const val = dom.chromeAIPromptInput.value.trim()
     if (val) {
-      localStorage.setItem(CHROME_AI_PROMPT_KEY, val);
+      localStorage.setItem(CHROME_AI_PROMPT_KEY, val)
     } else {
-      localStorage.removeItem(CHROME_AI_PROMPT_KEY);
+      localStorage.removeItem(CHROME_AI_PROMPT_KEY)
     }
-  });
+  })
 }
 if (dom.chromeAIPromptReset) {
   dom.chromeAIPromptReset.addEventListener('click', () => {
-    localStorage.removeItem(CHROME_AI_PROMPT_KEY);
-    dom.chromeAIPromptInput.value = DEFAULT_DESCRIBE_PROMPT;
-  });
+    localStorage.removeItem(CHROME_AI_PROMPT_KEY)
+    dom.chromeAIPromptInput.value = DEFAULT_DESCRIBE_PROMPT
+  })
 }
-updateChromeAIPromptVisibility();
+updateChromeAIPromptVisibility()
 
 const updateSearchUI = () => {
   // In viewer mode, always disable search
   if (state.settings.viewerOnly) {
-    dom.bottomPanel.style.display = 'none';
-    dom.headerRecenterBtn.parentElement!.style.display = 'flex';
-    dom.searchInput.disabled = true;
-    return;
+    dom.bottomPanel.style.display = 'none'
+    dom.headerRecenterBtn.parentElement!.style.display = 'flex'
+    dom.searchInput.disabled = true
+    return
   }
 
   if (state.settings.enableTextSearch) {
-    dom.bottomPanel.style.display = 'flex';
-    dom.headerRecenterBtn.parentElement!.style.display = 'none';
+    dom.bottomPanel.style.display = 'flex'
+    dom.headerRecenterBtn.parentElement!.style.display = 'none'
   } else {
-    dom.bottomPanel.style.display = 'none';
-    dom.headerRecenterBtn.parentElement!.style.display = 'flex';
+    dom.bottomPanel.style.display = 'none'
+    dom.headerRecenterBtn.parentElement!.style.display = 'flex'
   }
-  dom.searchInput.disabled = !state.settings.enableTextSearch || state.phase !== 'done';
-};
-updateSearchUI();
-refreshCacheSize();
+  dom.searchInput.disabled = !state.settings.enableTextSearch || state.phase !== 'done'
+}
+updateSearchUI()
+refreshCacheSize()
 
 dom.settingsBtn.addEventListener('click', () => {
-  dom.settingsModal.showModal();
-});
+  dom.settingsModal.showModal()
+})
 
 dom.settingsClose.addEventListener('click', () => {
-  dom.settingsModal.close();
-});
+  dom.settingsModal.close()
+})
 
 dom.settingsModal.addEventListener('click', (e) => {
-  if (e.target === dom.settingsModal) dom.settingsModal.close();
-});
+  if (e.target === dom.settingsModal) dom.settingsModal.close()
+})
 
 dom.enableSearchToggle.addEventListener('change', async () => {
   // Prevent enabling search in viewer mode
   if (state.settings.viewerOnly && dom.enableSearchToggle.checked) {
-    dom.enableSearchToggle.checked = false;
-    setStatus('Text search is not available in viewer mode.');
-    return;
+    dom.enableSearchToggle.checked = false
+    setStatus('Text search is not available in viewer mode.')
+    return
   }
 
-  state.settings.enableTextSearch = dom.enableSearchToggle.checked;
-  saveSettings();
-  updateSearchUI();
+  state.settings.enableTextSearch = dom.enableSearchToggle.checked
+  saveSettings()
+  updateSearchUI()
 
   // If enabled and models are already loaded, load the text model now
-  if (state.settings.enableTextSearch && state.phase !== 'idle' && state.phase !== 'loading_model' && !textExtractor) {
+  if (
+    state.settings.enableTextSearch &&
+    state.phase !== 'idle' &&
+    state.phase !== 'loading_model' &&
+    !textExtractor
+  ) {
     // We duplicate the text loading logic here for dynamic loading
-    dom.settingsModal.close();
-    setStatus('Loading text model for search…');
-    const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024;
-    const textLoaded = new Map<string, number>();
+    dom.settingsModal.close()
+    setStatus('Loading text model for search…')
+    const TEXT_MODEL_SIZE_BYTES = 134 * 1024 * 1024
+    const textLoaded = new Map<string, number>()
 
     const textProgressCb = (e: ProgressEvent) => {
       if (e.status === 'progress') {
-        textLoaded.set(e.file, e.loaded ?? 0);
-        const total = [...textLoaded.values()].reduce((a, b) => a + b, 0);
-        const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100);
-        setProgress(pct);
-        setStatus(`Loading text model… ${pct.toFixed(0)}%`);
+        textLoaded.set(e.file, e.loaded ?? 0)
+        const total = [...textLoaded.values()].reduce((a, b) => a + b, 0)
+        const pct = Math.min(99, (total / TEXT_MODEL_SIZE_BYTES) * 100)
+        setProgress(pct)
+        setStatus(`Loading text model… ${pct.toFixed(0)}%`)
       }
-    };
+    }
 
-    const tryLoadText = (device: 'webgpu' | 'wasm') => (pipeline as Pipeline)(
-      'feature-extraction',
-      'nomic-ai/nomic-embed-text-v1.5',
-      { device, dtype: 'fp32', progress_callback: textProgressCb }
-    ) as Promise<PipelineInstance>;
+    const tryLoadText = (device: 'webgpu' | 'wasm') =>
+      (pipeline as Pipeline)('feature-extraction', 'nomic-ai/nomic-embed-text-v1.5', {
+        device,
+        dtype: 'fp32',
+        progress_callback: textProgressCb
+      }) as Promise<PipelineInstance>
 
     try {
-      textExtractor = await tryLoadText('webgpu');
+      textExtractor = await tryLoadText('webgpu')
     } catch (gpuErr) {
-      console.warn('Text model WebGPU failed, using wasm:', gpuErr);
-      textLoaded.clear();
-      textExtractor = await tryLoadText('wasm');
+      console.warn('Text model WebGPU failed, using wasm:', gpuErr)
+      textLoaded.clear()
+      textExtractor = await tryLoadText('wasm')
     }
-    setProgress(100);
-    setTimeout(() => setProgress(0), 500);
-    setStatus('Text model loaded.');
+    setProgress(100)
+    setTimeout(() => setProgress(0), 500)
+    setStatus('Text model loaded.')
   }
-});
+})
 
 dom.modelSelect.addEventListener('change', () => {
-  state.settings.modelVariant = dom.modelSelect.value as ModelVariant;
-  saveSettings();
-  updateChromeAIPromptVisibility();
+  state.settings.modelVariant = dom.modelSelect.value as ModelVariant
+  saveSettings()
+  updateChromeAIPromptVisibility()
   if (extractor || sapiens2Session || chromeAIManager) {
-    window.location.reload();
+    window.location.reload()
   }
-});
+})
 
 dom.densitySlider.addEventListener('input', async () => {
-  state.settings.density = parseFloat(dom.densitySlider.value);
-  saveSettings();
+  state.settings.density = parseFloat(dom.densitySlider.value)
+  saveSettings()
   if (state.phase === 'done' && state.rawPoints && state.files.length) {
-    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density);
-    scheduleRender();
+    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density)
+    scheduleRender()
   }
-});
+})
 
 dom.drawBudgetSlider.addEventListener('input', () => {
-  state.settings.drawBudget = parseInt(dom.drawBudgetSlider.value);
-  saveSettings();
-  scheduleRender();
-});
+  state.settings.drawBudget = parseInt(dom.drawBudgetSlider.value)
+  saveSettings()
+  scheduleRender()
+})
 
 dom.batchSizeInput.addEventListener('input', () => {
-  const v = Math.max(1, parseInt(dom.batchSizeInput.value) || 1);
-  state.settings.batchSize = v;
-  saveSettings();
-});
+  const v = Math.max(1, parseInt(dom.batchSizeInput.value) || 1)
+  state.settings.batchSize = v
+  saveSettings()
+})
 
-const hasMemoryAPI = 'deviceMemory' in navigator || 'memory' in performance;
-dom.batchSizeAutoBtn.hidden = !hasMemoryAPI;
+const hasMemoryAPI = 'deviceMemory' in navigator || 'memory' in performance
+dom.batchSizeAutoBtn.hidden = !hasMemoryAPI
 
 if (hasMemoryAPI && !savedSettings) {
   // No saved preference — auto-detect on first load
-  const optimal = computeOptimalBatchSize();
-  state.settings.batchSize = optimal;
-  dom.batchSizeInput.value = optimal.toString();
-  saveSettings();
+  const optimal = computeOptimalBatchSize()
+  state.settings.batchSize = optimal
+  dom.batchSizeInput.value = optimal.toString()
+  saveSettings()
 }
 
 dom.batchSizeAutoBtn.addEventListener('click', () => {
-  const optimal = computeOptimalBatchSize();
-  state.settings.batchSize = optimal;
-  dom.batchSizeInput.value = optimal.toString();
-  saveSettings();
-});
+  const optimal = computeOptimalBatchSize()
+  state.settings.batchSize = optimal
+  dom.batchSizeInput.value = optimal.toString()
+  saveSettings()
+})
 
 dom.randomSampleSizeInput.addEventListener('input', () => {
-  const v = parseInt(dom.randomSampleSizeInput.value) || 0;
-  state.settings.randomSampleSize = Math.max(0, v);
-  saveSettings();
-});
+  const v = parseInt(dom.randomSampleSizeInput.value) || 0
+  state.settings.randomSampleSize = Math.max(0, v)
+  saveSettings()
+})
 
 dom.loopToggle.addEventListener('change', () => {
-  state.settings.loopVideos = dom.loopToggle.checked;
-  saveSettings();
-});
+  state.settings.loopVideos = dom.loopToggle.checked
+  saveSettings()
+})
 
 dom.lazyCaptionToggle.addEventListener('change', () => {
-  state.settings.enableLazyCaption = dom.lazyCaptionToggle.checked;
-  saveSettings();
-});
+  state.settings.enableLazyCaption = dom.lazyCaptionToggle.checked
+  saveSettings()
+})
 
 dom.doNotTrackToggle.addEventListener('change', () => {
-  state.settings.doNotTrack = dom.doNotTrackToggle.checked;
-  saveSettings();
-});
+  state.settings.doNotTrack = dom.doNotTrackToggle.checked
+  saveSettings()
+})
 
 dom.customModelHostInput.addEventListener('change', () => {
-  state.settings.customModelHost = normalizeHost(dom.customModelHostInput.value);
-  dom.customModelHostInput.value = state.settings.customModelHost;
-  saveSettings();
-  applyModelEnv();
-});
+  state.settings.customModelHost = normalizeHost(dom.customModelHostInput.value)
+  dom.customModelHostInput.value = state.settings.customModelHost
+  saveSettings()
+  applyModelEnv()
+})
 
 dom.viewerOnlyToggle.addEventListener('change', async () => {
-  state.settings.viewerOnly = dom.viewerOnlyToggle.checked;
-  saveSettings();
-  updateSearchUI();
-  updateDeviceBadge();
+  state.settings.viewerOnly = dom.viewerOnlyToggle.checked
+  saveSettings()
+  updateSearchUI()
+  updateDeviceBadge()
 
   if (state.settings.viewerOnly) {
     // Cancel any in-progress model download
     if (modelLoadAbort) {
-      modelLoadAbort.abort();
-      modelLoadAbort = null;
-      state.phase = 'idle';
+      modelLoadAbort.abort()
+      modelLoadAbort = null
+      state.phase = 'idle'
     }
     if (state.phase === 'idle' || state.phase === 'loading_model') {
-      dom.loadModelBtn.hidden = true;
-      dom.openBtn.disabled = false;
-      dom.openBtn.classList.add('primary');
-      dom.demoBtn.disabled = false;
-      setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
+      dom.loadModelBtn.hidden = true
+      dom.openBtn.disabled = false
+      dom.openBtn.classList.add('primary')
+      dom.demoBtn.disabled = false
+      setStatus('Viewer mode active — open a folder to browse photos by date and folder.')
     }
   } else if (!state.settings.viewerOnly && state.phase === 'idle') {
     // Switching back to AI mode
-    dom.loadModelBtn.hidden = false;
-    dom.loadModelBtn.disabled = false;
-    setStatus('AI mode enabled — click "Load AI Models" to begin.');
+    dom.loadModelBtn.hidden = false
+    dom.loadModelBtn.disabled = false
+    setStatus('AI mode enabled — click "Load AI Models" to begin.')
   }
 
   // If changing mode with loaded data, need to reset and reprocess
   if (state.phase === 'done' && state.files.length > 0) {
-    setStatus('Mode changed. Reset to apply changes, or open a new folder.');
+    setStatus('Mode changed. Reset to apply changes, or open a new folder.')
   }
-});
-
+})
 
 if (dom.projectionSelect) {
   dom.projectionSelect.addEventListener('change', async (e) => {
-    const select = e.target as HTMLSelectElement;
-    state.settings.projectionMethod = select.value as ProjectionMethod;
-    saveSettings();
-    
+    const select = e.target as HTMLSelectElement
+    state.settings.projectionMethod = select.value as ProjectionMethod
+    saveSettings()
+
     if (state.vectors.length > 0 && state.phase === 'done') {
       try {
-        state.phase = 'projecting';
-        dom.recenterBtn.disabled = true;
-        if (dom.headerRecenterBtn) dom.headerRecenterBtn.disabled = true;
-        
-        const nNeighbors = Math.max(2, Math.min(15, state.files.length - 1));
-        const rawPoints = await runProjection(state.vectors, state.settings.projectionMethod, nNeighbors);
-        state.rawPoints = rawPoints;
-        
-        setStatus('Clustering…');
-        const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(state.files.length / 2))));
-        state.clusters = await kmeansAsync(rawPoints, k);
+        state.phase = 'projecting'
+        dom.recenterBtn.disabled = true
+        if (dom.headerRecenterBtn) dom.headerRecenterBtn.disabled = true
 
-        setStatus('Arranging layout…');
-        state.points = await spreadPointsAsync(rawPoints, state.settings.density);
+        const nNeighbors = Math.max(2, Math.min(15, state.files.length - 1))
+        const rawPoints = await runProjection(
+          state.vectors,
+          state.settings.projectionMethod,
+          nNeighbors
+        )
+        state.rawPoints = rawPoints
+
+        setStatus('Clustering…')
+        const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(state.files.length / 2))))
+        state.clusters = await kmeansAsync(rawPoints, k)
+
+        setStatus('Arranging layout…')
+        state.points = await spreadPointsAsync(rawPoints, state.settings.density)
 
         try {
-          localStorage.setItem('po_projectedPoints', JSON.stringify(state.points));
-          localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)));
-        } catch (_) { showToast('Session state couldn\'t be saved — browser storage is full.', 'warn'); }
+          localStorage.setItem('po_projectedPoints', JSON.stringify(state.points))
+          localStorage.setItem('po_clusters', JSON.stringify(Array.from(state.clusters)))
+        } catch (_) {
+          showToast("Session state couldn't be saved — browser storage is full.", 'warn')
+        }
 
-        fitCamera();
-        scheduleRender();
-        
-        const finalMsg = `${state.files.length} media files · ${k} clusters`;
-        setStatus(`${state.files.length} media files — tap to view · ${k} clusters`);
-        if (dom.statsEl) dom.statsEl.textContent = finalMsg;
+        fitCamera()
+        scheduleRender()
+
+        const finalMsg = `${state.files.length} media files · ${k} clusters`
+        setStatus(`${state.files.length} media files — tap to view · ${k} clusters`)
+        if (dom.statsEl) dom.statsEl.textContent = finalMsg
       } catch (err) {
-        console.error('Reprojection error:', err);
-        setStatus(`Reprojection failed: ${(err as Error).message}`);
+        console.error('Reprojection error:', err)
+        setStatus(`Reprojection failed: ${(err as Error).message}`)
       } finally {
-        state.phase = 'done';
-        dom.recenterBtn.disabled = false;
-        if (dom.headerRecenterBtn) dom.headerRecenterBtn.disabled = false;
+        state.phase = 'done'
+        dom.recenterBtn.disabled = false
+        if (dom.headerRecenterBtn) dom.headerRecenterBtn.disabled = false
       }
     }
-  });
+  })
 }
 
 dom.aboutBtn.addEventListener('click', () => {
-  dom.aboutModal.showModal();
-});
+  dom.aboutModal.showModal()
+})
 
 dom.aboutClose.addEventListener('click', () => {
-  dom.aboutModal.close();
-});
+  dom.aboutModal.close()
+})
 
 dom.aboutModal.addEventListener('click', (e) => {
-  if (e.target === dom.aboutModal) dom.aboutModal.close();
-});
+  if (e.target === dom.aboutModal) dom.aboutModal.close()
+})
 
 window.addEventListener('resize', () => {
-  resizeCanvas();
-  if (state.phase === 'done' && state.points.length) scheduleRender();
-});
+  resizeCanvas()
+  if (state.phase === 'done' && state.points.length) scheduleRender()
+})
 
 // ── Init ─────────────────────────────────────────────────────────────────────
-resizeCanvas();
+resizeCanvas()
 
 // Open about modal on first-ever visit
 if (!localStorage.getItem('mc_hasVisited')) {
-  localStorage.setItem('mc_hasVisited', 'true');
-  dom.aboutModal.showModal();
+  localStorage.setItem('mc_hasVisited', 'true')
+  dom.aboutModal.showModal()
 }
 
-const _savedKeys = localStorage.getItem('po_fileKeys');
+const _savedKeys = localStorage.getItem('po_fileKeys')
 if (_savedKeys) {
   try {
-    const n = JSON.parse(_savedKeys).length;
-    dom.resumeBtn.hidden = false;
-    dom.resumeBtn.innerHTML = `🔄 <span class="btn-label">Resume last session (${n} images)</span>`;
+    const n = JSON.parse(_savedKeys).length
+    dom.resumeBtn.hidden = false
+    dom.resumeBtn.innerHTML = `🔄 <span class="btn-label">Resume last session (${n} images)</span>`
   } catch (_) {
-    localStorage.clear();
-    showToast('Previous session data was corrupted and has been cleared.', 'warn');
+    localStorage.clear()
+    showToast('Previous session data was corrupted and has been cleared.', 'warn')
   }
 }
 
 dom.loadModelBtn.addEventListener('click', async () => {
-  if (extractor || sapiens2Session || chromeAIManager) return;
-  dom.loadModelBtn.disabled = true;
-  await loadModel();
-});
+  if (extractor || sapiens2Session || chromeAIManager) return
+  dom.loadModelBtn.disabled = true
+  await loadModel()
+})
 
 dom.openBtn.addEventListener('click', async () => {
   if (window.showDirectoryPicker) {
     try {
-      const dir = await window.showDirectoryPicker({ mode: 'read' });
-      await run(dir);
+      const dir = await window.showDirectoryPicker({ mode: 'read' })
+      await run(dir)
     } catch (err) {
-      if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);
+      if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`)
     }
   } else {
     // Fallback for Safari/iOS
-    dom.fileInput.click();
+    dom.fileInput.click()
   }
-});
+})
 
 dom.fileInput.addEventListener('change', async () => {
-  const fileList = dom.fileInput.files;
-  if (!fileList || fileList.length === 0) return;
+  const fileList = dom.fileInput.files
+  if (!fileList || fileList.length === 0) return
 
-  dom.openBtn.disabled = true;
-  setProgress(0);
-  setStatus('Processing files…');
+  dom.openBtn.disabled = true
+  setProgress(0)
+  setStatus('Processing files…')
 
-  const files: PhotoFile[] = [];
+  const files: PhotoFile[] = []
   for (let i = 0; i < fileList.length; i++) {
-    const file = fileList[i];
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    const file = fileList[i]
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
     if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
       files.push({
         name: file.webkitRelativePath || file.name,
@@ -2746,173 +3062,192 @@ dom.fileInput.addEventListener('change', async () => {
         lastModified: file.lastModified,
         file,
         objectURL: null
-      });
+      })
     }
   }
 
-  await processFiles(files);
-});
+  await processFiles(files)
+})
 
 dom.demoBtn.addEventListener('click', async () => {
-  setProgress(0);
-  setStatus('Fetching demo images…');
-  dom.demoBtn.disabled = true;
+  setProgress(0)
+  setStatus('Fetching demo images…')
+  dom.demoBtn.disabled = true
 
   try {
-    const files = await loadDemoImages();
+    const files = await loadDemoImages()
     if (files.length > 0) {
-      await processFiles(files);
+      await processFiles(files)
     } else {
-      setStatus('Failed to load demo images');
-      dom.demoBtn.disabled = false;
+      setStatus('Failed to load demo images')
+      dom.demoBtn.disabled = false
     }
   } catch (e) {
-    console.error('Demo load error:', e);
-    setStatus('Error loading demo images');
-    dom.demoBtn.disabled = false;
+    console.error('Demo load error:', e)
+    setStatus('Error loading demo images')
+    dom.demoBtn.disabled = false
   }
-});
+})
 
 dom.resumeBtn.addEventListener('click', async () => {
-  const savedPoints = JSON.parse(localStorage.getItem('po_projectedPoints') || 'null');
-  const savedClusters = JSON.parse(localStorage.getItem('po_clusters') || 'null');
-  const savedKeys = JSON.parse(localStorage.getItem('po_fileKeys') || 'null');
-  if (!savedPoints || !savedKeys) { await dom.openBtn.click(); return; }
+  const savedPoints = JSON.parse(localStorage.getItem('po_projectedPoints') || 'null')
+  const savedClusters = JSON.parse(localStorage.getItem('po_clusters') || 'null')
+  const savedKeys = JSON.parse(localStorage.getItem('po_fileKeys') || 'null')
+  if (!savedPoints || !savedKeys) {
+    await dom.openBtn.click()
+    return
+  }
 
   try {
-    let files: PhotoFile[] = [];
+    let files: PhotoFile[] = []
     if (window.showDirectoryPicker) {
-      const dir = await window.showDirectoryPicker({ mode: 'read' });
-      setStatus('Matching files…');
-      files = await collectImages(dir);
+      const dir = await window.showDirectoryPicker({ mode: 'read' })
+      setStatus('Matching files…')
+      files = await collectImages(dir)
     } else {
       // Safari/iOS fallback
-      setStatus('Please re-select the folder to resume.');
+      setStatus('Please re-select the folder to resume.')
       const fileList = await new Promise<FileList | null>((resolve) => {
         const handler = () => {
-          dom.fileInput.removeEventListener('change', handler);
-          resolve(dom.fileInput.files);
-        };
-        dom.fileInput.addEventListener('change', handler);
-        dom.fileInput.click();
-      });
+          dom.fileInput.removeEventListener('change', handler)
+          resolve(dom.fileInput.files)
+        }
+        dom.fileInput.addEventListener('change', handler)
+        dom.fileInput.click()
+      })
 
-      if (!fileList || fileList.length === 0) return;
+      if (!fileList || fileList.length === 0) return
       for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i];
-        const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+        const file = fileList[i]
+        const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
         if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
           files.push({
-
             name: file.webkitRelativePath || file.name,
             size: file.size,
             lastModified: file.lastModified,
             file,
             objectURL: null
-          });
+          })
         }
       }
     }
 
-    const keyToFile = new Map(files.map(f => [`${f.name}:${f.size}:${f.lastModified}`, f]));
-    const matched = (savedKeys as string[]).map(k => keyToFile.get(k)).filter((f): f is PhotoFile => !!f);
+    const keyToFile = new Map(files.map((f) => [`${f.name}:${f.size}:${f.lastModified}`, f]))
+    const matched = (savedKeys as string[])
+      .map((k) => keyToFile.get(k))
+      .filter((f): f is PhotoFile => !!f)
 
     if (matched.length < (savedKeys as string[]).length * 0.8) {
-      await processFiles(files); return;
+      await processFiles(files)
+      return
     }
 
-    const wasViewerMode = localStorage.getItem('po_viewerMode') === 'true';
+    const wasViewerMode = localStorage.getItem('po_viewerMode') === 'true'
 
-    state.files = matched;
-    state.rawPoints = savedPoints;
-    state.points = savedPoints.slice(0, matched.length);
-    state.clusters = savedClusters ? new Int32Array(savedClusters.slice(0, matched.length)) : null;
+    state.files = matched
+    state.rawPoints = savedPoints
+    state.points = savedPoints.slice(0, matched.length)
+    state.clusters = savedClusters ? new Int32Array(savedClusters.slice(0, matched.length)) : null
 
     if (wasViewerMode) {
       // Viewer mode: no vectors needed
-      state.vectors = [];
-      dom.searchInput.disabled = true;
+      state.vectors = []
+      dom.searchInput.disabled = true
     } else {
       // AI mode: restore cached vectors for search + re-projection
-      setStatus('Restoring embeddings…');
-      const resumePrefix = state.settings.modelVariant === 'chrome-ai' ? '@chrome-ai/'
-        : !state.settings.modelVariant.startsWith('sapiens2') ? ''
-        : state.settings.modelVariant === 'sapiens2-fp16' ? '@sapiens2/'
-        : `@${state.settings.modelVariant}/`;
+      setStatus('Restoring embeddings…')
+      const resumePrefix =
+        state.settings.modelVariant === 'chrome-ai'
+          ? '@chrome-ai/'
+          : !state.settings.modelVariant.startsWith('sapiens2')
+            ? ''
+            : state.settings.modelVariant === 'sapiens2-fp16'
+              ? '@sapiens2/'
+              : `@${state.settings.modelVariant}/`
       // Chunked reads so large folders show progress instead of a frozen bar,
       // and the main thread gets a breather between IDB transactions.
-      const RESUME_CHUNK = 500;
-      const cachedVectors: (Float32Array | null)[] = [];
+      const RESUME_CHUNK = 500
+      const cachedVectors: (Float32Array | null)[] = []
       for (let c = 0; c < matched.length; c += RESUME_CHUNK) {
-        const chunk = matched.slice(c, c + RESUME_CHUNK);
-        const { cached, migrate } = await readCachedEmbeddings(chunk, resumePrefix);
-        if (migrate.length > 0) await cachePutBatch(migrate);
-        cachedVectors.push(...cached);
-        setStatus(`Restoring embeddings… ${Math.min(c + RESUME_CHUNK, matched.length)} / ${matched.length}`);
-        setProgress(10 + (cachedVectors.length / matched.length) * 85);
-        await yieldMain();
+        const chunk = matched.slice(c, c + RESUME_CHUNK)
+        const { cached, migrate } = await readCachedEmbeddings(chunk, resumePrefix)
+        if (migrate.length > 0) await cachePutBatch(migrate)
+        cachedVectors.push(...cached)
+        setStatus(
+          `Restoring embeddings… ${Math.min(c + RESUME_CHUNK, matched.length)} / ${matched.length}`
+        )
+        setProgress(10 + (cachedVectors.length / matched.length) * 85)
+        await yieldMain()
       }
-      state.vectors = cachedVectors.map(v => v || new Float32Array(768));
-      dom.searchInput.disabled = false;
+      state.vectors = cachedVectors.map((v) => v || new Float32Array(768))
+      dom.searchInput.disabled = false
     }
 
-    state.thumbnails = initThumbnails(matched);
-    state.phase = 'done';
-    resizeCanvas();
-    fitCamera();
-    scheduleRender();
-    setProgress(100);
-    const modeSuffix = wasViewerMode ? 'viewer mode' : 'restored';
-    const finalMsg = `${matched.length} media files · ${modeSuffix}`;
-    setStatus(`${matched.length} media files — resumed from session`);
-    if (dom.statsEl) dom.statsEl.textContent = finalMsg;
-    dom.recenterBtn.disabled = false;
-    dom.resetBtn.disabled = false;
-    dom.headerRecenterBtn.disabled = false;
+    state.thumbnails = initThumbnails(matched)
+    state.phase = 'done'
+    resizeCanvas()
+    fitCamera()
+    scheduleRender()
+    setProgress(100)
+    const modeSuffix = wasViewerMode ? 'viewer mode' : 'restored'
+    const finalMsg = `${matched.length} media files · ${modeSuffix}`
+    setStatus(`${matched.length} media files — resumed from session`)
+    if (dom.statsEl) dom.statsEl.textContent = finalMsg
+    dom.recenterBtn.disabled = false
+    dom.resetBtn.disabled = false
+    dom.headerRecenterBtn.disabled = false
   } catch (err) {
-    if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`);
+    if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`)
   }
-});
+})
 
 // Auto-start model loading (only if not in viewer mode)
 if (!state.settings.viewerOnly) {
-  dom.loadModelBtn.disabled = true;
-  modelLoadAbort = new AbortController();
-  (async () => {
+  dom.loadModelBtn.disabled = true
+  modelLoadAbort = new AbortController()
+  ;(async () => {
     try {
-      await loadModel(modelLoadAbort!.signal);
+      await loadModel(modelLoadAbort!.signal)
     } catch (err) {
-      if ((err as Error).name === 'AbortError') return; // user switched to viewer mode
-      dom.loadModelBtn.hidden = false;
-      dom.loadModelBtn.disabled = false;
-      setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`);
+      if ((err as Error).name === 'AbortError') return // user switched to viewer mode
+      dom.loadModelBtn.hidden = false
+      dom.loadModelBtn.disabled = false
+      setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`)
     } finally {
-      modelLoadAbort = null;
+      modelLoadAbort = null
     }
-  })();
+  })()
 } else {
   // Viewer mode: update UI to reflect no AI needed
-  dom.loadModelBtn.hidden = true;
-  dom.openBtn.disabled = false;
-  dom.openBtn.classList.add('primary');
-  dom.demoBtn.disabled = false;
-  setStatus('Viewer mode active — open a folder to browse photos by date and folder.');
-  updateDeviceBadge();
+  dom.loadModelBtn.hidden = true
+  dom.openBtn.disabled = false
+  dom.openBtn.classList.add('primary')
+  dom.demoBtn.disabled = false
+  setStatus('Viewer mode active — open a folder to browse photos by date and folder.')
+  updateDeviceBadge()
 }
 
 // ── Debug overlay (press ` to toggle) ────────────────────────────────────────
-const debugOverlay = document.getElementById('debug-overlay') as HTMLDivElement;
+const debugOverlay = document.getElementById('debug-overlay') as HTMLDivElement
 
 function formatBytes(b: number) {
-  if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)} GB`;
-  if (b >= 1048576)    return `${(b / 1048576).toFixed(0)} MB`;
-  return `${(b / 1024).toFixed(0)} KB`;
+  if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)} GB`
+  if (b >= 1048576) return `${(b / 1048576).toFixed(0)} MB`
+  return `${(b / 1024).toFixed(0)} KB`
 }
 
 function buildDebugInfo(): string {
-  const perfMem = (performance as Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
-  const devMem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-  const gpu = (navigator as Navigator & { gpu?: unknown }).gpu;
+  const perfMem = (
+    performance as Performance & {
+      memory?: {
+        jsHeapSizeLimit: number
+        usedJSHeapSize: number
+        totalJSHeapSize: number
+      }
+    }
+  ).memory
+  const devMem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory
+  const gpu = (navigator as Navigator & { gpu?: unknown }).gpu
 
   const lines: string[] = [
     `── state ───────────────────`,
@@ -2937,168 +3272,210 @@ function buildDebugInfo(): string {
     ``,
     `── memory ──────────────────`,
     `deviceMemory: ${devMem != null ? devMem + ' GB' : 'unavailable'}`,
-    `webgpu:      ${gpu ? 'available' : 'unavailable'}`,
-  ];
+    `webgpu:      ${gpu ? 'available' : 'unavailable'}`
+  ]
 
   if (perfMem) {
     lines.push(
       `heapUsed:    ${formatBytes(perfMem.usedJSHeapSize)}`,
       `heapTotal:   ${formatBytes(perfMem.totalJSHeapSize)}`,
-      `heapLimit:   ${formatBytes(perfMem.jsHeapSizeLimit)}`,
-    );
+      `heapLimit:   ${formatBytes(perfMem.jsHeapSizeLimit)}`
+    )
   }
 
-  lines.push(``, `── camera ──────────────────`,
+  lines.push(
+    ``,
+    `── camera ──────────────────`,
     `x: ${camera.x.toFixed(1)}  y: ${camera.y.toFixed(1)}  scale: ${camera.scale.toFixed(3)}`,
-    ``, `[press \` to close]`);
+    ``,
+    `[press \` to close]`
+  )
 
-  return lines.join('\n');
+  return lines.join('\n')
 }
 
 function refreshDebugOverlay() {
-  if (debugOverlay.style.display === 'none') return;
+  if (debugOverlay.style.display === 'none') return
   // Update text node after the copy button (first child)
-  const btn = debugOverlay.firstElementChild;
-  debugOverlay.textContent = buildDebugInfo();
-  if (btn) debugOverlay.insertBefore(btn, debugOverlay.firstChild);
+  const btn = debugOverlay.firstElementChild
+  debugOverlay.textContent = buildDebugInfo()
+  if (btn) debugOverlay.insertBefore(btn, debugOverlay.firstChild)
 }
 
 function navigateModal(dir: 'left' | 'right' | 'up' | 'down') {
-  if (state.activeFileIndex === null) return;
-  const nextIndex = getNextImageInDirection(state.activeFileIndex, state.points, dir);
+  if (state.activeFileIndex === null) return
+  const nextIndex = getNextImageInDirection(state.activeFileIndex, state.points, dir)
   if (nextIndex !== state.activeFileIndex) {
-    openFileModal(nextIndex);
+    openFileModal(nextIndex)
   }
 }
 
 function navigateCanvas(dir: 'left' | 'right' | 'up' | 'down') {
-  const pts = state.points;
-  if (!pts.length) return;
+  const pts = state.points
+  if (!pts.length) return
 
-  let startIndex = state.lastViewedIndex;
+  let startIndex = state.lastViewedIndex
   if (startIndex === null) {
-    let minD = Infinity;
+    let minD = Infinity
     for (let i = 0; i < pts.length; i++) {
-      const dx = pts[i][0] - camera.x;
-      const dy = pts[i][1] - camera.y;
-      const d = dx * dx + dy * dy;
-      if (d < minD) { minD = d; startIndex = i; }
+      const dx = pts[i][0] - camera.x
+      const dy = pts[i][1] - camera.y
+      const d = dx * dx + dy * dy
+      if (d < minD) {
+        minD = d
+        startIndex = i
+      }
     }
   }
 
-  if (startIndex === null) return;
+  if (startIndex === null) return
 
-  const nextIndex = getNextImageInDirection(startIndex, pts, dir);
+  const nextIndex = getNextImageInDirection(startIndex, pts, dir)
   if (nextIndex !== startIndex) {
-    state.lastViewedIndex = nextIndex;
-    camera.x = pts[nextIndex][0];
-    camera.y = pts[nextIndex][1];
-    scheduleRender();
+    state.lastViewedIndex = nextIndex
+    camera.x = pts[nextIndex][0]
+    camera.y = pts[nextIndex][1]
+    scheduleRender()
   }
 }
 
 function navigateSequential(delta: 1 | -1) {
-  if (!state.points.length) return;
-  let currentIndex = state.activeFileIndex ?? state.lastViewedIndex;
+  if (!state.points.length) return
+  let currentIndex = state.activeFileIndex ?? state.lastViewedIndex
   if (currentIndex === null) {
-    let minD = Infinity;
+    let minD = Infinity
     for (let i = 0; i < state.points.length; i++) {
-      const dx = state.points[i][0] - camera.x, dy = state.points[i][1] - camera.y;
-      const d = dx * dx + dy * dy;
-      if (d < minD) { minD = d; currentIndex = i; }
+      const dx = state.points[i][0] - camera.x,
+        dy = state.points[i][1] - camera.y
+      const d = dx * dx + dy * dy
+      if (d < minD) {
+        minD = d
+        currentIndex = i
+      }
     }
   }
-  if (currentIndex === null) return;
+  if (currentIndex === null) return
 
   // Viewer mode already arranges state.files in visual order (folder then date),
   // so currentIndex is also its position — step directly in O(1), no sort/alloc.
   if (state.settings.viewerOnly) {
-    const len = state.files.length;
-    openFileModal((currentIndex + delta + len) % len);
-    return;
+    const len = state.files.length
+    openFileModal((currentIndex + delta + len) % len)
+    return
   }
 
   // AI mode: step in chronological (lastModified) order. Cache the sorted order
   // and rebuild it only when the state.files reference changes, so repeated n/p
   // presses don't re-sort on every step.
-  const order = getChronologicalOrder();
-  const pos = order.indexOf(currentIndex);
-  if (pos === -1) return;
-  const nextPos = (pos + delta + order.length) % order.length;
-  openFileModal(order[nextPos]);
+  const order = getChronologicalOrder()
+  const pos = order.indexOf(currentIndex)
+  if (pos === -1) return
+  const nextPos = (pos + delta + order.length) % order.length
+  openFileModal(order[nextPos])
 }
 
-let chronologicalOrderCache: number[] | null = null;
-let chronologicalOrderFilesRef: PhotoFile[] | null = null;
+let chronologicalOrderCache: number[] | null = null
+let chronologicalOrderFilesRef: PhotoFile[] | null = null
 function getChronologicalOrder(): number[] {
   if (chronologicalOrderCache && chronologicalOrderFilesRef === state.files) {
-    return chronologicalOrderCache;
+    return chronologicalOrderCache
   }
-  chronologicalOrderFilesRef = state.files;
-  chronologicalOrderCache = Array.from({ length: state.files.length }, (_, i) => i)
-    .sort((a, b) => state.files[a].lastModified - state.files[b].lastModified);
-  return chronologicalOrderCache;
+  chronologicalOrderFilesRef = state.files
+  chronologicalOrderCache = Array.from({ length: state.files.length }, (_, i) => i).sort(
+    (a, b) => state.files[a].lastModified - state.files[b].lastModified
+  )
+  return chronologicalOrderCache
 }
 
-dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1));
-dom.modalNextBtn.addEventListener('click', () => navigateSequential(1));
+dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1))
+dom.modalNextBtn.addEventListener('click', () => navigateSequential(1))
 
 document.addEventListener('keydown', (e) => {
   if (e.key === '`') {
-    const open = debugOverlay.style.display === 'none';
-    debugOverlay.style.display = open ? 'block' : 'none';
-    if (open) refreshDebugOverlay();
-    return;
-  }
-  
-  if (state.activeFileIndex !== null && e.key === 'Escape') {
-    closeModal();
-    return;
+    const open = debugOverlay.style.display === 'none'
+    debugOverlay.style.display = open ? 'block' : 'none'
+    if (open) refreshDebugOverlay()
+    return
   }
 
-  let dir: 'left' | 'right' | 'up' | 'down' | null = null;
-  if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') dir = 'left';
-  else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') dir = 'right';
-  else if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') dir = 'up';
-  else if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') dir = 'down';
+  if (state.activeFileIndex !== null && e.key === 'Escape') {
+    closeModal()
+    return
+  }
+
+  let dir: 'left' | 'right' | 'up' | 'down' | null = null
+  if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') dir = 'left'
+  else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') dir = 'right'
+  else if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') dir = 'up'
+  else if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') dir = 'down'
 
   if (dir) {
     if (state.activeFileIndex !== null) {
-      e.preventDefault();
-      navigateModal(dir);
+      e.preventDefault()
+      navigateModal(dir)
     } else if (state.phase === 'done' && document.activeElement?.tagName !== 'INPUT') {
-      e.preventDefault();
-      navigateCanvas(dir);
+      e.preventDefault()
+      navigateCanvas(dir)
     }
   }
 
   // n/p keys for sequential next/previous (in datetime order)
-  const key = e.key.toLowerCase();
-  if ((key === 'n' || key === 'p') && state.points.length > 0 && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')) {
-    e.preventDefault();
-    navigateSequential(key === 'n' ? 1 : -1);
+  const key = e.key.toLowerCase()
+  if (
+    (key === 'n' || key === 'p') &&
+    state.points.length > 0 &&
+    !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')
+  ) {
+    e.preventDefault()
+    navigateSequential(key === 'n' ? 1 : -1)
   }
-});
+})
 
-dom.modalNavLeft.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('left'); });
-dom.modalNavRight.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('right'); });
-dom.modalNavUp.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('up'); });
-dom.modalNavDown.addEventListener('click', (e) => { e.stopPropagation(); navigateModal('down'); });
+dom.modalNavLeft.addEventListener('click', (e) => {
+  e.stopPropagation()
+  navigateModal('left')
+})
+dom.modalNavRight.addEventListener('click', (e) => {
+  e.stopPropagation()
+  navigateModal('right')
+})
+dom.modalNavUp.addEventListener('click', (e) => {
+  e.stopPropagation()
+  navigateModal('up')
+})
+dom.modalNavDown.addEventListener('click', (e) => {
+  e.stopPropagation()
+  navigateModal('down')
+})
 
-const debugCopyBtn = document.getElementById('debug-copy-btn') as HTMLButtonElement;
+const debugCopyBtn = document.getElementById('debug-copy-btn') as HTMLButtonElement
 debugCopyBtn.addEventListener('click', async () => {
-  await navigator.clipboard.writeText(buildDebugInfo());
-  debugCopyBtn.textContent = 'Copied!';
-  setTimeout(() => { debugCopyBtn.textContent = 'Copy'; }, 1500);
-});
+  await navigator.clipboard.writeText(buildDebugInfo())
+  debugCopyBtn.textContent = 'Copied!'
+  setTimeout(() => {
+    debugCopyBtn.textContent = 'Copy'
+  }, 1500)
+})
 
 // Expose to console for deeper inspection
-(window as Window & { __debug?: unknown }).__debug = {
-  get state() { return state; },
-  get camera() { return camera; },
-  get extractor() { return extractor; },
-  get textExtractor() { return textExtractor; },
-  get chromeAIManager() { return chromeAIManager; },
-  get thumbDecoding() { return thumbDecoding; },
-  buildDebugInfo,
-};
+;(window as Window & { __debug?: unknown }).__debug = {
+  get state() {
+    return state
+  },
+  get camera() {
+    return camera
+  },
+  get extractor() {
+    return extractor
+  },
+  get textExtractor() {
+    return textExtractor
+  },
+  get chromeAIManager() {
+    return chromeAIManager
+  },
+  get thumbDecoding() {
+    return thumbDecoding
+  },
+  buildDebugInfo
+}

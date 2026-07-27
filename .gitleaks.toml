@@ -1,0 +1,11 @@
+# Gitleaks configuration — extends the default ruleset.
+# See IMPROVEMENT_PLAN.md (security note) for the known committed Unsplash key,
+# which must be ROTATED — it is intentionally NOT allowlisted here.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Model-variant <option> values are UI strings, not secrets"
+regexTarget = "line"
+regexes = ['''<option value="sapiens2(-fp16|-int8|-fp32)?">''']
