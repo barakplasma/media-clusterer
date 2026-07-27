@@ -2,7 +2,7 @@
 # First-run baseline for a repo with no prior lint config; tighten over time
 # (see IMPROVEMENT_PLAN.md, P2-1).
 
-APPLY_FIXES: none
+APPLY_FIXES: all
 
 FILTER_REGEX_EXCLUDE: '(dist/|node_modules/|package-lock\.json|megalinter-reports/)'
 
