@@ -44,23 +44,23 @@ support landed upstream in transformers.js 3.4.0. No new packages, no version bu
 
 Verified against the Hub for `HuggingFaceTB/SmolVLM2-256M-Video-Instruct`:
 
-| Fact | Value | Why it matters |
-| --- | --- | --- |
-| `vision_config.hidden_size` | **768** | Exactly the app's existing vector width — pooled features are a drop-in |
-| `vision_config.image_size` / `patch_size` | 512 / 16 | 1024 patches per tile |
-| `scale_factor` / `pixel_shuffle_factor` | 4 | 1024 patches → **64 visual tokens per frame** into the LLM |
-| `text_config` | 576 hidden, 30 layers, vocab 49280 | Tiny decoder; 4 frames ≈ 256 tokens of visual prefill |
-| `video_sampling` | `fps 1`, `max_frames 64`, `longest_edge 512` | The model's native video protocol; we use 4 frames, far below the ceiling |
-| `do_image_splitting` default | `true`, `size.longest_edge 2048` | **Must be set to `false`** — tiling multiplies memory and is the easiest way to blow the budget |
+| Fact                                      | Value                                        | Why it matters                                                                                  |
+|-------------------------------------------|----------------------------------------------|-------------------------------------------------------------------------------------------------|
+| `vision_config.hidden_size`               | **768**                                      | Exactly the app's existing vector width — pooled features are a drop-in                         |
+| `vision_config.image_size` / `patch_size` | 512 / 16                                     | 1024 patches per tile                                                                           |
+| `scale_factor` / `pixel_shuffle_factor`   | 4                                            | 1024 patches → **64 visual tokens per frame** into the LLM                                      |
+| `text_config`                             | 576 hidden, 30 layers, vocab 49280           | Tiny decoder; 4 frames ≈ 256 tokens of visual prefill                                           |
+| `video_sampling`                          | `fps 1`, `max_frames 64`, `longest_edge 512` | The model's native video protocol; we use 4 frames, far below the ceiling                       |
+| `do_image_splitting` default              | `true`, `size.longest_edge 2048`             | **Must be set to `false`** — tiling multiplies memory and is the easiest way to blow the budget |
 
 ONNX file sizes, which set the tier download figures:
 
-| File (q4f16) | 256M | 500M |
-| --- | --- | --- |
-| `vision_encoder` | 55 MB | 58 MB |
-| `embed_tokens` | 57 MB | 95 MB |
-| `decoder_model_merged` | 77 MB | 205 MB |
-| **Total** | **189 MB** | **358 MB** |
+| File (q4f16)           | 256M       | 500M       |
+|------------------------|------------|------------|
+| `vision_encoder`       | 55 MB      | 58 MB      |
+| `embed_tokens`         | 57 MB      | 95 MB      |
+| `decoder_model_merged` | 77 MB      | 205 MB     |
+| **Total**              | **189 MB** | **358 MB** |
 
 For scale, the app's current embedders cost 116 MB (`sapiens2-int8`), 229 MB (`sapiens2-fp16`), 380 MB
 (`nomic`). Tier A at 55 MB is the cheapest embedder the app has ever shipped.
@@ -74,11 +74,11 @@ For scale, the app's current embedders cost 116 MB (`sapiens2-int8`), 229 MB (`s
 
 ### Tiers
 
-| Tier | `ModelVariant` | Download | Produces | Requires |
-| --- | --- | --- | --- | --- |
-| A | `smolvlm2-vision` | 55 MB | 768-d vectors | WASM is fine |
-| B | `smolvlm2-256m` | 189 MB | Captions + vectors | WebGPU recommended |
-| C | `smolvlm2-500m` | 358 MB | Captions + vectors | WebGPU |
+| Tier | `ModelVariant`    | Download | Produces           | Requires           |
+|------|-------------------|----------|--------------------|--------------------|
+| A    | `smolvlm2-vision` | 55 MB    | 768-d vectors      | WASM is fine       |
+| B    | `smolvlm2-256m`   | 189 MB   | Captions + vectors | WebGPU recommended |
+| C    | `smolvlm2-500m`   | 358 MB   | Captions + vectors | WebGPU             |
 
 The tier is a data row, not a code branch — see "Key Design Decisions".
 
@@ -305,13 +305,13 @@ Cross-reference: this closes the caption half of `IMPROVEMENT_PLAN.md` P1-1.
 
 ## Risks
 
-| Risk | Mitigation | What settles it |
-| --- | --- | --- |
-| Pooled SigLIP clusters worse than `sapiens2-fp16` | M2 ships standalone and early; all existing variants stay selectable | Side-by-side cluster comparison at the end of M2 |
-| WASM fallback too slow for multi-frame captioning | Tier A is WASM-viable; `pickVlmTier()` withholds B/C without WebGPU | Timing run on the Chromebook, WebGPU disabled |
-| `vision_encoder.onnx` output shape assumption | `visionDim` on the tier descriptor; per-variant cache prefixes | `session.outputNames` + dims, M2 day one |
-| First worker in the repo (Vite 8 + ORT CDN WASM) | Smoke-test the built bundle, not just `npm run dev` | `npm run build && npm run preview` at the end of M1 |
-| Eight model variants is a lot of UI | Group the `<select>` with `<optgroup>`; `pickVlmTier()` picks a sensible default | Settings modal review |
+| Risk                                              | Mitigation                                                                       | What settles it                                     |
+|---------------------------------------------------|----------------------------------------------------------------------------------|-----------------------------------------------------|
+| Pooled SigLIP clusters worse than `sapiens2-fp16` | M2 ships standalone and early; all existing variants stay selectable             | Side-by-side cluster comparison at the end of M2    |
+| WASM fallback too slow for multi-frame captioning | Tier A is WASM-viable; `pickVlmTier()` withholds B/C without WebGPU              | Timing run on the Chromebook, WebGPU disabled       |
+| `vision_encoder.onnx` output shape assumption     | `visionDim` on the tier descriptor; per-variant cache prefixes                   | `session.outputNames` + dims, M2 day one            |
+| First worker in the repo (Vite 8 + ORT CDN WASM)  | Smoke-test the built bundle, not just `npm run dev`                              | `npm run build && npm run preview` at the end of M1 |
+| Eight model variants is a lot of UI               | Group the `<select>` with `<optgroup>`; `pickVlmTier()` picks a sensible default | Settings modal review                               |
 
 ## Verification
 
@@ -339,11 +339,11 @@ Cross-reference: this closes the caption half of `IMPROVEMENT_PLAN.md` P1-1.
 
 ## Suggested sequencing
 
-| Step | Work | Why this order |
-| --- | --- | --- |
-| 1 | M1 worker scaffold | Everything else runs inside it; find build problems before writing features |
-| 2 | M2 tier A embeddings | Shippable alone, and it is the gate on ADR-0001's vector decision |
-| 3 | M5 captions to IndexedDB | Must land before multi-frame captions hit the localStorage hot path |
-| 4 | M3 multi-frame extraction | Independent of the model; testable against tier A |
-| 5 | M4 tiers B/C | Needs M3 for frames and M5 for storage |
-| 6 | M6 search and gating | Needs captions (M4) to have something to index |
+| Step | Work                      | Why this order                                                              |
+|------|---------------------------|-----------------------------------------------------------------------------|
+| 1    | M1 worker scaffold        | Everything else runs inside it; find build problems before writing features |
+| 2    | M2 tier A embeddings      | Shippable alone, and it is the gate on ADR-0001's vector decision           |
+| 3    | M5 captions to IndexedDB  | Must land before multi-frame captions hit the localStorage hot path         |
+| 4    | M3 multi-frame extraction | Independent of the model; testable against tier A                           |
+| 5    | M4 tiers B/C              | Needs M3 for frames and M5 for storage                                      |
+| 6    | M6 search and gating      | Needs captions (M4) to have something to index                              |

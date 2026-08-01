@@ -41,16 +41,16 @@ into a caption, then a separately downloaded 134 MB `nomic-embed-text-v1.5` turn
 
 ## Considered options
 
-| Option | Params | Video-native | Browser-ready | Verdict |
-| --- | --- | --- | --- | --- |
-| Status quo — Gemini Nano | Browser-managed | No | Built-in | **Rejected.** Exceeds the device budget; size and context are not negotiable by the app |
-| **SmolVLM2-256M-Video-Instruct** | 256 M | **Yes** | ONNX in-repo, `transformers.js_config` present | **Chosen — default tier** |
-| **SmolVLM2-500M-Video-Instruct** | 507 M | **Yes** | Same | **Chosen — opt-in tier** for capable machines |
-| SmolVLM2-2.2B | 2.2 B | Yes | Yes | Rejected — over the 1 B ceiling |
-| FastVLM-0.5B | 0.5 B | No — image only | Yes | Rejected — does not address the video problem |
-| LFM2-VL-450M | 0.45 B | No — image only | Partial | Rejected — same reason |
-| Moondream2 / Qwen3-VL-2B | ~2 B | Partial | Yes | Rejected — over the ceiling |
-| Server-side inference | — | — | — | Rejected — violates driver 4 |
+| Option                           | Params          | Video-native    | Browser-ready                                  | Verdict                                                                                 |
+|----------------------------------|-----------------|-----------------|------------------------------------------------|-----------------------------------------------------------------------------------------|
+| Status quo — Gemini Nano         | Browser-managed | No              | Built-in                                       | **Rejected.** Exceeds the device budget; size and context are not negotiable by the app |
+| **SmolVLM2-256M-Video-Instruct** | 256 M           | **Yes**         | ONNX in-repo, `transformers.js_config` present | **Chosen — default tier**                                                               |
+| **SmolVLM2-500M-Video-Instruct** | 507 M           | **Yes**         | Same                                           | **Chosen — opt-in tier** for capable machines                                           |
+| SmolVLM2-2.2B                    | 2.2 B           | Yes             | Yes                                            | Rejected — over the 1 B ceiling                                                         |
+| FastVLM-0.5B                     | 0.5 B           | No — image only | Yes                                            | Rejected — does not address the video problem                                           |
+| LFM2-VL-450M                     | 0.45 B          | No — image only | Partial                                        | Rejected — same reason                                                                  |
+| Moondream2 / Qwen3-VL-2B         | ~2 B            | Partial         | Yes                                            | Rejected — over the ceiling                                                             |
+| Server-side inference            | —               | —               | —                                              | Rejected — violates driver 4                                                            |
 
 SmolVLM2's 256M and 500M checkpoints are, as of this writing, the only sub-1 B **video-native** VLMs with
 shipped ONNX weights and a working WebGPU story. That is a statement about what exists in 2026, not a
@@ -65,11 +65,11 @@ Adopt **SmolVLM2** via `@huggingface/transformers`, running in a Web Worker, in 
 
 ### Tiers
 
-| Tier | `ModelVariant` | Download (q4f16) | Produces |
-| --- | --- | --- | --- |
-| A | `smolvlm2-vision` | `vision_encoder` only — **55 MB** | 768-d vectors only, no captions |
-| B | `smolvlm2-256m` | vision + embed + decoder — **189 MB** | Captions **and** 768-d vectors |
-| C | `smolvlm2-500m` | vision + embed + decoder — **358 MB** | Same, higher quality |
+| Tier | `ModelVariant`    | Download (q4f16)                      | Produces                        |
+|------|-------------------|---------------------------------------|---------------------------------|
+| A    | `smolvlm2-vision` | `vision_encoder` only — **55 MB**     | 768-d vectors only, no captions |
+| B    | `smolvlm2-256m`   | vision + embed + decoder — **189 MB** | Captions **and** 768-d vectors  |
+| C    | `smolvlm2-500m`   | vision + embed + decoder — **358 MB** | Same, higher quality            |
 
 For comparison, the app's existing embedders download 116 MB (`sapiens2-int8`), 229 MB (`sapiens2-fp16`)
 and 380 MB (`nomic`). **Tier A is the cheapest embedder the app has ever had**, and tier B — a full
