@@ -190,8 +190,11 @@ Remote embedding dimensions are provider-chosen and unknown until the first resp
 (`src/embeddings.ts`) already derive width from `dims` and need no change.
 
 The IndexedDB cache namespace correspondingly widens from `@sapiens2/`-style constants
-(`src/app.ts:354-360`) to include host, pipeline, model, embedder and dimension — because switching any
-of them silently invalidates every cached vector.
+(`src/app.ts:354-360`) to cover **every input that changes the resulting vector** — the full base URL,
+pipeline, model, embedder, dimension, wire format, and also the describe prompt, image size and video
+frame count. Anything left out is a setting that appears to do nothing: change it, reload, and the cache
+serves vectors built from the old input. Namespacing is non-destructive, so the cost of including a
+setting is one re-embed, and reverting restores the previous cache for free.
 
 ### Latent bugs this surfaces
 

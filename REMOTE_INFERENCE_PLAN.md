@@ -255,11 +255,19 @@ A new `#openai-setting` block in `index.html`, shown by generalising `updateChro
 | Models | `<input list=…>` with `<datalist>` populated from `/models` after a successful test. |
 | Embedding source | remote / local — pipeline B only. |
 | Frames per video, concurrency, max image width, wire format | With cost hints. |
-| Describe prompt | **Reuse the existing `#chrome-ai-prompt` textarea** — relabel its container and show it for both `chrome-ai` and `openai`, keeping the `mc_chrome_ai_prompt` storage key. One prompt, one control. |
+| Describe prompt | **Reuse the existing `#chrome-ai-prompt` textarea** — relabel its container and show it for both `chrome-ai` and `openai`, keeping the `mc_chrome_ai_prompt` storage key. One prompt, one control. Its hint currently reads "Changes apply to new embeddings only", which is accurate for `chrome-ai` and **wrong** for `openai`, where the prompt is namespaced: rewrite it to say editing the prompt re-embeds, and that reverting it restores the previous cache. |
 | Test connection | Runs `/models`, then `probeWireFormat`, and reports the winning format and dimension. |
 
-Changing base URL, model or pipeline **after** a load must trigger the same page reload as `#model-select`
-(`:2827-2834`), because the cache namespace changes underneath `state.vectors`.
+Changing **any** vector-affecting setting after a load must trigger the same page reload as
+`#model-select` (`:2827-2834`), because the cache namespace changes underneath `state.vectors`. That is
+every input in the namespace list below: base URL, pipeline, either model field, **embedding source**,
+wire format, describe prompt, max image width, and frames per video.
+
+The embedding-source switch (remote `/embeddings` ↔ local `nomic-embed-text`) is the one most easily
+missed and the most dangerous, because the dimension guard cannot catch it: `nomic-embed-text` is 768-d
+and so are many remote models, so flipping the source after a run leaves `state.vectors` in the old space
+while queries are embedded in the new one, at matching width. Search then returns plausible, meaningless
+rankings with nothing to trip on. Treat it as reload-required, not as a live toggle.
 
 Doing the UI before the inference path means the error messages below are reviewable in isolation.
 
@@ -302,11 +310,41 @@ In `embedAll()`:
 
 - `isOpenAI` flag alongside `:1442-1443`; batch size from `openai.concurrency` at `:1459` — semantically
   a concurrency window here, since `p-limit` does the real limiting inside the client.
-- Cache prefix from `currentCachePrefix()` (B2), namespaced on a synchronous FNV-1a hash of
-  `host | pipeline | model | embedderId | dim | wireFormat`. Deliberately **not** `crypto.subtle.digest`,
-  which is async and would force `currentCachePrefix()` and all its callers to become promises. Include
-  `dim` even though the model implies it — providers change dimensions, and that is the one mismatch
-  producing garbage rather than an error (B3).
+- Cache prefix from `currentCachePrefix()` (B2), namespaced on a synchronous FNV-1a hash. Deliberately
+  **not** `crypto.subtle.digest`, which is async and would force `currentCachePrefix()` and all its
+  callers to become promises.
+
+  **The rule is: every input that changes the resulting vector belongs in the namespace.**
+
+  | Component | Why |
+  | --- | --- |
+  | full normalized base URL | not just the host — two paths on one host can be different services behind a gateway, and the port distinguishes Ollama from LM Studio |
+  | `pipeline` | `direct` and `vlm` produce incomparable vectors |
+  | vision/VLM model | in pipeline B the caption, and therefore the vector, depends entirely on it |
+  | `embedderId` | `remote:<model>` vs `local:nomic-embed-text-v1.5` |
+  | `dim` | providers change dimensions silently, and dim mismatch is the one failure producing garbage rather than an error (B3) |
+  | `wireFormat` | different request shapes can reach different model paths on the same server |
+  | **describe prompt** (pipeline B) | the caption is the embedding input; a reworded prompt is a different vector |
+  | **`maxImageWidth`** / **`jpegQuality`** | changes the pixels the model sees |
+  | **`framesPerVideo`** | changes what the model sees for videos |
+
+  The last three are the ones easiest to leave out, and leaving them out is what makes a setting look
+  broken: change it, reload, and `readCachedEmbeddings()` serves vectors built from the old input, so
+  nothing visibly happens.
+
+  This is a change of position from a first draft that excluded the prompt on the grounds that `chrome-ai`
+  already behaves that way (its hint reads "Changes apply to new embeddings only"). That precedent is
+  real but it is a bug, not a contract — and it is cheaper to be wrong about locally, where re-embedding
+  costs only time.
+
+  Namespacing is **non-destructive**, which is what makes the strict rule affordable: vectors under the
+  old namespace stay in IndexedDB, so reverting a setting silently restores its cache rather than
+  re-embedding. The cost of a change is therefore one re-embed, not permanent loss — and the cost guard
+  below already tells the user how many files that is before anything is sent.
+
+  `framesPerVideo` is the one imprecise entry: it only affects videos, so including it globally
+  re-embeds images that did not change. Correctness first; split the namespace per media type only if
+  this proves annoying in practice.
 - `allSettled` results (B5); rejected entries join the existing `failedInputs` set (`:1563`) so `:1638`
   skips the cache write. That mechanism already exists and is exactly right — reuse it.
 - On 429, call `batcher.recordFailure()`. `createAdaptiveBatcher` (`src/batching.ts:48`) already halves
@@ -388,8 +426,9 @@ the mechanism.
    `similarity.ts` that does not exist and omits eight modules that do.
 6. **`AGENT.md`** — add Remote AI Mode; a **Secrets** rule (keys only via `getOpenAIKey()`, never in
    `state`, `mc_settings`, a URL, or `console.error`); an **embedding-space invariant** rule (both sides
-   through `embedTextsForActiveBackend()`; any change of embedder, model or dimension must change the
-   cache namespace).
+   through `embedTextsForActiveBackend()`, under that model's own role-prefix scheme — which for nomic
+   means the prefixes differ by role; any change of embedder, model, dimension, or of an input that
+   alters what gets embedded must change the cache namespace).
 
 ## Tests
 
@@ -413,8 +452,11 @@ the mechanism.
   mentions CORS and the per-provider toggles.
 - **`redactSecrets`** — removes the live key and the generic shapes, is idempotent, leaves innocuous text
   alone; and an `OpenAICompatError` built from a body containing a key has a redacted `.message`.
-- **`openaiCacheNamespace`** — deterministic, and differs when *any* of host / pipeline / model /
-  embedder / dim / wire format changes. One assertion each — this is the anti-collision contract.
+- **`openaiCacheNamespace`** — deterministic for identical input, and differs when *any* single
+  component changes: base URL (including path and port), pipeline, vision/VLM model, embedder, dim, wire
+  format, describe prompt, `maxImageWidth`, `jpegQuality`, `framesPerVideo`. One assertion per component
+  — this is the anti-collision contract, and a component silently missing from the hash is exactly the
+  bug the test exists to catch.
 - **`computeTargetSize`** — aspect ratio preserved, never upscales, clamps to `maxWidth`.
 - **`applyEmbeddingPrefix`** — prefix applied for nomic, absent otherwise.
 
@@ -449,7 +491,11 @@ legacy basename key migrated, backend namespacing keeps two backends' captions a
 6. A deliberately wrong API key — must **not** open the HuggingFace fallback modal (B1), and the key must
    not appear in the network tab's request URLs or in any console output.
 7. Switch provider mid-session — the page reloads and re-embeds rather than reusing vectors from the old
-   namespace.
+   namespace. Repeat for **each** namespaced setting, and specifically for the embedding-source switch
+   with a 768-d remote model, where the dimension guard cannot help: after flipping the source, search
+   must either re-embed or refuse, never return rankings against the old vectors. Then revert one setting
+   and confirm its previous cache is served again rather than re-embedded — the non-destructive property
+   the strict namespace rule depends on.
 8. Cancel mid-run — DevTools → Network shows in-flight requests actually aborting.
 9. A video file with a video LLM on pipeline B — multiple frames reach the model in one request, and the
    caption describes change across the clip.
