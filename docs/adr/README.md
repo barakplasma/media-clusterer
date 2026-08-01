@@ -44,7 +44,5 @@ reader asking "why on earth is it done this way?". Routine feature work does not
 
 | ADR | Title | Status |
 | --- | --- | --- |
-| ADR                                        | Title                                                            | Status   |
-|--------------------------------------------|------------------------------------------------------------------|----------|
 | [0001](0001-small-video-language-model.md) | Adopt a small video language model for captioning and embeddings | Proposed |
 | [0002](0002-openai-compatible-remote-inference.md) | Offer remote inference against any OpenAI-compatible endpoint | Proposed |
