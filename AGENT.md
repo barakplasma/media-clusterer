@@ -2,10 +2,20 @@
 
 ## Tech Stack
 - **Frontend**: Vite (v8+), TypeScript, Vanilla CSS
-- **AI**: Transformers.js (v4.2.0, Multimodal Nomic embeddings)
+- **AI**: Three interchangeable embedding backends selected by `settings.modelVariant`:
+  - `sapiens2-*` (**default** `sapiens2-fp16`) — `src/sapiens2.ts`, raw onnxruntime-web
+  - `nomic` — Transformers.js (v4.2.0) multimodal Nomic embeddings
+  - `chrome-ai` — `src/chromeAI.ts`, Chrome Prompt API caption → `nomic-embed-text` vector
+
+  All three produce 768-dim L2-normalized vectors.
 - **Projections**: DruidJS (UMAP, t-SNE, PCA, Isomap, LLE, MDS, Sammon, TriMap)
 - **Database**: IndexedDB (for vector caching)
 - **Deployment**: Cloudflare Pages
+
+## Documentation
+- **Architecture decisions** live in `docs/adr/` — see `docs/adr/README.md` for the convention.
+  Write an ADR when a change is hard to reverse or constrains later work.
+- **Feature plans** live in root-level `*_PLAN.md` files.
 
 ## Core Workflows
 
