@@ -50,10 +50,17 @@ jobs:
           APPLY_FIXES_MODE: commit
 
       - name: Commit and push applied linter fixes
+        # !cancelled() is load-bearing: the MegaLinter step exits non-zero
+        # whenever any linter reports an error (here, the security scanners
+        # always do), and by default that skips every later step — so without
+        # this the fixes would never be pushed.
         # has_updated_sources is 1 only when a linter actually rewrote a file.
         # The follow-up push re-runs this workflow once; that run finds nothing
         # left to fix, so it converges rather than looping.
-        if: steps.ml.outputs.has_updated_sources == 1 && env.FIX_BRANCH != ''
+        if: >
+          !cancelled() &&
+          steps.ml.outputs.has_updated_sources == 1 &&
+          env.FIX_BRANCH != ''
         uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
         with:
           branch: ${{ env.FIX_BRANCH }}
