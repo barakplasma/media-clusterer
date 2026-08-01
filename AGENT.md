@@ -38,6 +38,15 @@
 - **Logic**: Use the `IProjection` interface for dimensionality reduction algorithms.
 - **State**: Centralized in the `state` object in `src/app.ts`.
 - **Storage**: Use `src/db.ts` for IndexedDB operations.
+- **Secrets**: API keys never enter `state`, `mc_settings`, a URL, or `console.error` — the last of these
+  is shipped to a remote error sink by `captureConsoleIntegration` (`src/sentry.ts:15`). See
+  [ADR-0002](docs/adr/0002-openai-compatible-remote-inference.md).
+- **Embedding space**: index-time and query-time vectors must come from the same embedder under that
+  model's own role-prefix scheme — which for nomic means the prefixes deliberately *differ* by role
+  (`search_document:` when indexing, `src/app.ts:1590`; `search_query:` when querying, `src/app.ts:627`),
+  and for a model with no such scheme means no prefix on either side. Never mix schemes across the two
+  sides. Any change of embedder, model, dimension, or of an input that alters what gets embedded must
+  change the IndexedDB cache namespace (`currentCachePrefix`, `src/app.ts:354`).
 
 ## Architecture
 
@@ -45,6 +54,9 @@
 
 1. **AI Mode** (default): Loads embeddings, runs projections, enables semantic search
 2. **Viewer-Only Mode**: Skips AI, arranges by folder/date grid, no search
+3. **Remote AI Mode** (proposed, opt-in): inference runs against a user-configured OpenAI-compatible
+   endpoint instead of in the browser — downscaled JPEG thumbnails are uploaded. See
+   [ADR-0002](docs/adr/0002-openai-compatible-remote-inference.md) and `REMOTE_INFERENCE_PLAN.md`.
 
 ### State Management
 
