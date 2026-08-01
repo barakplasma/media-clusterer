@@ -46,7 +46,9 @@ Secondary main-thread costs found alongside:
   batchSize=1 that is one IndexedDB transaction **per image**. `cacheStats` cursor-scans
   the whole store on every refresh (`src/db.ts:144`).
 - Chrome-AI captions write `localStorage` synchronously per image
-  (`src/app.ts:1390,1424`).
+  (`src/app.ts:1390,1424`). **Addressed by `VIDEO_LM_PLAN.md` milestone M5**, which moves
+  captions into an IndexedDB `captions` store; multi-frame video captions are longer and
+  must not land on this path.
 - Render-loop churn: a fresh `Int32Array(pts.length)` and a `Set` are allocated **every
   frame** (`src/app.ts:677,690`); `new Image()` is constructed inside the draw loop on
   cache miss (`src/app.ts:758`); the O(n) nearest-point-to-center scan is duplicated three

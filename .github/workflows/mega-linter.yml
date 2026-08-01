@@ -10,19 +10,33 @@ concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   megalinter:
     name: MegaLinter
     runs-on: ubuntu-latest
+    permissions:
+      # write is required so the auto-fix step can push linter fixes back to the
+      # branch. Scoped to this job rather than the workflow. Fixes are only ever
+      # pushed to branches in this repository — see FIX_BRANCH below.
+      contents: write
+    env:
+      # Branch that fixes are checked out from and pushed to. Empty for pull
+      # requests from forks, whose token is read-only and whose head branch does
+      # not exist here; empty makes actions/checkout use its default ref and
+      # disables the commit step, so a fork PR still gets linted, just not fixed.
+      FIX_BRANCH: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.head_ref || github.ref_name) || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
-          persist-credentials: false
+          ref: ${{ env.FIX_BRANCH }}
+          # Credentials are deliberately persisted so the auto-fix step can push.
+          # This is not the usual hardening default; it is required for
+          # APPLY_FIXES_MODE: commit to work.
+          persist-credentials: true # zizmor: ignore[artipacked]
 
       - name: MegaLinter
         id: ml
@@ -30,6 +44,42 @@ jobs:
         env:
           VALIDATE_ALL_CODEBASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apply fixes on every event and commit them straight to the branch.
+          # Which linters may fix is controlled by APPLY_FIXES in .mega-linter.yml.
+          APPLY_FIXES_EVENT: all
+          APPLY_FIXES_MODE: commit
+
+      - name: Commit and push applied linter fixes
+        # !cancelled() is load-bearing: the MegaLinter step exits non-zero
+        # whenever any linter reports an error (here, the security scanners
+        # always do), and by default that skips every later step — so without
+        # this the fixes would never be pushed.
+        # has_updated_sources is 1 only when a linter actually rewrote a file.
+        #
+        # This push uses the default GITHUB_TOKEN, and pushes made with it do
+        # not trigger new workflow runs. That rules out an auto-fix loop by
+        # construction — but it also means the fix commit itself is never
+        # linted, and on a PR it becomes the head commit without checks having
+        # run against it. Verified: the run created for the first auto-fix
+        # commit sat in `action_required` and never executed.
+        # To get the fix commit validated, push with a GitHub App token or PAT
+        # instead, which does trigger workflows (and then converges after one
+        # extra run, since the second finds nothing left to fix).
+        if: >
+          !cancelled() &&
+          steps.ml.outputs.has_updated_sources == 1 &&
+          env.FIX_BRANCH != ''
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
+        with:
+          branch: ${{ env.FIX_BRANCH }}
+          commit_message: 'style: apply MegaLinter auto-fixes'
+          commit_user_name: megalinter-bot
+          commit_user_email: megalinter-bot@users.noreply.github.com
+          # Without this the author defaults to github.actor, which attributes
+          # a machine-generated commit to whoever happened to push.
+          commit_author: megalinter-bot <megalinter-bot@users.noreply.github.com>
+          # Only ever commit real source fixes — never MegaLinter's own output.
+          file_pattern: ':!megalinter-reports'
 
       - name: Archive MegaLinter reports
         if: always()
