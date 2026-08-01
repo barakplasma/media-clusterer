@@ -144,13 +144,24 @@ captioner, not its existence.
 The `enableTextSearch` setting already exists (`src/types.ts:53`) and already governs whether the text
 model is downloaded. That contract is kept, with a new default:
 
-- **Off (new default):** lexical search over captions — BM25/TF-IDF, no model, 0 MB.
-- **On:** lazily load `nomic-embed-text` exactly as today (`src/app.ts:1054-1082`) and get the current
-  cosine semantic search back, unchanged.
-- **New:** search-by-example over pooled vision vectors.
+- **Off (new default):** lexical search — BM25/TF-IDF over captions where they exist, falling back to
+  filename, folder and EXIF/date. No model, 0 MB.
+- **On:** lazily load `nomic-embed-text` (`src/app.ts:1054-1082`) **and embed the captions with it** into
+  a second vector array used only for search.
+- **New:** search-by-example over pooled vision vectors — the one semantic route available on every tier.
 
-Nothing regresses for a user who wants semantic search; it is simply no longer mandatory, and no longer
-downloaded by users who never type a query.
+That second array is not optional, and it is the part most easily got wrong. `searchImages()`
+(`src/app.ts:637-655`) calls `searchByCosine(queryVector, state.vectors)` directly. Today that is sound
+because in `chrome-ai` mode `state.vectors` already *are* nomic-text vectors
+(`src/app.ts:1590-1594`) — query and document share a space. Under a `smolvlm2-*` tier `state.vectors`
+hold pooled SigLIP features, so comparing a nomic-text query against them yields a well-defined cosine
+over an arbitrary ranking. Loading the text model alone does **not** restore today's behaviour; the
+captions must be embedded into a parallel `state.searchVectors`, and the two arrays must never be mixed.
+
+**Tier A cannot offer semantic text search at all**, because it produces no captions to embed. It gets
+lexical metadata search and search-by-example instead, and the toggle is disabled with a reason rather
+than silently returning nothing. Since `pickVlmTier()` selects tier A whenever WebGPU is absent, this is
+a mainstream fallback path, not an edge case.
 
 ## Verification and rollback
 

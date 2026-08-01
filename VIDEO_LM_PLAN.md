@@ -93,7 +93,8 @@ The tier is a data row, not a code branch — see "Key Design Decisions".
    - New branch in `loadModelOnce()` (`:1013`) for the `smolvlm2-*` variants.
    - New branch in `embedAll()` (`:1433`) alongside the existing `isSapiens2` / `isChromeAI` paths
      (`:1442-1443`, `:1566-1595`); new cache prefixes in the `cachePrefix` chain (`:1450-1456`).
-   - Generalise `extractVideoFrame()` → `extractVideoFrames(file, n)` (`:504-555`).
+   - Generalise `extractVideoFrame()` → `extractVideoFrames(file, n, px)` (`:504-555`); resolution is a
+     parameter so the 224 px thumbnail path is not promoted to 512 px. Add `state.searchVectors`.
    - Caption read/write sites move to IndexedDB (`:1551-1553`, `:1585`, `:2489-2493`, `:2536-2540`).
 
 3. **`src/db.ts`**
@@ -199,9 +200,31 @@ the current write is a synchronous `localStorage.setItem` per file inside the em
 eviction. Shipping multi-frame captions onto that path would make an existing defect materially worse.
 `M5` is therefore a hard prerequisite for `M4` reaching users, not a follow-up.
 
+**Search needs a second vector array — the two spaces are not interchangeable.** `searchImages()`
+(`src/app.ts:637-655`) embeds the query with `nomic-embed-text` and calls
+`searchByCosine(queryVector, state.vectors)` directly. That works today because in `chrome-ai` mode
+`state.vectors` *are* nomic-text vectors (caption → `search_document:` → text embedding,
+`src/app.ts:1590-1594`): query and document live in the same space. Under any `smolvlm2-*` tier
+`state.vectors` are pooled SigLIP features instead, and a nomic-text query vector compared against them
+is meaningless — the cosine is defined but the ranking is noise.
+
+So "turn `enableTextSearch` on and get today's behaviour back" is **not** achievable by loading the text
+model alone. It requires keeping two arrays:
+
+| Array                 | Contents                                                        | Used by                                |
+|-----------------------|-----------------------------------------------------------------|----------------------------------------|
+| `state.vectors`       | pooled SigLIP, 768-d                                            | projection, k-means, search-by-example |
+| `state.searchVectors` | `nomic-embed-text` of each caption, `search_document:` prefixed | `searchImages()` only                  |
+
+`searchImages()` must target `state.searchVectors` when present and never mix the two. The extra cost is
+one text-embedding pass over captions, incurred only when the user opts in — which is the same work
+`chrome-ai` does unconditionally today.
+
+**Consequence for tier A:** it produces no captions, so it has no `searchVectors` and *cannot* offer
+semantic text search at all. See M6 for what tier A offers instead.
+
 **Search degrades deliberately.** `enableTextSearch` (`src/types.ts:53`) already gates the text-model
-download. Keep the flag, flip the default to off, and route default search through a lexical index over
-captions. Users who want cosine semantic search turn it on and get exactly today's behaviour.
+download. Keep the flag and flip the default to off.
 
 **Worker boundary chosen once.** `M1` is the repo's first `Worker`. `IMPROVEMENT_PLAN.md` P1-1 wants
 projections moved off-thread too; pick a message protocol here that a projection worker can reuse, rather
@@ -265,18 +288,31 @@ decision gets revisited — cheaply, because nothing else has been built yet.
 
 #### M3 — Multi-frame extraction
 
+**Resolution must be a parameter, not a constant.** The display thumbnail and the VLM frame are different
+sizes on purpose (see "Two resolutions, two purposes"); a single hard-coded 512 would silently promote
+every cached video thumbnail from 224 px to 512 px — over 5× the pixel memory per entry, across an LRU
+holding up to `MAX_THUMBNAILS_CACHE = 2000` — on the exact low-memory device this whole plan exists to
+support.
+
 ```typescript
-async function extractVideoFrames(file: File, n: number): Promise<ImageBitmap[]> {
+const THUMB_FRAME_PX = 224 // today's value at src/app.ts:535
+const VLM_FRAME_PX = 512 // matches video_sampling.video_size.longest_edge
+
+async function extractVideoFrames(file: File, n: number, px: number): Promise<ImageBitmap[]> {
   // One <video>, n seeks, one teardown. See "Key Design Decisions".
   // Timestamps: uniform over (0, duration), avoiding the exact endpoints —
   // the first and last frames are frequently black or a title card.
-  // Each frame: createImageBitmap(video, { resizeWidth: 512, resizeQuality: 'medium' })
+  // Each frame: createImageBitmap(video, { resizeWidth: px, resizeQuality: 'medium' })
   // Teardown once, exactly as extractVideoFrame does today (src/app.ts:518-526).
 }
 ```
 
-Keep `extractVideoFrame()` as `extractVideoFrames(file, 1)[0]` so the thumbnail path (`:606`) is
-unaffected. Keep the `pLimit(4)` wrapper (`:678`) at the *file* level, not the frame level.
+Keep `extractVideoFrame()` as `extractVideoFrames(file, 1, THUMB_FRAME_PX)[0]` so the thumbnail path
+(`:606`) keeps its current 224 px behaviour exactly. The embed path requests
+`extractVideoFrames(file, tier.framesPerVideo, VLM_FRAME_PX)` and must **not** write those frames into
+`state.thumbnails` — today's code caches the extracted frame there (`src/app.ts:1484-1486`), which would
+reintroduce the same memory regression by the back door. Keep the `pLimit(4)` wrapper (`:678`) at the
+*file* level, not the frame level.
 
 #### M4 — Tiers B/C: captions and vectors in one pass
 
@@ -295,13 +331,30 @@ Cross-reference: this closes the caption half of `IMPROVEMENT_PLAN.md` P1-1.
 
 #### M6 — Search and device gating
 
-- Lexical caption index (BM25 or TF-IDF) in `src/compute.ts`, alongside `searchByCosine()` (`:266-291`).
-- `enableTextSearch` default flips to `false`; when `true`, load `nomic-embed-text` exactly as today
-  (`src/app.ts:1054-1082`).
-- Search-by-example: `searchByCosine()` with a selected item's vector as the query.
+Search capability is **a function of the tier**, because tier A has no captions. Writing that out, since
+the naive "lexical index over captions" default is empty on precisely the low-end fallback:
+
+|                    | Tier A (no captions)                                  | Tiers B/C (captions)                            |
+|--------------------|-------------------------------------------------------|-------------------------------------------------|
+| Default search     | filename + folder + EXIF/date                         | lexical index over captions                     |
+| Search-by-example  | yes — pooled SigLIP cosine                            | yes                                             |
+| `enableTextSearch` | **hidden/disabled** — no `searchVectors` are possible | opt-in; embeds captions with `nomic-embed-text` |
+
+- Lexical index (BM25 or TF-IDF) in `src/compute.ts`, alongside `searchByCosine()` (`:266-291`). It
+  indexes captions when they exist and **falls back to filename, folder path and EXIF/date fields**
+  otherwise, so tier A still returns results and verification step 7 is satisfiable on every tier. The
+  metadata is already parsed and memoised on `PhotoFile` (`src/app.ts:2454-2479`).
+- `enableTextSearch` default flips to `false`. When `true` **and** the tier produces captions, load
+  `nomic-embed-text` (`src/app.ts:1054-1082`) and build `state.searchVectors` from the captions — see
+  "Search needs a second vector array". On tier A the toggle must be disabled in the UI with a reason,
+  not silently ignored: there is nothing for a text query to match against.
+- Search-by-example: `searchByCosine()` with a selected item's vector as the query. This is the one
+  semantic route available on every tier, which is why tier A is still useful without captions.
 - `pickVlmTier()` in `src/hardware.ts`, using `navigator.deviceMemory` and the WebGPU adapter limits
   already probed in `src/sapiens2.ts:270-321`. An 8 GB Chromebook must land on **256M / q4f16 / 4 frames /
-  batch 1** without the user needing to know any of that. Do not offer tiers B/C when WebGPU is absent.
+  batch 1** without the user needing to know any of that. Do not offer tiers B/C when WebGPU is absent —
+  and note that this is what makes tier A the *default* fallback experience, not a rare edge case, so its
+  search story has to stand on its own.
 
 ## Risks
 
