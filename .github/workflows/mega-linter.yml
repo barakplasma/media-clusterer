@@ -67,6 +67,11 @@ jobs:
           commit_message: 'style: apply MegaLinter auto-fixes'
           commit_user_name: megalinter-bot
           commit_user_email: megalinter-bot@users.noreply.github.com
+          # Without this the author defaults to github.actor, which attributes
+          # a machine-generated commit to whoever happened to push.
+          commit_author: megalinter-bot <megalinter-bot@users.noreply.github.com>
+          # Only ever commit real source fixes — never MegaLinter's own output.
+          file_pattern: ':!megalinter-reports'
 
       - name: Archive MegaLinter reports
         if: always()
