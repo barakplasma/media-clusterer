@@ -5,7 +5,17 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Model-variant <option> values are UI strings, not secrets"
 regexTarget = "line"
 regexes = ['''<option value="sapiens2(-fp16|-int8|-fp32)?">''']
+
+[[allowlists]]
+description = """
+Fixtures in the openaiCompat tests. These are invented strings asserted
+against, not credentials — several tests exist precisely to prove that
+key-shaped input gets redacted, so they cannot avoid containing key-shaped
+literals. Scoped to this one path so a real key committed anywhere else still
+trips the scanner.
+"""
+paths = ['''^src/openaiCompat\.test\.ts$''']
