@@ -44,6 +44,20 @@ export type ModelVariant =
   | 'sapiens2-fp16'
   | 'sapiens2-fp32'
   | 'chrome-ai'
+  | 'openai'
+
+/**
+ * Remote OpenAI-compatible endpoint settings.
+ *
+ * The API key is deliberately NOT here — it lives under its own storage key,
+ * reached only through `getOpenAIKey()` / `setOpenAIKey()` in
+ * `src/openaiCompat.ts`. See ADR-0002.
+ */
+export interface OpenAISettings {
+  baseUrl: string // Normalized API root, e.g. https://openrouter.ai/api/v1
+  model: string // Model id sent as `model` in each request
+  maxImageWidth: number // Thumbnails are downscaled to this before upload
+}
 
 /** Application settings */
 export interface Settings {
@@ -59,6 +73,7 @@ export interface Settings {
   enableLazyCaption: boolean // Generate captions on modal open via Chrome AI (off by default)
   doNotTrack: boolean // Disable BugSink error reporting (default false)
   customModelHost: string // Alternative HuggingFace-compatible host (corporate proxy/mirror); '' = huggingface.co
+  openai: OpenAISettings // Remote inference endpoint (modelVariant === 'openai')
 }
 
 /** Application state */
@@ -141,6 +156,17 @@ export interface DOMElements {
   chromeAIPromptReset: HTMLButtonElement
   chromeAIPromptSetting: HTMLDivElement
   customModelHostInput: HTMLInputElement
+  openaiSetting: HTMLDivElement
+  openaiBaseUrl: HTMLInputElement
+  openaiKey: HTMLInputElement
+  openaiRemember: HTMLInputElement
+  openaiModel: HTMLInputElement
+  openaiTestBtn: HTMLButtonElement
+  openaiTestResult: HTMLDivElement
+  openaiConsentModal: HTMLDialogElement
+  openaiConsentHost: HTMLElement
+  openaiConsentAccept: HTMLButtonElement
+  openaiConsentCancel: HTMLButtonElement
   modelFallbackModal: HTMLDialogElement
   modelFallbackClose: HTMLButtonElement
   modelFallbackUrls: HTMLUListElement

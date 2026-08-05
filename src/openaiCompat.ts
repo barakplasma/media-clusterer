@@ -667,11 +667,106 @@ export async function probeDimension(
 /**
  * IndexedDB cache namespace for a remote configuration.
  *
- * Host, model and dimension all participate: any of them changing means the
- * vectors are from a different space and must not be reused
- * (AGENT.md, `currentCachePrefix`). The API key is deliberately absent — it is
- * not part of the embedding space, and cache keys are persisted.
+ * Host and model both participate: either changing means the vectors are from
+ * a different space and must not be reused (AGENT.md, `currentCachePrefix`).
+ *
+ * Dimension is deliberately *not* in the key, because the namespace has to be
+ * computable before the endpoint has been probed (the settings panel shows a
+ * cache count on load). Host+model determines the dimension in practice, and
+ * the case it wouldn't — a provider silently re-pointing a model id at a
+ * different width — is caught by the width check at cache-read time instead,
+ * which is a stronger guard than a namespace anyway.
+ *
+ * The API key is absent by design: it is not part of the embedding space, and
+ * these keys are persisted to disk.
  */
-export function openaiCacheNamespace(cfg: OpenAICompatConfig, dim: number): string {
-  return `openai:${hostOf(cfg.baseUrl)}:${cfg.model}:${dim}`
+export function openaiCacheNamespace(cfg: OpenAICompatConfig): string {
+  return `@openai:${hostOf(cfg.baseUrl)}:${cfg.model}/`
+}
+
+// ── Key storage ─────────────────────────────────────────────────────────────
+
+const KEY_STORAGE = 'mc_openai_key'
+const CONSENT_STORAGE = 'mc_openai_consent'
+
+/**
+ * The API key is stored under its own storage key, never inside `mc_settings`.
+ *
+ * Two concrete reasons (ADR-0002): `src/sentry.ts` reads `mc_settings` to
+ * decide on error reporting, and `saveSettings()` rewrites that whole blob on
+ * nearly every UI interaction. Keeping the key out of it means neither path
+ * can pick it up.
+ *
+ * `remember: false` puts it in `sessionStorage`, so it dies with the tab.
+ */
+export function getOpenAIKey(): string {
+  try {
+    return sessionStorage.getItem(KEY_STORAGE) || localStorage.getItem(KEY_STORAGE) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function setOpenAIKey(key: string, remember: boolean): void {
+  try {
+    // Always clear both, or switching "remember" off would leave the old copy
+    // sitting in localStorage.
+    sessionStorage.removeItem(KEY_STORAGE)
+    localStorage.removeItem(KEY_STORAGE)
+    if (!key) return
+    ;(remember ? localStorage : sessionStorage).setItem(KEY_STORAGE, key)
+  } catch {
+    /* storage unavailable (private mode, quota) — the key just won't persist */
+  }
+}
+
+export function clearOpenAIKey(): void {
+  setOpenAIKey('', false)
+}
+
+/** True when the key is currently in `localStorage` rather than `sessionStorage`. */
+export function isOpenAIKeyRemembered(): boolean {
+  try {
+    return !!localStorage.getItem(KEY_STORAGE)
+  } catch {
+    return false
+  }
+}
+
+// ── Upload consent ──────────────────────────────────────────────────────────
+
+/**
+ * Consent is per destination host, not global.
+ *
+ * Agreeing to send thumbnails to a machine on your own LAN says nothing about
+ * agreeing to send them to a third-party API, so consent granted for one host
+ * must not carry over to another.
+ */
+export function hasOpenAIConsent(baseUrl: string): boolean {
+  const host = hostOf(baseUrl)
+  if (!host) return false
+  try {
+    const raw = localStorage.getItem(CONSENT_STORAGE)
+    return raw ? (JSON.parse(raw) as string[]).includes(host) : false
+  } catch {
+    return false
+  }
+}
+
+export function recordOpenAIConsent(baseUrl: string): void {
+  const host = hostOf(baseUrl)
+  if (!host) return
+  try {
+    const raw = localStorage.getItem(CONSENT_STORAGE)
+    const hosts = raw ? (JSON.parse(raw) as string[]) : []
+    if (!hosts.includes(host)) hosts.push(host)
+    localStorage.setItem(CONSENT_STORAGE, JSON.stringify(hosts))
+  } catch {
+    /* storage unavailable — the user will be asked again next time */
+  }
+}
+
+/** Host shown in the consent modal and error messages. Never the full URL. */
+export function openaiHost(baseUrl: string): string {
+  return hostOf(baseUrl)
 }

@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 import {
   normalizeBaseUrl,
+  getOpenAIKey,
+  setOpenAIKey,
+  clearOpenAIKey,
+  isOpenAIKeyRemembered,
+  hasOpenAIConsent,
+  recordOpenAIConsent,
   redactSecrets,
   OpenAICompatError,
   describeOpenAIError,
@@ -480,17 +486,106 @@ describe('embedImages', () => {
 })
 
 describe('openaiCacheNamespace', () => {
-  it('changes when host, model or dimension changes', () => {
-    const base = openaiCacheNamespace(cfg(), 768)
-    expect(openaiCacheNamespace(cfg({ model: 'other' }), 768)).not.toBe(base)
-    expect(openaiCacheNamespace(cfg({ baseUrl: 'https://other.example.com/v1' }), 768)).not.toBe(
-      base
+  it('changes when host or model changes', () => {
+    const base = openaiCacheNamespace(cfg())
+    expect(openaiCacheNamespace(cfg({ model: 'other' }))).not.toBe(base)
+    expect(openaiCacheNamespace(cfg({ baseUrl: 'https://other.example.com/v1' }))).not.toBe(base)
+  })
+
+  it('is stable across keys, so rotating a key does not orphan the cache', () => {
+    expect(openaiCacheNamespace(cfg({ apiKey: 'sk-aaaaaaaa' }))).toBe(
+      openaiCacheNamespace(cfg({ apiKey: 'sk-bbbbbbbb' }))
     )
-    expect(openaiCacheNamespace(cfg(), 1536)).not.toBe(base)
   })
 
   it('never embeds the API key in a persisted cache key', () => {
-    const ns = openaiCacheNamespace(cfg({ apiKey: 'sk-abcdef123456' }), 768)
+    const ns = openaiCacheNamespace(cfg({ apiKey: 'sk-abcdef123456' }))
     expect(ns).not.toContain('sk-abcdef123456')
+  })
+
+  it('is prefix-shaped so it matches the other cache namespaces', () => {
+    expect(openaiCacheNamespace(cfg())).toMatch(/^@openai:.*\/$/)
+  })
+})
+
+describe('key storage', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+  })
+
+  it('keeps the key out of mc_settings, which sentry and saveSettings both touch', () => {
+    localStorage.setItem('mc_settings', JSON.stringify({ modelVariant: 'openai' }))
+    setOpenAIKey('sk-abcdef123456', true)
+
+    expect(localStorage.getItem('mc_settings')).not.toContain('sk-abcdef123456')
+  })
+
+  it('persists to localStorage when remembered', () => {
+    setOpenAIKey('sk-abcdef123456', true)
+    expect(getOpenAIKey()).toBe('sk-abcdef123456')
+    expect(isOpenAIKeyRemembered()).toBe(true)
+  })
+
+  it('uses sessionStorage when not remembered, so it dies with the tab', () => {
+    setOpenAIKey('sk-abcdef123456', false)
+    expect(getOpenAIKey()).toBe('sk-abcdef123456')
+    expect(isOpenAIKeyRemembered()).toBe(false)
+    expect(localStorage.getItem('mc_openai_key')).toBeNull()
+    expect(sessionStorage.getItem('mc_openai_key')).toBe('sk-abcdef123456')
+  })
+
+  it('leaves no copy behind when "remember" is switched off', () => {
+    setOpenAIKey('sk-abcdef123456', true)
+    setOpenAIKey('sk-abcdef123456', false)
+
+    expect(localStorage.getItem('mc_openai_key')).toBeNull()
+    expect(isOpenAIKeyRemembered()).toBe(false)
+  })
+
+  it('clears from both storages', () => {
+    setOpenAIKey('sk-abcdef123456', true)
+    clearOpenAIKey()
+    expect(getOpenAIKey()).toBe('')
+    expect(localStorage.getItem('mc_openai_key')).toBeNull()
+    expect(sessionStorage.getItem('mc_openai_key')).toBeNull()
+  })
+})
+
+describe('upload consent', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('is withheld until granted', () => {
+    expect(hasOpenAIConsent('https://api.example.com/v1')).toBe(false)
+  })
+
+  it('is remembered per host once granted', () => {
+    recordOpenAIConsent('https://api.example.com/v1')
+    expect(hasOpenAIConsent('https://api.example.com/v1')).toBe(true)
+  })
+
+  it('does not carry over to a different host', () => {
+    // Agreeing to upload to your own LAN box is not agreement to upload to a
+    // third-party API — this is the whole point of keying consent by host.
+    recordOpenAIConsent('http://localhost:11434/v1')
+    expect(hasOpenAIConsent('https://openrouter.ai/api/v1')).toBe(false)
+  })
+
+  it('ignores the path, so /v1 vs /v1/embeddings is the same host', () => {
+    recordOpenAIConsent('https://api.example.com/v1')
+    expect(hasOpenAIConsent('https://api.example.com/openai/deployments')).toBe(true)
+  })
+
+  it('accumulates hosts rather than replacing them', () => {
+    recordOpenAIConsent('http://localhost:11434/v1')
+    recordOpenAIConsent('https://openrouter.ai/api/v1')
+    expect(hasOpenAIConsent('http://localhost:11434/v1')).toBe(true)
+    expect(hasOpenAIConsent('https://openrouter.ai/api/v1')).toBe(true)
+  })
+
+  it('treats unparseable input as not consented', () => {
+    expect(hasOpenAIConsent('')).toBe(false)
   })
 })

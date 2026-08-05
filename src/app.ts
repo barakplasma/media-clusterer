@@ -21,6 +21,22 @@ import {
   DEFAULT_DESCRIBE_PROMPT
 } from './chromeAI'
 import type { LanguageModelAvailability } from './chromeAI'
+import {
+  normalizeBaseUrl,
+  imageToDataURL,
+  embedImages,
+  embedQuery,
+  probeDimension,
+  openaiCacheNamespace,
+  getOpenAIKey,
+  setOpenAIKey,
+  isOpenAIKeyRemembered,
+  hasOpenAIConsent,
+  recordOpenAIConsent,
+  openaiHost,
+  describeOpenAIError,
+  type OpenAICompatConfig
+} from './openaiCompat'
 import { l2normalize, extractVector, extractBatchedVectors, makeCacheKey } from './embeddings'
 import { openDB, cacheGet, cacheGetBatch, cachePutBatch, cacheStats } from './db'
 import { getNextImageInDirection } from './spatial'
@@ -174,6 +190,17 @@ const dom: DOMElements = {
   chromeAIPromptReset: document.getElementById('chrome-ai-prompt-reset') as HTMLButtonElement,
   chromeAIPromptSetting: document.getElementById('chrome-ai-prompt-setting') as HTMLDivElement,
   customModelHostInput: document.getElementById('custom-model-host') as HTMLInputElement,
+  openaiSetting: document.getElementById('openai-setting') as HTMLDivElement,
+  openaiBaseUrl: document.getElementById('openai-base-url') as HTMLInputElement,
+  openaiKey: document.getElementById('openai-key') as HTMLInputElement,
+  openaiRemember: document.getElementById('openai-remember') as HTMLInputElement,
+  openaiModel: document.getElementById('openai-model') as HTMLInputElement,
+  openaiTestBtn: document.getElementById('openai-test') as HTMLButtonElement,
+  openaiTestResult: document.getElementById('openai-test-result') as HTMLDivElement,
+  openaiConsentModal: document.getElementById('openai-consent-modal') as HTMLDialogElement,
+  openaiConsentHost: document.getElementById('openai-consent-host') as HTMLElement,
+  openaiConsentAccept: document.getElementById('openai-consent-accept') as HTMLButtonElement,
+  openaiConsentCancel: document.getElementById('openai-consent-cancel') as HTMLButtonElement,
   modelFallbackModal: document.getElementById('model-fallback-modal') as HTMLDialogElement,
   modelFallbackClose: document.getElementById('model-fallback-close') as HTMLButtonElement,
   modelFallbackUrls: document.getElementById('model-fallback-urls') as HTMLUListElement,
@@ -206,7 +233,8 @@ const DEFAULT_SETTINGS: Settings = {
   modelVariant: 'sapiens2-fp16',
   enableLazyCaption: false,
   doNotTrack: false,
-  customModelHost: ''
+  customModelHost: '',
+  openai: { baseUrl: '', model: '', maxImageWidth: 384 }
 }
 
 const savedSettings = localStorage.getItem('mc_settings')
@@ -225,6 +253,10 @@ if (savedSettings) {
 const settings: Settings = savedSettings
   ? { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem('mc_settings')!) }
   : DEFAULT_SETTINGS
+// The spread above is shallow, so a settings blob written before `openai`
+// existed — or one holding a partially-filled object — would leave nested keys
+// undefined. Fill them in explicitly.
+settings.openai = { ...DEFAULT_SETTINGS.openai, ...settings.openai }
 
 const state: AppState = {
   phase: 'idle',
@@ -258,6 +290,18 @@ let modelFallbackReason: Sapiens2FallbackReason | undefined
 let pendingSapiens2Buffer: ArrayBuffer | null = null
 let sapiens2Session: Sapiens2Session | null = null // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null // Chrome built-in AI session manager
+let remoteConfig: OpenAICompatConfig | null = null // Remote OpenAI-compatible endpoint
+
+// Width of the vectors the active backend produces. All the local backends are
+// 768-d; a remote endpoint can be anything, so it is probed at load. Used for
+// the zero vectors that stand in for failed embeddings — one of the wrong
+// width would break every cosine score in the run.
+let activeEmbeddingDim = 768
+
+/** Placeholder for an embedding that could not be computed. */
+function zeroVector(): Float32Array {
+  return new Float32Array(activeEmbeddingDim)
+}
 let lazyCaptionManager: ChromeAISessionManager | null = null // On-demand caption for non-chrome-ai modes
 let captionAbortController: AbortController | null = null // Cancels in-flight lazy caption
 let captionDebounceTimer: ReturnType<typeof setTimeout> | null = null // Debounce before starting AI
@@ -353,6 +397,13 @@ function updateDeviceBadge() {
 
 function currentCachePrefix(): string {
   const v = state.settings.modelVariant
+  if (v === 'openai') {
+    // Computed from settings, not from `remoteConfig`, so the settings panel
+    // can show a cache count before the endpoint has ever been contacted.
+    const baseUrl = normalizeBaseUrl(state.settings.openai.baseUrl)
+    if (!baseUrl || !state.settings.openai.model) return '@openai/'
+    return openaiCacheNamespace({ baseUrl, apiKey: '', model: state.settings.openai.model })
+  }
   if (v === 'chrome-ai') return '@chrome-ai/'
   if (!v.startsWith('sapiens2')) return ''
   if (v === 'sapiens2-fp16') return '@sapiens2/'
@@ -621,6 +672,15 @@ function lazyDecodeThumbnail(idx: number) {
 
 // ── Text embedding (uses text model with search_query prefix) ────────────────
 async function embedText(text: string): Promise<Float32Array> {
+  // Queries must be embedded by whatever embedded the images, or the two sides
+  // land in different spaces (AGENT.md, "Embedding space"). Note there is no
+  // 'search_query:' prefix here: that scheme belongs to nomic, and applying it
+  // to an arbitrary remote model would just embed a literal stray word.
+  if (state.settings.modelVariant === 'openai') {
+    if (!remoteConfig) throw new Error('Remote endpoint not connected')
+    return embedQuery(remoteConfig, text)
+  }
+
   if (!textExtractor) throw new Error('Text model not loaded')
 
   // Add required task prefix for nomic-embed-text
@@ -1009,12 +1069,90 @@ async function runProjection(
   }
 }
 
+/**
+ * Ask before the first upload to a given host. Resolves false if declined.
+ *
+ * Consent is per host and remembered, so switching endpoints asks again —
+ * agreeing to upload to your own LAN box is not agreement to upload to a
+ * third-party API.
+ */
+function showRemoteConsentModal(baseUrl: string): Promise<boolean> {
+  const host = openaiHost(baseUrl)
+  if (hasOpenAIConsent(baseUrl)) return Promise.resolve(true)
+
+  for (const el of document.querySelectorAll('#openai-consent-host, #openai-consent-host-2')) {
+    el.textContent = host
+  }
+
+  return new Promise((resolve) => {
+    const done = (accepted: boolean) => {
+      dom.openaiConsentAccept.removeEventListener('click', onAccept)
+      dom.openaiConsentCancel.removeEventListener('click', onCancel)
+      dom.openaiConsentModal.removeEventListener('cancel', onCancel)
+      dom.openaiConsentModal.close()
+      if (accepted) recordOpenAIConsent(baseUrl)
+      resolve(accepted)
+    }
+    const onAccept = () => done(true)
+    const onCancel = () => done(false)
+
+    dom.openaiConsentAccept.addEventListener('click', onAccept)
+    dom.openaiConsentCancel.addEventListener('click', onCancel)
+    // Esc and the backdrop both count as declining.
+    dom.openaiConsentModal.addEventListener('cancel', onCancel)
+    dom.openaiConsentModal.showModal()
+  })
+}
+
 // ── Model singleton ──────────────────────────────────────────────────────────
 async function loadModelOnce(signal?: AbortSignal) {
   applyModelEnv()
   state.phase = 'loading_model'
   setStatus('Loading model…')
   setProgress(0)
+
+  if (state.settings.modelVariant === 'openai') {
+    const baseUrl = normalizeBaseUrl(state.settings.openai.baseUrl)
+    const model = state.settings.openai.model.trim()
+
+    // Re-enable as well as unhide: the click handler disables the button before
+    // calling in, so returning without this strands the user with a dead button
+    // and no way to retry.
+    const bailOut = (message: string) => {
+      setStatus(message)
+      dom.loadModelBtn.hidden = false
+      dom.loadModelBtn.disabled = false
+      state.phase = 'idle'
+    }
+
+    if (!baseUrl || !model) {
+      bailOut('Set a remote endpoint URL and model in Settings first.')
+      return
+    }
+
+    if (!(await showRemoteConsentModal(baseUrl))) {
+      bailOut('Upload declined — pick a local model in Settings instead.')
+      return
+    }
+
+    const cfg: OpenAICompatConfig = {
+      baseUrl,
+      apiKey: getOpenAIKey(),
+      model,
+      batchSize: Math.max(1, Math.min(state.settings.batchSize, 16))
+    }
+
+    setStatus(`Contacting ${openaiHost(baseUrl)}…`)
+    // Probing doubles as the connection check and as the source of the vector
+    // width, which must be known before any zero vector is built.
+    activeEmbeddingDim = await probeDimension(cfg, signal)
+    remoteConfig = cfg
+
+    setStatus(`Connected to ${openaiHost(baseUrl)} (${activeEmbeddingDim}-d).`)
+    setProgress(100)
+    setTimeout(() => setProgress(0), 500)
+    return
+  }
 
   if (state.settings.modelVariant === 'chrome-ai') {
     setStatus('Checking Chrome AI availability…')
@@ -1330,7 +1468,7 @@ function applyFallbackChoice(choice: FallbackChoice) {
 
 // Load the model, retrying through the fallback modal on download failures.
 async function loadModel(signal?: AbortSignal) {
-  if (extractor || sapiens2Session || chromeAIManager) return
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig) return
   // Clear any custom upload cache from a previous run — env is a global
   // singleton, so a stale cache would otherwise keep serving old files when the
   // user switches models or starts a new session. A fresh upload re-sets it
@@ -1343,14 +1481,24 @@ async function loadModel(signal?: AbortSignal) {
       return
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') throw err
-      if (isDownloadError(err)) {
+      // `isDownloadError` matches on message text ('unauthorized', '403', …),
+      // which describes a failed *model download*. A remote endpoint rejecting
+      // a key produces the same words, and offering to upload .onnx files in
+      // response would be nonsense — this mode downloads no model at all.
+      if (state.settings.modelVariant !== 'openai' && isDownloadError(err)) {
         const choice = await showModelFallbackModal(state.settings.modelVariant)
         if (choice) {
           applyFallbackChoice(choice)
           continue // retry with the new host / uploaded files
         }
       }
-      setStatus(`Failed to load model: ${(err as Error).message}`)
+      // describeOpenAIError adds the actionable hint ("key rejected", "no such
+      // model") and is already redacted; the raw message may hold the key.
+      setStatus(
+        state.settings.modelVariant === 'openai'
+          ? `Remote endpoint failed: ${describeOpenAIError(err)}`
+          : `Failed to load model: ${(err as Error).message}`
+      )
       dom.loadModelBtn.hidden = false
       dom.loadModelBtn.disabled = false
       throw err
@@ -1441,22 +1589,28 @@ async function embedAll(files: PhotoFile[]) {
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2')
   const isChromeAI = state.settings.modelVariant === 'chrome-ai'
+  const isRemote = state.settings.modelVariant === 'openai'
+  const reportedRemoteErrors = new Set<string>()
   // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel
   // session speedup. The transformers path adapts: the working batch size
   // halves after a GPU failure and creeps back up after sustained successes.
   const batcher = createAdaptiveBatcher(state.settings.batchSize)
   // Separate cache namespace per variant so vectors don't collide across models.
   // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
-  const cachePrefix = isChromeAI
-    ? '@chrome-ai/'
-    : !isSapiens2
-      ? ''
-      : state.settings.modelVariant === 'sapiens2-fp16'
-        ? '@sapiens2/'
-        : `@${state.settings.modelVariant}/`
+  const cachePrefix = isRemote
+    ? currentCachePrefix()
+    : isChromeAI
+      ? '@chrome-ai/'
+      : !isSapiens2
+        ? ''
+        : state.settings.modelVariant === 'sapiens2-fp16'
+          ? '@sapiens2/'
+          : `@${state.settings.modelVariant}/`
 
   for (let i = 0; i < files.length; ) {
-    const batchSize = isChromeAI ? 2 : isSapiens2 ? 1 : batcher.size
+    // Remote batches are bounded by request size, not GPU memory, so the
+    // adaptive batcher does not apply.
+    const batchSize = isRemote ? 8 : isChromeAI ? 2 : isSapiens2 ? 1 : batcher.size
     const batch = files.slice(i, Math.min(i + batchSize, files.length))
 
     // One IDB transaction for the whole batch, with legacy-key fallback so
@@ -1464,9 +1618,18 @@ async function embedAll(files: PhotoFile[]) {
     const { keys, cached, migrate } = await readCachedEmbeddings(batch, cachePrefix)
     if (migrate.length > 0) writeQueue.push(...migrate)
 
+    // Width guard: a cached vector of the wrong width is from a different
+    // embedding space, so treat it as a miss rather than mixing spaces. This
+    // is what lets the remote cache namespace omit the dimension — it catches
+    // a provider re-pointing a model id at a different width, which a
+    // namespace built from host+model alone would not.
+    for (let bi = 0; bi < cached.length; bi++) {
+      if (cached[bi] && cached[bi]!.length !== activeEmbeddingDim) cached[bi] = null
+    }
+
     // Resolve inputs for cache misses
     const missIndices: number[] = []
-    const missInputs: (File | RawImage | ImageBitmap)[] = []
+    const missInputs: (File | RawImage | ImageBitmap | string)[] = []
 
     await Promise.all(
       batch.map(async (f, bi) => {
@@ -1485,7 +1648,11 @@ async function embedAll(files: PhotoFile[]) {
               state.thumbnails[idx] = thumb
               thumbDecoding.delete(idx)
             }
-            if (isSapiens2) {
+            if (isRemote) {
+              // imageToDataURL only closes bitmaps it created itself, so the
+              // one cached in state.thumbnails stays valid.
+              missInputs.push(await imageToDataURL(thumb, state.settings.openai.maxImageWidth))
+            } else if (isSapiens2) {
               missInputs.push(thumb)
             } else if (isChromeAI) {
               // Clone so Chrome AI doesn't close the bitmap that's cached in state.thumbnails
@@ -1504,6 +1671,15 @@ async function embedAll(files: PhotoFile[]) {
             }
           } else {
             missInputs.push(f.file)
+          }
+        } else if (isRemote) {
+          try {
+            missInputs.push(await imageToDataURL(f.file, state.settings.openai.maxImageWidth))
+          } catch {
+            // Undecodable image — skip it rather than uploading the original
+            // at full size, which is what this downscale exists to prevent.
+            vectors[idx] = zeroVector()
+            return
           }
         } else if (isSapiens2) {
           // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
@@ -1533,7 +1709,7 @@ async function embedAll(files: PhotoFile[]) {
             missInputs.push(resized)
           } else {
             // Cannot resize — use zero vector rather than risking OOM with full-res
-            vectors[i + bi] = new Float32Array(768)
+            vectors[i + bi] = zeroVector()
             return
           }
         }
@@ -1560,10 +1736,13 @@ async function embedAll(files: PhotoFile[]) {
       // Inputs that failed even alone get a zero vector in RAM for this
       // session but must NOT be written to the cache — a cached zero would
       // permanently poison that file's embedding.
-      const failedInputs = new Set<File | RawImage | ImageBitmap>()
+      const failedInputs = new Set<File | RawImage | ImageBitmap | string>()
       try {
         let extracted: Float32Array[]
-        if (isSapiens2) {
+        if (isRemote) {
+          if (!remoteConfig) throw new Error('Remote endpoint not connected')
+          extracted = await embedImages(remoteConfig, missInputs as string[])
+        } else if (isSapiens2) {
           if (!sapiens2Session) throw new Error('Sapiens2 session not loaded')
           extracted = await embedWithSapiens2(sapiens2Session, missInputs as (File | ImageBitmap)[])
         } else if (isChromeAI) {
@@ -1619,7 +1798,7 @@ async function embedAll(files: PhotoFile[]) {
                 'Embedding failed for one file, using zero vector:',
                 (err as Error).message
               )
-              return new Float32Array(768)
+              return zeroVector()
             },
             (len, err) => {
               batcher.recordFailure()
@@ -1641,8 +1820,18 @@ async function embedAll(files: PhotoFile[]) {
         }
       } catch (err) {
         console.warn('Batch inference failed, filling zeros:', (err as Error).message)
+        // A remote failure usually repeats for every remaining batch (a bad key
+        // stays bad), so without a toast the whole run silently zero-fills.
+        // One per error kind keeps that from becoming a wall of notifications.
+        if (isRemote) {
+          const kind = (err as { kind?: string }).kind ?? 'unknown'
+          if (!reportedRemoteErrors.has(kind)) {
+            reportedRemoteErrors.add(kind)
+            showToast(describeOpenAIError(err), 'warn')
+          }
+        }
         for (const bi of missIndices) {
-          vectors[i + bi] = new Float32Array(768)
+          vectors[i + bi] = zeroVector()
         }
       }
     }
@@ -2716,6 +2905,65 @@ getChromeAIAvailability().then((avail) => {
 const updateChromeAIPromptVisibility = () => {
   const isChrome = state.settings.modelVariant === 'chrome-ai'
   dom.chromeAIPromptSetting.style.display = isChrome ? '' : 'none'
+  dom.openaiSetting.style.display = state.settings.modelVariant === 'openai' ? '' : 'none'
+}
+
+// ── Remote endpoint settings ────────────────────────────────────────────────
+if (dom.openaiBaseUrl) {
+  dom.openaiBaseUrl.value = state.settings.openai.baseUrl
+  dom.openaiModel.value = state.settings.openai.model
+  dom.openaiRemember.checked = isOpenAIKeyRemembered()
+  // Show that a key exists without ever putting the real one in the DOM, where
+  // a screenshot or an extension could read it back out.
+  if (getOpenAIKey()) dom.openaiKey.placeholder = '•••••••• (saved)'
+
+  // `change`, not `input`: normalising on every keystroke would fight the user
+  // mid-type, and each change here invalidates the cache namespace.
+  dom.openaiBaseUrl.addEventListener('change', () => {
+    const normalized = normalizeBaseUrl(dom.openaiBaseUrl.value)
+    dom.openaiBaseUrl.value = normalized
+    state.settings.openai.baseUrl = normalized
+    saveSettings()
+    reloadIfModelLoaded()
+  })
+
+  dom.openaiModel.addEventListener('change', () => {
+    state.settings.openai.model = dom.openaiModel.value.trim()
+    saveSettings()
+    reloadIfModelLoaded()
+  })
+
+  dom.openaiKey.addEventListener('change', () => {
+    setOpenAIKey(dom.openaiKey.value.trim(), dom.openaiRemember.checked)
+    // Never leave the key sitting in the input's value.
+    dom.openaiKey.value = ''
+    dom.openaiKey.placeholder = getOpenAIKey() ? '•••••••• (saved)' : 'Leave blank for local servers'
+  })
+
+  dom.openaiRemember.addEventListener('change', () => {
+    // Move the existing key between localStorage and sessionStorage.
+    const existing = getOpenAIKey()
+    if (existing) setOpenAIKey(existing, dom.openaiRemember.checked)
+  })
+
+  dom.openaiTestBtn.addEventListener('click', async () => {
+    const baseUrl = normalizeBaseUrl(dom.openaiBaseUrl.value)
+    const model = dom.openaiModel.value.trim()
+    if (!baseUrl || !model) {
+      dom.openaiTestResult.textContent = 'Enter both an endpoint URL and a model first.'
+      return
+    }
+    dom.openaiTestBtn.disabled = true
+    dom.openaiTestResult.textContent = `Contacting ${openaiHost(baseUrl)}…`
+    try {
+      const dim = await probeDimension({ baseUrl, apiKey: getOpenAIKey(), model })
+      dom.openaiTestResult.textContent = `✅ Connected. ${model} returns ${dim}-dimensional vectors.`
+    } catch (err) {
+      dom.openaiTestResult.textContent = `❌ ${describeOpenAIError(err)}`
+    } finally {
+      dom.openaiTestBtn.disabled = false
+    }
+  })
 }
 if (dom.chromeAIPromptInput) {
   dom.chromeAIPromptInput.value = getChromeAIPrompt()
@@ -2781,12 +3029,16 @@ dom.enableSearchToggle.addEventListener('change', async () => {
   saveSettings()
   updateSearchUI()
 
-  // If enabled and models are already loaded, load the text model now
+  // If enabled and models are already loaded, load the text model now.
+  // Remote mode embeds queries at the endpoint (see embedText), so pulling the
+  // 134 MB local text model would be both wasted bandwidth and the wrong
+  // embedding space to search the remote vectors with.
   if (
     state.settings.enableTextSearch &&
     state.phase !== 'idle' &&
     state.phase !== 'loading_model' &&
-    !textExtractor
+    !textExtractor &&
+    state.settings.modelVariant !== 'openai'
   ) {
     // We duplicate the text loading logic here for dynamic loading
     dom.settingsModal.close()
@@ -2824,13 +3076,25 @@ dom.enableSearchToggle.addEventListener('change', async () => {
   }
 })
 
+/**
+ * Reload after a change that invalidates the cache namespace.
+ *
+ * Anything that alters what gets embedded — model, endpoint, dimension —
+ * leaves `state.vectors` holding vectors from the old space while new ones
+ * arrive in the new space. Search then returns plausible, meaningless
+ * rankings with nothing to trip on, so a reload is the safe response.
+ */
+function reloadIfModelLoaded() {
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig) {
+    window.location.reload()
+  }
+}
+
 dom.modelSelect.addEventListener('change', () => {
   state.settings.modelVariant = dom.modelSelect.value as ModelVariant
   saveSettings()
   updateChromeAIPromptVisibility()
-  if (extractor || sapiens2Session || chromeAIManager) {
-    window.location.reload()
-  }
+  reloadIfModelLoaded()
 })
 
 dom.densitySlider.addEventListener('input', async () => {
@@ -3024,7 +3288,7 @@ if (_savedKeys) {
 }
 
 dom.loadModelBtn.addEventListener('click', async () => {
-  if (extractor || sapiens2Session || chromeAIManager) return
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig) return
   dom.loadModelBtn.disabled = true
   await loadModel()
 })
@@ -3179,7 +3443,7 @@ dom.resumeBtn.addEventListener('click', async () => {
         setProgress(10 + (cachedVectors.length / matched.length) * 85)
         await yieldMain()
       }
-      state.vectors = cachedVectors.map((v) => v || new Float32Array(768))
+      state.vectors = cachedVectors.map((v) => v || zeroVector())
       dom.searchInput.disabled = false
     }
 
