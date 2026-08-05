@@ -1148,9 +1148,27 @@ async function loadModelOnce(signal?: AbortSignal) {
     activeEmbeddingDim = await probeDimension(cfg, signal)
     remoteConfig = cfg
 
-    setStatus(`Connected to ${openaiHost(baseUrl)} (${activeEmbeddingDim}-d).`)
+    // Mirror the ready-state handover the other backends do. Without it the
+    // phase stays 'loading_model' and Open/Demo/Resume stay disabled from page
+    // load, so a successful connection would dead-end at "Connected…".
+    updateDeviceBadge()
     setProgress(100)
-    setTimeout(() => setProgress(0), 500)
+    state.phase = 'model_ready'
+    setProgress(0)
+    dom.loadModelBtn.hidden = true
+    dom.modelSelect.disabled = false
+    dom.openBtn.disabled = false
+    dom.openBtn.classList.add('primary')
+    dom.demoBtn.disabled = false
+
+    const where = `${openaiHost(baseUrl)} (${activeEmbeddingDim}-d)`
+    if (!dom.resumeBtn.hidden) {
+      dom.resumeBtn.disabled = false
+      dom.resumeBtn.classList.add('primary')
+      setStatus(`Connected to ${where} — resume or open a folder.`)
+    } else {
+      setStatus(`Connected to ${where} — open a folder to start.`)
+    }
     return
   }
 
@@ -1669,6 +1687,13 @@ async function embedAll(files: PhotoFile[]) {
                 missInputs.push(f.file)
               }
             }
+          } else if (isRemote) {
+            // No frame to send. Falling through to the File below would put a
+            // File where embedImages expects a data URI; JSON.stringify turns
+            // it into {}, which the provider rejects — taking the whole batch,
+            // and every valid item in it, down with one bad video.
+            vectors[idx] = zeroVector()
+            return
           } else {
             missInputs.push(f.file)
           }
@@ -3420,14 +3445,11 @@ dom.resumeBtn.addEventListener('click', async () => {
     } else {
       // AI mode: restore cached vectors for search + re-projection
       setStatus('Restoring embeddings…')
-      const resumePrefix =
-        state.settings.modelVariant === 'chrome-ai'
-          ? '@chrome-ai/'
-          : !state.settings.modelVariant.startsWith('sapiens2')
-            ? ''
-            : state.settings.modelVariant === 'sapiens2-fp16'
-              ? '@sapiens2/'
-              : `@${state.settings.modelVariant}/`
+      // Was a copy of currentCachePrefix() that predated the remote backend, so
+      // it had no 'openai' case and silently fell through to ''. Every resumed
+      // read then missed the remote namespace and got zero-filled while the UI
+      // reported a successful restore. Call the one function instead.
+      const resumePrefix = currentCachePrefix()
       // Chunked reads so large folders show progress instead of a frozen bar,
       // and the main thread gets a breather between IDB transactions.
       const RESUME_CHUNK = 500
@@ -3443,7 +3465,12 @@ dom.resumeBtn.addEventListener('click', async () => {
         setProgress(10 + (cachedVectors.length / matched.length) * 85)
         await yieldMain()
       }
-      state.vectors = cachedVectors.map((v) => v || zeroVector())
+      // Same width guard as the embedding loop: a restored vector of the wrong
+      // width is from a different embedding space, and mixing the two yields
+      // plausible, meaningless rankings with nothing to trip on.
+      state.vectors = cachedVectors.map((v) =>
+        v && v.length === activeEmbeddingDim ? v : zeroVector()
+      )
       dom.searchInput.disabled = false
     }
 
