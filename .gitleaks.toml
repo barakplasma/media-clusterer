@@ -1,6 +1,9 @@
 # Gitleaks configuration — extends the default ruleset.
-# See IMPROVEMENT_PLAN.md (security note) for the known committed Unsplash key,
-# which must be ROTATED — it is intentionally NOT allowlisted here.
+# The historical Unsplash key committed in ddc99343 has been removed from the
+# current code (moved to import.meta.env) but remains in git history. It is
+# acknowledged in .gitleaksignore rather than allowlisted here, so a real key
+# committed anywhere else still trips the scanner. See IMPROVEMENT_PLAN.md
+# (security note): the key itself should still be rotated on the Unsplash side.
 
 [extend]
 useDefault = true
