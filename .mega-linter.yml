@@ -29,4 +29,4 @@ FILEIO_REPORTER: false
 # strings in test fixtures (e.g. sk-abcdef123456 in openaiCompat.test.ts).
 # The dedicated secret scanners (gitleaks, trufflehog, secretlint,
 # betterleaks) still provide full coverage for real secrets.
-REPOSITORY_CHECKOV_ARGUMENTS: "--skip-check CKV_SECRET_6"
+REPOSITORY_CHECKOV_ARGUMENTS: '--skip-check CKV_SECRET_6'
