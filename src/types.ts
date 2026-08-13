@@ -161,6 +161,9 @@ export interface DOMElements {
   openaiKey: HTMLInputElement
   openaiRemember: HTMLInputElement
   openaiModel: HTMLInputElement
+  openaiModelList: HTMLDataListElement
+  openaiFindModelsBtn: HTMLButtonElement
+  openaiModelsResult: HTMLDivElement
   openaiTestBtn: HTMLButtonElement
   openaiTestResult: HTMLDivElement
   openaiConsentModal: HTMLDialogElement

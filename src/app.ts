@@ -27,6 +27,7 @@ import {
   embedImages,
   embedQuery,
   probeDimension,
+  lookupImageEmbeddingModels,
   openaiCacheNamespace,
   getOpenAIKey,
   setOpenAIKey,
@@ -195,6 +196,9 @@ const dom: DOMElements = {
   openaiKey: document.getElementById('openai-key') as HTMLInputElement,
   openaiRemember: document.getElementById('openai-remember') as HTMLInputElement,
   openaiModel: document.getElementById('openai-model') as HTMLInputElement,
+  openaiModelList: document.getElementById('openai-model-list') as HTMLDataListElement,
+  openaiFindModelsBtn: document.getElementById('openai-find-models') as HTMLButtonElement,
+  openaiModelsResult: document.getElementById('openai-models-result') as HTMLDivElement,
   openaiTestBtn: document.getElementById('openai-test') as HTMLButtonElement,
   openaiTestResult: document.getElementById('openai-test-result') as HTMLDivElement,
   openaiConsentModal: document.getElementById('openai-consent-modal') as HTMLDialogElement,
@@ -2969,6 +2973,48 @@ if (dom.openaiBaseUrl) {
     // Move the existing key between localStorage and sessionStorage.
     const existing = getOpenAIKey()
     if (existing) setOpenAIKey(existing, dom.openaiRemember.checked)
+  })
+
+  dom.openaiFindModelsBtn.addEventListener('click', async () => {
+    const baseUrl = normalizeBaseUrl(dom.openaiBaseUrl.value)
+    if (!baseUrl) {
+      dom.openaiModelsResult.textContent = 'Enter an endpoint URL first.'
+      return
+    }
+    dom.openaiFindModelsBtn.disabled = true
+    dom.openaiModelsResult.textContent = `Asking ${openaiHost(baseUrl)} what it offers…`
+    try {
+      // model is not known yet — that is the whole point of looking it up.
+      const found = await lookupImageEmbeddingModels({ baseUrl, apiKey: getOpenAIKey(), model: '' })
+
+      // Offer the confirmed image models when the catalogue says which are
+      // which, and the raw list otherwise. Suggesting nothing would be worse
+      // than suggesting an unfiltered list the user can still pick from.
+      const offer = found.imageCapable.length > 0 ? found.imageCapable : found.all
+      dom.openaiModelList.replaceChildren(
+        ...offer.map((m) => {
+          const opt = document.createElement('option')
+          opt.value = m.id
+          if (m.name && m.name !== m.id) opt.label = m.name
+          return opt
+        })
+      )
+
+      if (found.imageCapable.length > 0) {
+        dom.openaiModelsResult.textContent = `✅ ${found.imageCapable.length} image-capable embedding model${found.imageCapable.length === 1 ? '' : 's'} — click the Model box to pick one.`
+      } else if (!found.hasModalityMetadata) {
+        // Absence of metadata is not absence of image models; say so plainly
+        // rather than letting the user read an empty filter as a verdict.
+        dom.openaiModelsResult.textContent = `${found.all.length} model${found.all.length === 1 ? '' : 's'} listed, but this endpoint doesn't report which accept images — pick one and use Test connection to check.`
+      } else {
+        dom.openaiModelsResult.textContent =
+          'This endpoint lists no models that take image input and return embeddings.'
+      }
+    } catch (err) {
+      dom.openaiModelsResult.textContent = `❌ ${describeOpenAIError(err)}`
+    } finally {
+      dom.openaiFindModelsBtn.disabled = false
+    }
   })
 
   dom.openaiTestBtn.addEventListener('click', async () => {

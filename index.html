@@ -833,8 +833,13 @@
       </label>
       <div class="setting-hint">Unchecked, the key is kept only until you close the tab. It is never written to your settings and never sent to error reporting.</div>
 
-      <label style="margin-top:10px;display:block;">Model</label>
-      <input type="text" id="openai-model" placeholder="e.g. nomic-embed-vision-v1.5" autocomplete="off" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;box-sizing:border-box;">
+      <label style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span>Model</span>
+        <button id="openai-find-models" style="font-size:11px;padding:2px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text-dim);border-radius:4px;cursor:pointer;">Find image models</button>
+      </label>
+      <input type="text" id="openai-model" list="openai-model-list" placeholder="e.g. nomic-embed-vision-v1.5" autocomplete="off" style="width:100%;margin-top:6px;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;box-sizing:border-box;">
+      <datalist id="openai-model-list"></datalist>
+      <div id="openai-models-result" class="setting-hint" style="margin-top:6px;"></div>
 
       <button id="openai-test" style="margin-top:10px;font-size:12px;padding:6px 12px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;cursor:pointer;">Test connection</button>
       <div id="openai-test-result" class="setting-hint" style="margin-top:6px;"></div>

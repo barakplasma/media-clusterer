@@ -335,7 +335,8 @@ export async function requestJSON<T>(
   cfg: OpenAICompatConfig,
   path: string,
   body: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  method: 'GET' | 'POST' = 'POST'
 ): Promise<T> {
   const host = hostOf(cfg.baseUrl)
   const url = `${cfg.baseUrl}${path}`
@@ -362,9 +363,10 @@ export async function requestJSON<T>(
     let res: Response
     try {
       res = await fetch(url, {
-        method: 'POST',
+        method,
         headers,
-        body: JSON.stringify(body),
+        // A GET with a body is rejected outright by fetch, so omit it.
+        ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
         signal: anySignal([signal, timeoutCtrl.signal])
       })
     } catch (err) {
@@ -669,6 +671,105 @@ export async function embedImages(
     }),
     signal
   )
+}
+
+// ── Model lookup ────────────────────────────────────────────────────────────
+
+/** One entry from the endpoint's `/models` catalogue. */
+export interface ModelInfo {
+  id: string
+  name?: string
+  inputModalities?: string[]
+  outputModalities?: string[]
+  /** True only when the catalogue positively says it takes images and emits vectors. */
+  imageEmbedding: boolean
+}
+
+export interface ModelLookup {
+  /** Models the catalogue confirms can embed images. */
+  imageCapable: ModelInfo[]
+  /** Everything the endpoint listed, in catalogue order. */
+  all: ModelInfo[]
+  /**
+   * False when the endpoint returned no capability metadata at all.
+   *
+   * A plain OpenAI-compatible `/models` returns only ids — Ollama, LM Studio
+   * and vLLM all do — so there is nothing to filter on and `imageCapable` is
+   * necessarily empty. That is not the same as "this endpoint has no image
+   * models", and the UI must not present it as such.
+   */
+  hasModalityMetadata: boolean
+}
+
+interface RawModelEntry {
+  id?: string
+  name?: string
+  architecture?: { input_modalities?: string[]; output_modalities?: string[]; modality?: string }
+}
+
+/** Case-insensitive membership, tolerating the odd `Image` / `IMAGE`. */
+function hasModality(list: string[] | undefined, want: string): boolean {
+  return Array.isArray(list) && list.some((m) => String(m).toLowerCase() === want)
+}
+
+export function toModelInfo(raw: RawModelEntry): ModelInfo {
+  const inputModalities = raw.architecture?.input_modalities
+  const outputModalities = raw.architecture?.output_modalities
+  return {
+    id: String(raw.id ?? ''),
+    name: raw.name,
+    inputModalities,
+    outputModalities,
+    imageEmbedding:
+      hasModality(inputModalities, 'image') && hasModality(outputModalities, 'embeddings')
+  }
+}
+
+/**
+ * Find models on this endpoint that can embed images.
+ *
+ * Two things make this less obvious than it looks:
+ *
+ * 1. OpenRouter's `/models` defaults to `output_modalities=text`, so an
+ *    unqualified GET returns **no embedding models at all**. The query string
+ *    asks for embeddings explicitly; servers that don't know the parameter
+ *    ignore it, and if the filtered call comes back empty we retry unfiltered
+ *    rather than report "none found" off the back of a rejected filter.
+ * 2. Only richer catalogues carry modality metadata. Without it nothing can be
+ *    filtered, so `hasModalityMetadata` is false and the caller should offer
+ *    the raw list instead of claiming there are no image models.
+ */
+export async function lookupImageEmbeddingModels(
+  cfg: OpenAICompatConfig,
+  signal?: AbortSignal
+): Promise<ModelLookup> {
+  const fetchList = async (query: string) => {
+    const json = await requestJSON<{ data?: RawModelEntry[]; models?: RawModelEntry[] }>(
+      cfg,
+      `/models${query}`,
+      undefined,
+      signal,
+      'GET'
+    )
+    // `data` is the OpenAI shape; Ollama's /v1/models also uses it, but some
+    // servers answer with `models`.
+    const rows = json?.data ?? json?.models
+    return Array.isArray(rows) ? rows : []
+  }
+
+  let rows = await fetchList('?output_modalities=embeddings')
+  if (rows.length === 0) rows = await fetchList('')
+
+  const all = rows.map(toModelInfo).filter((m) => m.id)
+  const hasModalityMetadata = all.some(
+    (m) => (m.inputModalities?.length ?? 0) > 0 || (m.outputModalities?.length ?? 0) > 0
+  )
+
+  return {
+    imageCapable: all.filter((m) => m.imageEmbedding),
+    all,
+    hasModalityMetadata
+  }
 }
 
 /**

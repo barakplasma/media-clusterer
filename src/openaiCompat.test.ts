@@ -20,6 +20,8 @@ import {
   embedImages,
   openaiCacheNamespace,
   probeDimension,
+  lookupImageEmbeddingModels,
+  toModelInfo,
   type OpenAICompatConfig
 } from './openaiCompat'
 
@@ -514,6 +516,123 @@ describe('embedImages', () => {
   it('returns [] without touching the network for an empty list', async () => {
     await expect(embedImages(cfg(), [])).resolves.toEqual([])
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('lookupImageEmbeddingModels', () => {
+  // Shape taken from OpenRouter's live catalogue.
+  const geminiEmbed = {
+    id: 'google/gemini-embedding-2',
+    name: 'Google: Gemini Embedding 2',
+    architecture: {
+      modality: 'text+image+file+audio+video->embeddings',
+      input_modalities: ['text', 'image', 'file', 'audio', 'video'],
+      output_modalities: ['embeddings']
+    }
+  }
+  const textEmbed = {
+    id: 'openai/text-embedding-3-small',
+    architecture: { input_modalities: ['text'], output_modalities: ['embeddings'] }
+  }
+  const visionChat = {
+    id: 'anthropic/claude-sonnet-4',
+    architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }
+  }
+
+  it('asks for embedding models explicitly, since /models defaults to text only', async () => {
+    fetchMock.mockResolvedValue(ok({ data: [geminiEmbed] }))
+    await lookupImageEmbeddingModels(cfg())
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/models?output_modalities=embeddings')
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET')
+  })
+
+  it('sends no body on the GET, which fetch would reject', async () => {
+    fetchMock.mockResolvedValue(ok({ data: [geminiEmbed] }))
+    await lookupImageEmbeddingModels(cfg())
+
+    expect(fetchMock.mock.calls[0][1].body).toBeUndefined()
+  })
+
+  it('keeps only models that take images AND return embeddings', async () => {
+    fetchMock.mockResolvedValue(ok({ data: [geminiEmbed, textEmbed, visionChat] }))
+    const found = await lookupImageEmbeddingModels(cfg())
+
+    expect(found.imageCapable.map((m) => m.id)).toEqual(['google/gemini-embedding-2'])
+    expect(found.all).toHaveLength(3)
+    expect(found.hasModalityMetadata).toBe(true)
+  })
+
+  it('retries unfiltered when the modality filter yields nothing', async () => {
+    // A server that rejects the unknown query param by returning an empty list
+    // must not be reported as having no models.
+    fetchMock
+      .mockResolvedValueOnce(ok({ data: [] }))
+      .mockResolvedValueOnce(ok({ data: [geminiEmbed] }))
+
+    const found = await lookupImageEmbeddingModels(cfg())
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[1][0]).toMatch(/\/models$/)
+    expect(found.imageCapable).toHaveLength(1)
+  })
+
+  it('flags missing metadata rather than claiming there are no image models', async () => {
+    // Ollama / LM Studio / vLLM return ids only.
+    fetchMock.mockResolvedValue(
+      ok({ data: [{ id: 'nomic-embed-text' }, { id: 'llava' }] })
+    )
+    const found = await lookupImageEmbeddingModels(cfg())
+
+    expect(found.hasModalityMetadata).toBe(false)
+    expect(found.imageCapable).toEqual([])
+    expect(found.all.map((m) => m.id)).toEqual(['nomic-embed-text', 'llava'])
+  })
+
+  it('accepts a `models` array as well as `data`', async () => {
+    fetchMock.mockResolvedValueOnce(ok({ models: [geminiEmbed] }))
+    const found = await lookupImageEmbeddingModels(cfg())
+    expect(found.all.map((m) => m.id)).toEqual(['google/gemini-embedding-2'])
+  })
+
+  it('drops entries with no id instead of offering blanks', async () => {
+    fetchMock.mockResolvedValue(ok({ data: [geminiEmbed, {}, { name: 'nameless' }] }))
+    const found = await lookupImageEmbeddingModels(cfg())
+    expect(found.all).toHaveLength(1)
+  })
+
+  it('surfaces an auth failure rather than reporting an empty catalogue', async () => {
+    fetchMock.mockResolvedValue(fail(401, 'no credentials'))
+    await expect(lookupImageEmbeddingModels(cfg())).rejects.toMatchObject({ kind: 'auth' })
+  })
+})
+
+describe('toModelInfo', () => {
+  it('is case-insensitive about modality names', () => {
+    const info = toModelInfo({
+      id: 'x',
+      architecture: { input_modalities: ['Image'], output_modalities: ['Embeddings'] }
+    })
+    expect(info.imageEmbedding).toBe(true)
+  })
+
+  it('does not treat a vision chat model as an embedder', () => {
+    const info = toModelInfo({
+      id: 'x',
+      architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }
+    })
+    expect(info.imageEmbedding).toBe(false)
+  })
+
+  it('does not treat a text-only embedder as image-capable', () => {
+    const info = toModelInfo({
+      id: 'x',
+      architecture: { input_modalities: ['text'], output_modalities: ['embeddings'] }
+    })
+    expect(info.imageEmbedding).toBe(false)
+  })
+
+  it('reports false, not a guess, when metadata is absent', () => {
+    expect(toModelInfo({ id: 'x' }).imageEmbedding).toBe(false)
   })
 })
 
