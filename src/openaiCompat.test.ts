@@ -285,6 +285,38 @@ describe('requestJSON retry policy', () => {
     expect(err.message).toContain('***')
   })
 
+  it('reports an upstream key rejection as auth, not as a bad request', async () => {
+    // Real shape from OpenRouter with a stale Google BYOK credential: a 400
+    // whose body is Google's own auth failure. Classifying it by status alone
+    // blames the input type and sends the user to rewrite a correct request.
+    const body = JSON.stringify({
+      error: {
+        message:
+          'HTTP 400: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID"}]}}'
+      }
+    })
+    fetchMock.mockResolvedValue(fail(400, body))
+
+    const err = (await requestJSON(cfg({ maxRetries: 3 }), '/embeddings', {}).catch(
+      (e: unknown) => e
+    )) as OpenAICompatError
+    expect(err.kind).toBe('auth')
+    expect(err.retryable).toBe(false)
+    expect(err.hint).toMatch(/upstream provider rejected/i)
+    expect(err.hint).not.toMatch(/input type/i)
+    expect(fetchMock).toHaveBeenCalledTimes(1) // still not retried
+  })
+
+  it('leaves an ordinary 400 classified as a bad request', async () => {
+    fetchMock.mockResolvedValue(fail(400, 'model does not support image input'))
+
+    const err = (await requestJSON(cfg(), '/embeddings', {}).catch(
+      (e: unknown) => e
+    )) as OpenAICompatError
+    expect(err.kind).toBe('bad-request')
+    expect(err.hint).toMatch(/input type/i)
+  })
+
   it('reports a non-JSON body as a parse error', async () => {
     fetchMock.mockResolvedValue({
       ok: true,

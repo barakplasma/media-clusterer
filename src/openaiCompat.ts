@@ -51,6 +51,14 @@ const DEFAULT_MAX_RETRIES = 3
 const DEFAULT_TEXT_BATCH = 16
 const DEFAULT_IMAGE_BATCH = 8
 
+/**
+ * Error bodies where a *gateway* returns a non-auth status but the quoted
+ * upstream failure is a rejected provider credential. Matched against the
+ * response body, so the wording is the provider's, not the gateway's.
+ */
+const UPSTREAM_KEY_REJECTED =
+  /api[_ -]?key not valid|invalid[_ -]?api[_ -]?key|API_KEY_INVALID|api key expired/i
+
 /** Ceiling on an honoured `Retry-After`, so a hostile value can't hang the UI. */
 const MAX_RETRY_AFTER_MS = 20_000
 const BASE_BACKOFF_MS = 500
@@ -391,10 +399,24 @@ export async function requestJSON<T>(
     clearTimeout(timer)
 
     if (!res.ok) {
-      const { kind, retryable, hint } = classifyStatus(res.status)
+      let { kind, retryable, hint } = classifyStatus(res.status)
       // Provider error bodies routinely quote the request back, key included.
       // `OpenAICompatError` redacts at construction, so this is safe to embed.
       const detail = await res.text().catch(() => '')
+
+      // A gateway can answer 400 when the real fault is an *upstream*
+      // credential. OpenRouter's BYOK forwards to the provider using a key you
+      // configured there, so a stale Google key comes back as Google's own
+      // "API key not valid" wrapped in a 400. The generic 400 hint blames the
+      // input type, which sends people off rewriting a request that was
+      // already correct — say what actually happened instead.
+      if (UPSTREAM_KEY_REJECTED.test(detail)) {
+        kind = 'auth'
+        retryable = false
+        hint =
+          'An upstream provider rejected its own API key, not yours. If the gateway is configured to bring-your-own-key for this model, that stored provider key is invalid or expired — fix or remove it in the gateway’s integration settings.'
+      }
+
       const err = new OpenAICompatError(
         kind,
         `${host} returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`,
