@@ -9,11 +9,11 @@
 Every embedding the app produces is computed in the browser. There are three backends and no fourth
 option (`src/types.ts:41-46`):
 
-| Variant | Mechanism | Download |
-| --- | --- | --- |
-| `nomic` | Transformers.js `image-feature-extraction` (`src/app.ts:1163-1181`) | 380 MB |
-| `sapiens2-{int8,fp16,fp32}` | hand-rolled onnxruntime-web session (`src/sapiens2.ts`) | 116 / 229 / 458 MB |
-| `chrome-ai` | Gemini Nano caption → `nomic-embed-text` vector (`src/app.ts:1019-1101`) | 0 + 134 MB |
+| Variant                     | Mechanism                                                                | Download           |
+|-----------------------------|--------------------------------------------------------------------------|--------------------|
+| `nomic`                     | Transformers.js `image-feature-extraction` (`src/app.ts:1163-1181`)      | 380 MB             |
+| `sapiens2-{int8,fp16,fp32}` | hand-rolled onnxruntime-web session (`src/sapiens2.ts`)                  | 116 / 229 / 458 MB |
+| `chrome-ai`                 | Gemini Nano caption → `nomic-embed-text` vector (`src/app.ts:1019-1101`) | 0 + 134 MB         |
 
 Three consequences follow, and all three are the same problem seen from different angles.
 
@@ -61,28 +61,28 @@ inference sitting idle a few milliseconds away, and no way to point the app at i
 
 ## Considered options
 
-| Option | Embeds the image? | Works with the user's stated targets | Verdict |
-| --- | --- | --- | --- |
-| Status quo — local only | Yes | — | **Rejected.** Does not address any driver |
-| Remote `/embeddings` with image input | **Yes** | OpenRouter, vLLM, Jina, Infinity | **Chosen — pipeline A** |
-| Remote VLM caption → text embedding | No — embeds a description | Every chat provider, incl. Ollama; the only route for video LLMs | **Chosen — pipeline B** |
-| Remote captions only (extend `chrome-ai`) | No | — | Rejected — violates driver 1 |
-| Proxy service to normalise providers | Yes | — | Rejected — reintroduces a server (the product constraint the app exists to avoid) |
-| Upload originals rather than thumbnails | Yes | — | Rejected — violates driver 4 |
+| Option                                    | Embeds the image?         | Works with the user's stated targets                             | Verdict                                                                           |
+|-------------------------------------------|---------------------------|------------------------------------------------------------------|-----------------------------------------------------------------------------------|
+| Status quo — local only                   | Yes                       | —                                                                | **Rejected.** Does not address any driver                                         |
+| Remote `/embeddings` with image input     | **Yes**                   | OpenRouter, vLLM, Jina, Infinity                                 | **Chosen — pipeline A**                                                           |
+| Remote VLM caption → text embedding       | No — embeds a description | Every chat provider, incl. Ollama; the only route for video LLMs | **Chosen — pipeline B**                                                           |
+| Remote captions only (extend `chrome-ai`) | No                        | —                                                                | Rejected — violates driver 1                                                      |
+| Proxy service to normalise providers      | Yes                       | —                                                                | Rejected — reintroduces a server (the product constraint the app exists to avoid) |
+| Upload originals rather than thumbnails   | Yes                       | —                                                                | Rejected — violates driver 4                                                      |
 
 ### The awkward fact: there is no standard for image embeddings
 
 `/v1/chat/completions` with an `image_url` content part is genuinely universal. `/v1/embeddings` with an
 image is not. Verified state as of this ADR:
 
-| Target | Endpoint | Image input shape |
-| --- | --- | --- |
-| OpenRouter | `POST /v1/embeddings` | `input: [{ content: [{ type: 'image_url', image_url: { url } }] }]` |
-| vLLM | `POST /v1/embeddings` | `messages: [{ role, content: [...] }]` — chat-shaped |
-| Jina AI | `POST /v1/embeddings` | `input: [{ image: '<b64\|url>' }]`, plus a `dimensions` param |
-| Infinity | `POST /embeddings` | `input: ['<url \| data URI>']` — server auto-detects |
-| llama.cpp | `POST /embedding` | `{ content: 'Image: [img-1]', image_data: [{ id, data }] }` — and [reported unreliable](https://github.com/ggml-org/llama.cpp/discussions/13666) |
-| **Ollama** | `/api/embed`, `/v1/embeddings` | **none — text only** ([ollama#5304](https://github.com/ollama/ollama/issues/5304), open since June 2024) |
+| Target     | Endpoint                       | Image input shape                                                                                                                                |
+|------------|--------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
+| OpenRouter | `POST /v1/embeddings`          | `input: [{ content: [{ type: 'image_url', image_url: { url } }] }]`                                                                              |
+| vLLM       | `POST /v1/embeddings`          | `messages: [{ role, content: [...] }]` — chat-shaped                                                                                             |
+| Jina AI    | `POST /v1/embeddings`          | `input: [{ image: '<b64\|url>' }]`, plus a `dimensions` param                                                                                    |
+| Infinity   | `POST /embeddings`             | `input: ['<url \| data URI>']` — server auto-detects                                                                                             |
+| llama.cpp  | `POST /embedding`              | `{ content: 'Image: [img-1]', image_data: [{ id, data }] }` — and [reported unreliable](https://github.com/ggml-org/llama.cpp/discussions/13666) |
+| **Ollama** | `/api/embed`, `/v1/embeddings` | **none — text only** ([ollama#5304](https://github.com/ollama/ollama/issues/5304), open since June 2024)                                         |
 
 Two things follow.
 
@@ -97,11 +97,11 @@ larger than "add a `fetch` call".
 
 `GET https://openrouter.ai/api/v1/embeddings/models` returns 31 models, of which three accept images:
 
-| Model | Modalities | Notes |
-| --- | --- | --- |
-| `nvidia/llama-nemotron-embed-vl-1b-v2:free` | text, image | **free** — makes the whole path testable at zero cost |
-| `voyageai/voyage-multimodal-3.5` | text, image | |
-| `google/gemini-embedding-2` | text, image, **video**, audio, file | direct video embedding is reachable |
+| Model                                       | Modalities                          | Notes                                                 |
+|---------------------------------------------|-------------------------------------|-------------------------------------------------------|
+| `nvidia/llama-nemotron-embed-vl-1b-v2:free` | text, image                         | **free** — makes the whole path testable at zero cost |
+| `voyageai/voyage-multimodal-3.5`            | text, image                         |                                                       |
+| `google/gemini-embedding-2`                 | text, image, **video**, audio, file | direct video embedding is reachable                   |
 
 ## Decision outcome
 

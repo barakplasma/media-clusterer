@@ -22,12 +22,14 @@ A high-performance, **zero-server**, local AI media management tool that runs en
 ## 🆕 v2.3.0 New Features
 
 ### Viewer-Only Mode
+
 - **Skip AI processing** - Browse photos instantly without loading embeddings
 - Files arranged by **folder structure then date** (matches visual grid layout)
 - Enable via settings toggle or use with folders that have thousands of images
 - Resume button now works for both viewer and AI modes
 
 ### Enhanced Navigation
+
 - **URL state navigation** - Filtered views can be bookmarked and shared
   - `#folder:path/to/folder` - Current folder location
   - `#dt:2025-01-15T14:30` - Datetime filter (day/hour/minute granularity)
@@ -38,10 +40,12 @@ A high-performance, **zero-server**, local AI media management tool that runs en
   - Each breadcrumb click resans the full folder with new filter
 
 ### Keyboard Navigation
+
 - **n/p keys** for sequential next/previous through all media in datetime order
 - Works consistently in both viewer-only and AI modes
 
 ### Enhanced Modal Footer
+
 - Single-row layout showing relative path, filename, datetime, file size, and resolution
 - Camera/video metadata display (placeholder for future EXIF support)
 

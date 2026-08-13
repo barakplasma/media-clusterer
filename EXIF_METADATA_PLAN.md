@@ -5,12 +5,14 @@
 The modal footer currently shows file `lastModified` timestamp, which is the filesystem modification date - not the actual capture date for photos or recording date for videos. User wants full EXIF metadata for photos and technical metadata for videos.
 
 **Current Problem:**
+
 - Photos show file copy/edit date, not actual capture date
 - Videos show file modification date, not recording date
 - No camera info (make, model, ISO, aperture, etc.)
 - No video codec/bitrate information
 
 **Desired Outcome:**
+
 - Use actual capture/recording datetime for breadcrumbs and sorting
 - Display camera settings (ISO, aperture, shutter speed, focal length)
 - Display camera make/model
@@ -75,21 +77,25 @@ collectImages() → processFiles()
 ### Key Design Decisions
 
 **EXIF Date Fallback:**
+
 - Primary: `DateTimeOriginal` (when photo was taken)
 - Fallback: `DateTime` (when digitized)
 - Last resort: `lastModified` (filesystem)
 
 **Video Metadata Approach:**
+
 - Use native HTML5 video API (no library overhead)
 - Duration, resolution available from `<video>` element
 - Extract when video loads in modal (lazy)
 
 **Metadata Display:**
+
 - Keep modal footer compact
 - Show key metadata inline next to datetime
 - Format: `2025/01/15 14:30 · Canon EOS R5 · ISO 400 · f/2.8 · 1/200s`
 
 **Performance:**
+
 - Batch EXIF extraction during `processFiles()` for photos
 - Lazy video metadata extraction when opened in modal
 - Cache extracted metadata in PhotoFile objects
@@ -97,11 +103,13 @@ collectImages() → processFiles()
 ### Implementation Steps
 
 1. **Install exifreader**
+
    ```bash
    npm install exifreader
    ```
 
 2. **Extend types** (`src/types.ts`)
+
    ```typescript
    interface ExifMetadata {
      dateTimeOriginal?: Date;
@@ -128,6 +136,7 @@ collectImages() → processFiles()
    ```
 
 3. **Add EXIF extraction** (`src/app.ts`)
+
    ```typescript
    import ExifReader from 'exifreader';
 
@@ -154,6 +163,7 @@ collectImages() → processFiles()
    ```
 
 4. **Extract video metadata** (`src/app.ts`)
+
    ```typescript
    function extractVideoMetadata(video: HTMLVideoElement): VideoMetadata {
      return {

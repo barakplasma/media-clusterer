@@ -40,10 +40,10 @@ control (`src/app.ts:678`). Everything else is `fetch`, `createImageBitmap` and 
 
 ### The two pipelines
 
-| Pipeline | Setting | Request | Produces | Works with |
-| --- | --- | --- | --- | --- |
-| **A** `direct` | `openai.pipeline = 'direct'` | `POST {baseUrl}/embeddings` | vector | OpenRouter, vLLM, Jina, Infinity |
-| **B** `vlm` | `openai.pipeline = 'vlm'` | `POST {baseUrl}/chat/completions` → then embed the caption | caption + vector | every chat provider, incl. Ollama; the only route for video LLMs |
+| Pipeline       | Setting                      | Request                                                    | Produces         | Works with                                                       |
+|----------------|------------------------------|------------------------------------------------------------|------------------|------------------------------------------------------------------|
+| **A** `direct` | `openai.pipeline = 'direct'` | `POST {baseUrl}/embeddings`                                | vector           | OpenRouter, vLLM, Jina, Infinity                                 |
+| **B** `vlm`    | `openai.pipeline = 'vlm'`    | `POST {baseUrl}/chat/completions` → then embed the caption | caption + vector | every chat provider, incl. Ollama; the only route for video LLMs |
 
 Pipeline B's second stage is itself configurable: remote `{baseUrl}/embeddings`, or the local
 `nomic-embed-text` that the `chrome-ai` path already loads (`src/app.ts:1054-1082`). Local is the safer
@@ -158,17 +158,17 @@ wrong vector to a file, which is invisible until someone notices the map is nons
 Nine defects that exist today and become severe with a network backend. This milestone changes no
 behaviour and ships on its own.
 
-| # | Issue | Location |
-| --- | --- | --- |
-| B1 | `isDownloadError()` matches `unauthorized`, `failed to fetch` and bare `403\|404\|429\|500`, so an API 401 opens the *HuggingFace model-upload fallback modal*. Check the API error type first in `loadModel()`. | `src/modelFallback.ts:111-124`, `src/app.ts:1346-1351` |
-| B2 | Cache-prefix logic is duplicated three times and can diverge. A stale prefix on resume loads wrong-dimension vectors silently. Collapse onto `currentCachePrefix()`. | `src/app.ts:354-360`, `:1450-1456`, `:3159-3166` |
-| B3 | `searchByCosine()` clamps to the shorter vector, so a dimension mismatch produces a plausible ranking rather than an error. Report a mismatch count and surface it. | `src/compute.ts:280-285` |
-| B4 | `embedText()` returns `Float32Array.from(output.data)` with **no L2 normalisation**, relying on Transformers.js `normalize: true`. `searchByCosine()` is a raw dot product; remote responses are not guaranteed unit-norm. | `src/app.ts:633` |
-| B5 | The `chrome-ai` batch uses `Promise.all`, so one rejection zero-fills the whole batch. With a remote API a single 429 would take its neighbours with it. Use `allSettled` + per-item fallback. | `src/app.ts:1575-1579`, `:1642-1647` |
-| B6 | A zero vector scores exactly `0` in cosine search — **above** every genuinely dissimilar item, which scores negative. Failed embeddings therefore rank high. Track failed indices and exclude them. | `src/app.ts:1536`, `:1622`, `:1645`, `:3182` |
+| #  | Issue                                                                                                                                                                                                                                                                                                                                                                           | Location                                               |
+|----|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| B1 | `isDownloadError()` matches `unauthorized`, `failed to fetch` and bare `403\|404\|429\|500`, so an API 401 opens the *HuggingFace model-upload fallback modal*. Check the API error type first in `loadModel()`.                                                                                                                                                                | `src/modelFallback.ts:111-124`, `src/app.ts:1346-1351` |
+| B2 | Cache-prefix logic is duplicated three times and can diverge. A stale prefix on resume loads wrong-dimension vectors silently. Collapse onto `currentCachePrefix()`.                                                                                                                                                                                                            | `src/app.ts:354-360`, `:1450-1456`, `:3159-3166`       |
+| B3 | `searchByCosine()` clamps to the shorter vector, so a dimension mismatch produces a plausible ranking rather than an error. Report a mismatch count and surface it.                                                                                                                                                                                                             | `src/compute.ts:280-285`                               |
+| B4 | `embedText()` returns `Float32Array.from(output.data)` with **no L2 normalisation**, relying on Transformers.js `normalize: true`. `searchByCosine()` is a raw dot product; remote responses are not guaranteed unit-norm.                                                                                                                                                      | `src/app.ts:633`                                       |
+| B5 | The `chrome-ai` batch uses `Promise.all`, so one rejection zero-fills the whole batch. With a remote API a single 429 would take its neighbours with it. Use `allSettled` + per-item fallback.                                                                                                                                                                                  | `src/app.ts:1575-1579`, `:1642-1647`                   |
+| B6 | A zero vector scores exactly `0` in cosine search — **above** every genuinely dissimilar item, which scores negative. Failed embeddings therefore rank high. Track failed indices and exclude them.                                                                                                                                                                             | `src/app.ts:1536`, `:1622`, `:1645`, `:3182`           |
 | B7 | Caption keys are not namespaced by backend, and use the folder-relative `f.name` while the embedding cache uses the basename (`makeCacheKey`, `src/embeddings.ts:117`). Captions therefore miss in exactly the cases embeddings hit. Extract `src/captions.ts` keyed `@caption/<backend>/<basename>:<size>:<lastModified>`, with read-through migration from both legacy forms. | `src/app.ts:1551-1553`, `:1585`, `:2491`, `:2537-2540` |
-| B8 | `loadModel()`'s early-return guard lists the three existing backends; a fourth must be added or a second load re-probes the endpoint and costs a real API call. | `src/app.ts:1333`, `:2831` |
-| B9 | The text-model loading block is copy-pasted three times. Extract `loadTextExtractor()` before adding a fourth caller. | `src/app.ts:1054-1082`, `:1187-1213`, `:2794-2820` |
+| B8 | `loadModel()`'s early-return guard lists the three existing backends; a fourth must be added or a second load re-probes the endpoint and costs a real API call.                                                                                                                                                                                                                 | `src/app.ts:1333`, `:2831`                             |
+| B9 | The text-model loading block is copy-pasted three times. Extract `loadTextExtractor()` before adding a fourth caller.                                                                                                                                                                                                                                                           | `src/app.ts:1054-1082`, `:1187-1213`, `:2794-2820`     |
 
 Also in M0: introduce `activeEmbeddingDim` + `zeroVector()` and replace the four hard-coded
 `new Float32Array(768)` sites. For every existing variant the value stays 768, so this is provably inert.
@@ -245,18 +245,18 @@ promise-wrapped handlers are the pattern to copy.
 A new `#openai-setting` block in `index.html`, shown by generalising `updateChromeAIPromptVisibility()`
 (`src/app.ts:2716-2719`) into `updateVariantSettingsVisibility()`.
 
-| Field | Notes |
-| --- | --- |
-| Preset | OpenRouter / Venice / Ollama / LM Studio / llama.cpp / vLLM / Jina / Infinity / Custom. Prefills base URL and suggested models. **Disables pipeline A for Ollama with an explanatory hint** rather than letting the user find out via HTTP 400. |
-| Base URL | `change` handler runs `normalizeBaseUrl` and writes the normalised value back, mirroring `customModelHost` (`:2896-2901`). |
-| API key | `type="password"`, `autocomplete="off"`. Never bound to `state`. `change`, not `input`. |
-| Remember key | Unchecked ⇒ `sessionStorage`. Plus a clear-key button. |
-| Pipeline | `direct` / `vlm`. |
-| Models | `<input list=…>` with `<datalist>` populated from `/models` after a successful test. |
-| Embedding source | remote / local — pipeline B only. |
-| Frames per video, concurrency, max image width, wire format | With cost hints. |
-| Describe prompt | **Reuse the existing `#chrome-ai-prompt` textarea** — relabel its container and show it for both `chrome-ai` and `openai`, keeping the `mc_chrome_ai_prompt` storage key. One prompt, one control. Its hint currently reads "Changes apply to new embeddings only", which is accurate for `chrome-ai` and **wrong** for `openai`, where the prompt is namespaced: rewrite it to say editing the prompt re-embeds, and that reverting it restores the previous cache. |
-| Test connection | Runs `/models`, then `probeWireFormat`, and reports the winning format and dimension. |
+| Field                                                       | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+|-------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Preset                                                      | OpenRouter / Venice / Ollama / LM Studio / llama.cpp / vLLM / Jina / Infinity / Custom. Prefills base URL and suggested models. **Disables pipeline A for Ollama with an explanatory hint** rather than letting the user find out via HTTP 400.                                                                                                                                                                                                                      |
+| Base URL                                                    | `change` handler runs `normalizeBaseUrl` and writes the normalised value back, mirroring `customModelHost` (`:2896-2901`).                                                                                                                                                                                                                                                                                                                                           |
+| API key                                                     | `type="password"`, `autocomplete="off"`. Never bound to `state`. `change`, not `input`.                                                                                                                                                                                                                                                                                                                                                                              |
+| Remember key                                                | Unchecked ⇒ `sessionStorage`. Plus a clear-key button.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Pipeline                                                    | `direct` / `vlm`.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Models                                                      | `<input list=…>` with `<datalist>` populated from `/models` after a successful test.                                                                                                                                                                                                                                                                                                                                                                                 |
+| Embedding source                                            | remote / local — pipeline B only.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Frames per video, concurrency, max image width, wire format | With cost hints.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Describe prompt                                             | **Reuse the existing `#chrome-ai-prompt` textarea** — relabel its container and show it for both `chrome-ai` and `openai`, keeping the `mc_chrome_ai_prompt` storage key. One prompt, one control. Its hint currently reads "Changes apply to new embeddings only", which is accurate for `chrome-ai` and **wrong** for `openai`, where the prompt is namespaced: rewrite it to say editing the prompt re-embeds, and that reverting it restores the previous cache. |
+| Test connection                                             | Runs `/models`, then `probeWireFormat`, and reports the winning format and dimension.                                                                                                                                                                                                                                                                                                                                                                                |
 
 Changing **any** vector-affecting setting after a load must trigger the same page reload as
 `#model-select` (`:2827-2834`), because the cache namespace changes underneath `state.vectors`. That is
@@ -316,17 +316,17 @@ In `embedAll()`:
 
   **The rule is: every input that changes the resulting vector belongs in the namespace.**
 
-  | Component | Why |
-  | --- | --- |
-  | full normalized base URL | not just the host — two paths on one host can be different services behind a gateway, and the port distinguishes Ollama from LM Studio |
-  | `pipeline` | `direct` and `vlm` produce incomparable vectors |
-  | vision/VLM model | in pipeline B the caption, and therefore the vector, depends entirely on it |
-  | `embedderId` | `remote:<model>` vs `local:nomic-embed-text-v1.5` |
-  | `dim` | providers change dimensions silently, and dim mismatch is the one failure producing garbage rather than an error (B3) |
-  | `wireFormat` | different request shapes can reach different model paths on the same server |
-  | **describe prompt** (pipeline B) | the caption is the embedding input; a reworded prompt is a different vector |
-  | **`maxImageWidth`** / **`jpegQuality`** | changes the pixels the model sees |
-  | **`framesPerVideo`** | changes what the model sees for videos |
+  | Component                               | Why                                                                                                                                    |
+  |-----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+  | full normalized base URL                | not just the host — two paths on one host can be different services behind a gateway, and the port distinguishes Ollama from LM Studio |
+  | `pipeline`                              | `direct` and `vlm` produce incomparable vectors                                                                                        |
+  | vision/VLM model                        | in pipeline B the caption, and therefore the vector, depends entirely on it                                                            |
+  | `embedderId`                            | `remote:<model>` vs `local:nomic-embed-text-v1.5`                                                                                      |
+  | `dim`                                   | providers change dimensions silently, and dim mismatch is the one failure producing garbage rather than an error (B3)                  |
+  | `wireFormat`                            | different request shapes can reach different model paths on the same server                                                            |
+  | **describe prompt** (pipeline B)        | the caption is the embedding input; a reworded prompt is a different vector                                                            |
+  | **`maxImageWidth`** / **`jpegQuality`** | changes the pixels the model sees                                                                                                      |
+  | **`framesPerVideo`**                    | changes what the model sees for videos                                                                                                 |
 
   The last three are the ones easiest to leave out, and leaving them out is what makes a setting look
   broken: change it, reload, and `readCachedEmbeddings()` serves vectors built from the old input, so
@@ -465,15 +465,15 @@ legacy basename key migrated, backend namespacing keeps two backends' captions a
 
 ## Risks
 
-| Risk | Mitigation | What settles it |
-| --- | --- | --- |
-| OpenRouter `/embeddings` may not accept `data:` URIs (docs show `https://` URLs only) | Pipeline A still works on Jina, vLLM and Infinity; OpenRouter users take pipeline B | One `curl`, before M1 |
-| CORS or Local Network Access blocks localhost servers | Actionable per-provider error text; `npm run dev` documented as the friction-free path | Manual test against LM Studio with CORS off |
-| Wire-format probe misidentifies a server | Manual override in settings; the probe reports what it chose | Test connection against each preset |
-| Per-image cost surprises a user | Cost guard before the run; thumbnails at 384 px; free model documented for testing | Cost guard shown on a 1 000-file folder |
-| API key leaks into an error report | Redaction at error construction, `console.warn` only, Sentry `beforeSend`/`beforeBreadcrumb` | Unit tests + a deliberate 401 with the network tab open |
-| `Cross-Origin-Embedder-Policy: credentialless` (`public/_headers:3`) interferes with authenticated CORS fetches | COEP applies to `no-cors` responses, so a CORS-mode fetch should pass | Smoke test on the deployed HTTPS build, not only `vite dev` |
-| Seven model variants is a lot of UI | Group `#model-select` with `<optgroup>` | Settings modal review |
+| Risk                                                                                                            | Mitigation                                                                                   | What settles it                                             |
+|-----------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|-------------------------------------------------------------|
+| OpenRouter `/embeddings` may not accept `data:` URIs (docs show `https://` URLs only)                           | Pipeline A still works on Jina, vLLM and Infinity; OpenRouter users take pipeline B          | One `curl`, before M1                                       |
+| CORS or Local Network Access blocks localhost servers                                                           | Actionable per-provider error text; `npm run dev` documented as the friction-free path       | Manual test against LM Studio with CORS off                 |
+| Wire-format probe misidentifies a server                                                                        | Manual override in settings; the probe reports what it chose                                 | Test connection against each preset                         |
+| Per-image cost surprises a user                                                                                 | Cost guard before the run; thumbnails at 384 px; free model documented for testing           | Cost guard shown on a 1 000-file folder                     |
+| API key leaks into an error report                                                                              | Redaction at error construction, `console.warn` only, Sentry `beforeSend`/`beforeBreadcrumb` | Unit tests + a deliberate 401 with the network tab open     |
+| `Cross-Origin-Embedder-Policy: credentialless` (`public/_headers:3`) interferes with authenticated CORS fetches | COEP applies to `no-cors` responses, so a CORS-mode fetch should pass                        | Smoke test on the deployed HTTPS build, not only `vite dev` |
+| Seven model variants is a lot of UI                                                                             | Group `#model-select` with `<optgroup>`                                                      | Settings modal review                                       |
 
 ## Verification
 
@@ -505,13 +505,13 @@ legacy basename key migrated, backend namespacing keeps two backends' captions a
 
 ## Suggested sequencing
 
-| Step | Work | Why this order |
-| --- | --- | --- |
-| 1 | M0 refactors | Fixes real bugs, changes no behaviour, and every later step depends on them |
-| 2 | M1 `openaiCompat.ts` + tests | The bulk of the logic, testable with no app wiring |
-| 3 | M2 types, settings, consent | Small, and unblocks the UI |
-| 4 | M3 settings UI + Test connection | A user can configure and validate an endpoint before any inference path exists — which makes the error UX reviewable on its own |
-| 5 | M4 `loadModelOnce` + `embedAll` **and** the query funnel | Must land together: a remote index with a local query embedder is silently wrong, so the intermediate state is worse than not shipping |
-| 6 | M5 lazy captions | Small, independent |
-| 7 | M6 multi-frame video | Independent of the transport; coordinate with `VIDEO_LM_PLAN.md` M3 |
-| 8 | M7 secret hygiene + docs | Sentry hardening should not wait, but the doc edits want the final feature shape |
+| Step | Work                                                     | Why this order                                                                                                                         |
+|------|----------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| 1    | M0 refactors                                             | Fixes real bugs, changes no behaviour, and every later step depends on them                                                            |
+| 2    | M1 `openaiCompat.ts` + tests                             | The bulk of the logic, testable with no app wiring                                                                                     |
+| 3    | M2 types, settings, consent                              | Small, and unblocks the UI                                                                                                             |
+| 4    | M3 settings UI + Test connection                         | A user can configure and validate an endpoint before any inference path exists — which makes the error UX reviewable on its own        |
+| 5    | M4 `loadModelOnce` + `embedAll` **and** the query funnel | Must land together: a remote index with a local query embedder is silently wrong, so the intermediate state is worse than not shipping |
+| 6    | M5 lazy captions                                         | Small, independent                                                                                                                     |
+| 7    | M6 multi-frame video                                     | Independent of the transport; coordinate with `VIDEO_LM_PLAN.md` M3                                                                    |
+| 8    | M7 secret hygiene + docs                                 | Sentry hardening should not wait, but the doc edits want the final feature shape                                                       |
