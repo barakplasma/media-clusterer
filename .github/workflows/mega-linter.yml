@@ -79,7 +79,8 @@ jobs:
           # a machine-generated commit to whoever happened to push.
           commit_author: megalinter-bot <megalinter-bot@users.noreply.github.com>
           # Only ever commit real source fixes — never MegaLinter's own output.
-          file_pattern: ':!megalinter-reports'
+          # megalinter-reports/ is in .gitignore, so it is never staged.
+          file_pattern: '.'
 
       - name: Archive MegaLinter reports
         if: always()
