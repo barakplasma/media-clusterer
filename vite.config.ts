@@ -46,6 +46,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Never treat build output as a test source. `tsc` used to emit compiled
+    // copies of every *.test.ts into dist/, which vitest then discovered and
+    // ran alongside the real ones — doubling the suite and failing
+    // intermittently against stale code. The build script no longer emits
+    // them; this makes a stray dist/ harmless regardless.
+    exclude: ['**/node_modules/**', 'dist/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html']

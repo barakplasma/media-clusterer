@@ -11,9 +11,43 @@
  * B/C add caption generation on the same forward pass in M4.
  */
 
-import { AutoModel, RawImage } from '@huggingface/transformers'
+import { AutoModel, RawImage, env } from '@huggingface/transformers'
 import { assertVisionDim, poolVision } from './vlmTiers'
 import type { VlmDevice, VlmRequest, VlmResponse, VlmTier } from './types'
+
+// A worker gets its own module instance, so none of the `env` configuration
+// done in app.ts applies here. Every setting the main thread relies on has to
+// be repeated, or the worker silently behaves differently from the rest of the
+// app — no model cache, wrong host, and (below) no WASM at all.
+env.allowLocalModels = false
+env.allowRemoteModels = true
+// This is what makes the ~55 MB download a one-time cost: Transformers.js
+// stores fetched weights in the Cache API and serves them from there on every
+// later load. It defaults to true in a browser; set explicitly because the
+// whole point of tier A is that users pay for it once.
+env.useBrowserCache = true
+// Mirrors app.ts. Note this is the *file system* cache directory, not the
+// browser one — inert here, kept only so the two module instances are
+// configured identically and neither looks like the odd one out.
+env.cacheDir = 'models'
+
+// vite.config.ts strips `ort-wasm*` from dist (Cloudflare's 25 MiB per-file
+// limit), so onnxruntime-web must fetch its binaries from the CDN instead —
+// exactly what src/sapiens2.ts does for the same reason.
+//
+// This is not only the WASM fallback's concern: onnxruntime-web's WebGPU
+// backend is JSEP-on-WASM and loads the same artifacts, so without this *both*
+// paths 404 at runtime in a production build while working fine under
+// `vite dev`. Unguarded on purpose: `env.backends.onnx.wasm` is a read-only
+// accessor that always exists, so if that ever stops being true a TypeError at
+// startup beats a silent skip that only surfaces as a broken deploy.
+const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/'
+const ortWasm = env.backends.onnx.wasm
+if (!ortWasm) {
+  throw new Error('onnxruntime-web WASM env missing; cannot point it at the CDN build')
+}
+ortWasm.wasmPaths = ORT_CDN
+ortWasm.numThreads = navigator.hardwareConcurrency || 4
 
 interface VisionOutput {
   data: Float32Array
@@ -46,7 +80,10 @@ function toError(err: unknown): { message: string; name: string } {
  * the slow one rather than surfacing an error, because a slow embed is a far
  * better outcome than none on the hardware this targets.
  */
-async function load(id: number, tier: VlmTier): Promise<void> {
+async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void> {
+  // The custom-host setting (corporate proxy / Artifactory mirror) lives in
+  // main-thread settings, so it has to be handed over on every load.
+  env.remoteHost = remoteHost || 'https://huggingface.co'
   if (loadedTier?.id === tier.id && model) {
     post({ type: 'loaded', id, device, visionDim: tier.visionDim })
     return
@@ -164,7 +201,7 @@ self.addEventListener('message', (event: MessageEvent<VlmRequest>) => {
   const req = event.data
   void (async () => {
     try {
-      if (req.type === 'load') await load(req.id, req.tier)
+      if (req.type === 'load') await load(req.id, req.tier, req.remoteHost)
       else if (req.type === 'embed') await embed(req.id, req.images)
       else if (req.type === 'dispose') await dispose()
     } catch (err) {

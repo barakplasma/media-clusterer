@@ -252,7 +252,7 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  modelVariant: 'sapiens2-fp16',
+  modelVariant: 'smolvlm2-vision',
   enableLazyCaption: false,
   doNotTrack: false,
   customModelHost: '',
@@ -432,6 +432,8 @@ function currentCachePrefix(): string {
     return openaiCacheNamespace({ baseUrl, apiKey: '', model: state.settings.openai.model })
   }
   if (v === 'chrome-ai') return '@chrome-ai/'
+  const tier = getVlmTier(v)
+  if (tier) return tier.cachePrefix
   if (!v.startsWith('sapiens2')) return ''
   if (v === 'sapiens2-fp16') return '@sapiens2/'
   return `@${v}/`
@@ -1301,7 +1303,7 @@ async function loadModelOnce(signal?: AbortSignal) {
     const tier = getVlmTier(state.settings.modelVariant)!
     setStatus(`Loading ${tier.id} (${tier.downloadMB} MB)…`)
     try {
-      await loadVlm(state.settings.modelVariant, (pct) => {
+      await loadVlm(state.settings.modelVariant, normalizeHost(state.settings.customModelHost), (pct) => {
         setProgress(pct)
         setStatus(`Downloading ${tier.id}… ${pct.toFixed(0)}%`)
       })
@@ -1771,19 +1773,12 @@ async function embedAll(files: PhotoFile[]) {
   // session speedup. The transformers path adapts: the working batch size
   // halves after a GPU failure and creeps back up after sustained successes.
   const batcher = createAdaptiveBatcher(state.settings.batchSize)
-  // Separate cache namespace per variant so vectors don't collide across models.
-  // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
-  const cachePrefix = isRemote
-    ? currentCachePrefix()
-    : isVlm
-      ? getVlmTier(state.settings.modelVariant)!.cachePrefix
-      : isChromeAI
-        ? '@chrome-ai/'
-        : !isSapiens2
-          ? ''
-          : state.settings.modelVariant === 'sapiens2-fp16'
-            ? '@sapiens2/'
-            : `@${state.settings.modelVariant}/`
+  // Separate cache namespace per variant so vectors don't collide across models
+  // (AGENT.md, "Embedding space"). This used to be a second copy of the same
+  // ternary chain that currentCachePrefix() already implements; the two are now
+  // one function, so the settings panel's cache count and the keys actually
+  // written cannot disagree.
+  const cachePrefix = currentCachePrefix()
 
   for (let i = 0; i < files.length; ) {
     // Remote batches are bounded by request size, not GPU memory, so the

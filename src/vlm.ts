@@ -89,7 +89,11 @@ export function vlmDevice(): VlmDevice {
  * Load a tier's vision encoder. Idempotent for the same tier.
  * Rejects if `variant` is not a SmolVLM2 tier.
  */
-export async function loadVlm(variant: ModelVariant, progress?: VlmProgress): Promise<VlmTier> {
+export async function loadVlm(
+  variant: ModelVariant,
+  remoteHost: string,
+  progress?: VlmProgress
+): Promise<VlmTier> {
   const tier = getVlmTier(variant)
   if (!tier) throw new Error(`${variant} is not a SmolVLM2 tier`)
 
@@ -97,7 +101,7 @@ export async function loadVlm(variant: ModelVariant, progress?: VlmProgress): Pr
   loadedBytes.clear()
   totalBytes.clear()
   try {
-    await send({ type: 'load', id: nextId++, tier })
+    await send({ type: 'load', id: nextId++, tier, remoteHost })
     return tier
   } finally {
     onProgress = null

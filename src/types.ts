@@ -70,7 +70,7 @@ export interface VlmTier {
 
 /** Request sent from the main thread to the VLM worker. */
 export type VlmRequest =
-  | { type: 'load'; id: number; tier: VlmTier }
+  | { type: 'load'; id: number; tier: VlmTier; remoteHost: string }
   | { type: 'embed'; id: number; images: ImageBitmap[] }
   | { type: 'dispose'; id: number }
 
