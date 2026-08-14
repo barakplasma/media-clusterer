@@ -68,6 +68,16 @@ function ensureWorker(): Worker {
     const err = new Error(event.message || 'VLM worker crashed')
     for (const [, entry] of pending) entry.reject(err)
     pending.clear()
+    // Discard the dead instance too. Keeping it cached would make every later
+    // ensureWorker() hand back a worker that can never reply, so a retry would
+    // register a promise nothing resolves and model loading would hang instead
+    // of failing.
+    try {
+      worker?.terminate()
+    } catch {
+      /* already gone */
+    }
+    worker = null
   })
   return worker
 }
@@ -109,18 +119,21 @@ export async function loadVlm(
 }
 
 /**
- * Embed bitmaps to pooled 768-d vectors.
+ * Embed groups of frames, returning one pooled 768-d vector per group.
+ *
+ * Each group is the frames sampled from one item — one for a still, several for
+ * a video — so the result is positionally aligned with `groups`.
  *
  * The bitmaps are **transferred**, so they are neutered in the caller and must
  * not be touched afterwards. The worker closes them. Pass clones for anything
  * still needed on the main thread, exactly as the chrome-ai path does for
  * `state.thumbnails`.
  */
-export async function embedWithVlm(images: ImageBitmap[]): Promise<Float32Array[]> {
-  if (images.length === 0) return []
+export async function embedWithVlm(groups: ImageBitmap[][]): Promise<Float32Array[]> {
+  if (groups.length === 0) return []
   const res = await send<Extract<VlmResponse, { type: 'embedded' }>>(
-    { type: 'embed', id: nextId++, images },
-    images
+    { type: 'embed', id: nextId++, groups },
+    groups.flat()
   )
   return res.vectors
 }

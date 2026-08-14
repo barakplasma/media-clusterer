@@ -5,6 +5,9 @@ import {
   getVlmTier,
   isVlmVariant,
   allVlmTiers,
+  selectableVlmTiers,
+  supportsTextSearch,
+  poolVectors,
   frameTimestamps,
   THUMB_FRAME_PX,
   VLM_FRAME_PX
@@ -168,5 +171,86 @@ describe('frameTimestamps', () => {
     // Callers index straight into the result; [] would be a silent no-frame bug.
     expect(frameTimestamps(10, 0)).toHaveLength(1)
     expect(frameTimestamps(10, -3)).toHaveLength(1)
+  })
+})
+
+describe('selectableVlmTiers', () => {
+  it('offers only tiers whose label the code can honour', () => {
+    // The worker loads vision_encoder only, so the captioning tiers would
+    // deliver tier-A behaviour under a label promising captions.
+    const ids = selectableVlmTiers().map((t) => t.id)
+    expect(ids).toEqual(['smolvlm2-vision'])
+  })
+
+  it('still declares the unreleased tiers', () => {
+    // They stay in the table so M4 is a flag flip, not a re-derivation.
+    expect(allVlmTiers().map((t) => t.id)).toContain('smolvlm2-256m')
+    expect(allVlmTiers().map((t) => t.id)).toContain('smolvlm2-500m')
+  })
+
+  it('never offers a tier that claims captions before M4', () => {
+    for (const t of selectableVlmTiers()) expect(t.visionOnly).toBe(true)
+  })
+})
+
+describe('supportsTextSearch', () => {
+  it('is false for every VLM tier', () => {
+    // Pooled SigLIP vectors and nomic-embed-text live in unrelated spaces;
+    // equal width is not compatibility.
+    for (const t of allVlmTiers()) expect(supportsTextSearch(t.id)).toBe(false)
+  })
+
+  it('leaves the existing embedders alone', () => {
+    expect(supportsTextSearch('nomic')).toBe(true)
+    expect(supportsTextSearch('sapiens2-fp16')).toBe(true)
+    expect(supportsTextSearch('chrome-ai')).toBe(true)
+    expect(supportsTextSearch('openai')).toBe(true)
+  })
+})
+
+describe('poolVectors', () => {
+  it('returns a unit vector', () => {
+    const out = poolVectors([
+      Float32Array.from([1, 0, 0]),
+      Float32Array.from([0, 1, 0])
+    ])
+    expect(Math.hypot(...out)).toBeCloseTo(1, 6)
+  })
+
+  it('averages frames rather than favouring one', () => {
+    // Two orthogonal frames should land halfway between them, not on either.
+    const out = poolVectors([
+      Float32Array.from([1, 0]),
+      Float32Array.from([0, 1])
+    ])
+    expect(out[0]).toBeCloseTo(Math.SQRT1_2, 6)
+    expect(out[1]).toBeCloseTo(Math.SQRT1_2, 6)
+  })
+
+  it('passes a single frame through untouched', () => {
+    const only = Float32Array.from([0.6, 0.8])
+    expect(poolVectors([only])).toBe(only)
+  })
+
+  it('is order-independent', () => {
+    const a = Float32Array.from([1, 0, 0])
+    const b = Float32Array.from([0, 1, 0])
+    const c = Float32Array.from([0, 0, 1])
+    const x = poolVectors([a, b, c])
+    const y = poolVectors([c, a, b])
+    for (let i = 0; i < x.length; i++) expect(x[i]).toBeCloseTo(y[i], 6)
+  })
+
+  it('survives frames that cancel out', () => {
+    // Opposed frames average to zero; must not divide by zero.
+    const out = poolVectors([Float32Array.from([1, 0]), Float32Array.from([-1, 0])])
+    expect([...out]).toEqual([0, 0])
+  })
+
+  it('rejects an empty group and mixed widths', () => {
+    expect(() => poolVectors([])).toThrow(/no vectors/)
+    expect(() =>
+      poolVectors([Float32Array.from([1, 0]), Float32Array.from([1, 0, 0])])
+    ).toThrow(/mixed widths/)
   })
 })

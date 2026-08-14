@@ -38,7 +38,9 @@ const TIERS: Record<string, VlmTier> = {
     visionDim: SIGLIP_HIDDEN_SIZE,
     framesPerVideo: 4,
     cachePrefix: '@smolvlm2-vision/',
-    downloadMB: 55
+    downloadMB: 55,
+    // The only tier the worker can actually honour today.
+    selectable: true
   },
   'smolvlm2-256m': {
     id: 'smolvlm2-256m',
@@ -48,7 +50,11 @@ const TIERS: Record<string, VlmTier> = {
     visionDim: SIGLIP_HIDDEN_SIZE,
     framesPerVideo: 4,
     cachePrefix: '@smolvlm2-256m/',
-    downloadMB: 189
+    downloadMB: 189,
+    // Not offered until M4 builds the decoder path. The worker loads only
+    // vision_encoder, so selecting this today would deliver tier A behaviour
+    // under a label promising captions.
+    selectable: false
   },
   'smolvlm2-500m': {
     id: 'smolvlm2-500m',
@@ -58,7 +64,8 @@ const TIERS: Record<string, VlmTier> = {
     visionDim: SIGLIP_HIDDEN_SIZE,
     framesPerVideo: 4,
     cachePrefix: '@smolvlm2-500m/',
-    downloadMB: 358
+    downloadMB: 358,
+    selectable: false // as above — needs M4
   }
 }
 
@@ -72,9 +79,62 @@ export function getVlmTier(variant: ModelVariant): VlmTier | null {
   return TIERS[variant] ?? null
 }
 
-/** All tiers, in ascending download size. Used to build the settings dropdown. */
+/** Every declared tier, including ones not yet offered to users. */
 export function allVlmTiers(): VlmTier[] {
   return Object.values(TIERS).sort((a, b) => a.downloadMB - b.downloadMB)
+}
+
+/**
+ * Tiers a user may actually pick, ascending by download size.
+ *
+ * A tier is listed only once the code can deliver what its label claims.
+ * Advertising "captions + embeddings" while the worker loads nothing but the
+ * vision encoder would be a worse outcome than not offering it at all.
+ */
+export function selectableVlmTiers(): VlmTier[] {
+  return allVlmTiers().filter((t) => t.selectable)
+}
+
+/**
+ * Whether a variant can answer a typed text query.
+ *
+ * False for every VLM tier: `state.vectors` hold pooled SigLIP features, and
+ * the only text encoder in the app is nomic-embed-text, whose output lives in
+ * an unrelated space. Equal width (768) is not compatibility — cosine over the
+ * two is well-defined and meaningless, which is worse than an error because it
+ * looks like it worked. A compatible path arrives with M6.
+ */
+export function supportsTextSearch(variant: ModelVariant): boolean {
+  return !isVlmVariant(variant)
+}
+
+/**
+ * Combine per-frame vectors into the single vector stored for an item.
+ *
+ * Mean-then-renormalize: each frame already contributes a unit vector, so the
+ * mean is the centroid of the clip's visual content and renormalizing keeps the
+ * result comparable with single-image vectors under cosine.
+ */
+export function poolVectors(vectors: Float32Array[]): Float32Array {
+  if (vectors.length === 0) throw new Error('poolVectors: no vectors to pool')
+  if (vectors.length === 1) return vectors[0]
+
+  const dim = vectors[0].length
+  for (const v of vectors) {
+    if (v.length !== dim) {
+      throw new Error(`poolVectors: mixed widths (${dim} vs ${v.length})`)
+    }
+  }
+
+  const out = new Float32Array(dim)
+  for (const v of vectors) for (let d = 0; d < dim; d++) out[d] += v[d]
+  for (let d = 0; d < dim; d++) out[d] /= vectors.length
+
+  let norm = 0
+  for (let d = 0; d < dim; d++) norm += out[d] * out[d]
+  norm = Math.sqrt(norm) || 1
+  for (let d = 0; d < dim; d++) out[d] /= norm
+  return out
 }
 
 /**

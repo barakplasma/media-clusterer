@@ -12,7 +12,7 @@
  */
 
 import { AutoModel, RawImage, env } from '@huggingface/transformers'
-import { assertVisionDim, poolVision } from './vlmTiers'
+import { assertVisionDim, poolVectors, poolVision } from './vlmTiers'
 import type { VlmDevice, VlmRequest, VlmResponse, VlmTier } from './types'
 
 // A worker gets its own module instance, so none of the `env` configuration
@@ -132,51 +132,66 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
 }
 
 /**
- * Embed a batch of bitmaps to one pooled vector each.
+ * Embed groups of frames to one pooled vector per group.
  *
- * Images are processed one at a time on purpose. Batching would help on a
+ * A group is all the frames sampled from one item: exactly one for a still
+ * image, `tier.framesPerVideo` for a video. Per-frame vectors are combined by
+ * poolVectors, so a video is represented by the centroid of its sampled
+ * content rather than by whichever single frame happened to be grabbed.
+ *
+ * Frames are processed one at a time on purpose. Batching would help on a
  * discrete GPU, but the target device has neither the VRAM headroom nor a
  * discrete GPU, and a batch that OOMs costs the whole tab.
  */
-async function embed(id: number, images: ImageBitmap[]): Promise<void> {
+async function embed(id: number, groups: ImageBitmap[][]): Promise<void> {
   if (!runVision || !processor || !loadedTier) {
     throw new Error('VLM worker: embed before load')
   }
   const tier = loadedTier
   const vectors: Float32Array[] = []
 
-  for (const bitmap of images) {
-    // RawImage.fromBlob would re-decode; the bitmap is already decoded, so go
-    // through a canvas to hand the processor raw pixels directly.
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('VLM worker: no 2d context for frame conversion')
-    ctx.drawImage(bitmap, 0, 0)
-    const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height)
-    const raw = new RawImage(
-      new Uint8ClampedArray(imageData.data),
-      imageData.width,
-      imageData.height,
-      4
-    )
+  for (const group of groups) {
+    const frameVectors: Float32Array[] = []
+    for (const bitmap of group) {
+      // RawImage.fromBlob would re-decode; the bitmap is already decoded, so
+      // go through a canvas to hand the processor raw pixels directly.
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('VLM worker: no 2d context for frame conversion')
+      ctx.drawImage(bitmap, 0, 0)
+      const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height)
+      const raw = new RawImage(
+        new Uint8ClampedArray(imageData.data),
+        imageData.width,
+        imageData.height,
+        4
+      )
 
-    // do_image_splitting: false is load-bearing — the default tiles each frame
-    // against size.longest_edge 2048, which is the easiest way to blow the
-    // memory budget on the device this exists to support.
-    const inputs = (await (processor as unknown as CallableFunction)(raw, {
-      do_image_splitting: false
-    })) as { pixel_values: unknown }
+      // do_image_splitting: false is load-bearing — the default tiles each
+      // frame against size.longest_edge 2048, which is the easiest way to blow
+      // the memory budget on the device this exists to support.
+      const inputs = (await (processor as unknown as CallableFunction)(raw, {
+        do_image_splitting: false
+      })) as { pixel_values: unknown }
 
-    const out = await runVision({ pixel_values: inputs.pixel_values })
-    const features = out.last_hidden_state ?? out.image_features ?? Object.values(out)[0]
-    if (!features?.dims) throw new Error('VLM worker: vision encoder returned no recognisable tensor')
+      const out = await runVision({ pixel_values: inputs.pixel_values })
+      const features = out.last_hidden_state ?? out.image_features ?? Object.values(out)[0]
+      if (!features?.dims) {
+        throw new Error('VLM worker: vision encoder returned no recognisable tensor')
+      }
 
-    assertVisionDim(tier, features.dims[features.dims.length - 1])
-    vectors.push(poolVision(features.data, features.dims))
+      assertVisionDim(tier, features.dims[features.dims.length - 1])
+      frameVectors.push(poolVision(features.data, features.dims))
 
-    // AGENT.md: bitmaps are closed as soon as they are done with. The worker
-    // owns these because they were transferred to it.
-    bitmap.close()
+      // AGENT.md: bitmaps are closed as soon as they are done with. The worker
+      // owns these because they were transferred to it.
+      bitmap.close()
+    }
+
+    if (frameVectors.length === 0) {
+      throw new Error('VLM worker: every frame in a group failed to embed')
+    }
+    vectors.push(poolVectors(frameVectors))
   }
 
   post(
@@ -202,12 +217,12 @@ self.addEventListener('message', (event: MessageEvent<VlmRequest>) => {
   void (async () => {
     try {
       if (req.type === 'load') await load(req.id, req.tier, req.remoteHost)
-      else if (req.type === 'embed') await embed(req.id, req.images)
+      else if (req.type === 'embed') await embed(req.id, req.groups)
       else if (req.type === 'dispose') await dispose()
     } catch (err) {
       // Free any bitmaps the failed request still owns, or the tab leaks one
       // GPU-backed image per failure.
-      if (req.type === 'embed') for (const b of req.images) b.close()
+      if (req.type === 'embed') for (const g of req.groups) for (const b of g) b.close()
       post({ type: 'error', id: req.id, ...toError(err) })
     }
   })()

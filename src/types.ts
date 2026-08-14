@@ -66,12 +66,13 @@ export interface VlmTier {
   framesPerVideo: number // frames sampled per video (1 = today's behaviour)
   cachePrefix: string // IndexedDB namespace, e.g. '@smolvlm2-vision/'
   downloadMB: number // approximate, for the settings UI
+  selectable: boolean // false while the code cannot deliver what the label claims
 }
 
 /** Request sent from the main thread to the VLM worker. */
 export type VlmRequest =
   | { type: 'load'; id: number; tier: VlmTier; remoteHost: string }
-  | { type: 'embed'; id: number; images: ImageBitmap[] }
+  | { type: 'embed'; id: number; groups: ImageBitmap[][] }
   | { type: 'dispose'; id: number }
 
 /** Response sent from the VLM worker back to the main thread. */

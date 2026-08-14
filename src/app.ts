@@ -12,7 +12,8 @@ import { loadVlm, embedWithVlm, disposeVlm, vlmDevice } from './vlm'
 import {
   getVlmTier,
   isVlmVariant,
-  allVlmTiers,
+  selectableVlmTiers,
+  supportsTextSearch,
   frameTimestamps,
   THUMB_FRAME_PX,
   VLM_FRAME_PX
@@ -743,6 +744,18 @@ async function embedText(text: string): Promise<Float32Array> {
   if (state.settings.modelVariant === 'openai') {
     if (!remoteConfig) throw new Error('Remote endpoint not connected')
     return embedQuery(remoteConfig, text)
+  }
+
+  if (!supportsTextSearch(state.settings.modelVariant)) {
+    // Refusing beats answering. state.vectors hold pooled SigLIP features and
+    // the only text encoder here is nomic-embed-text; the cosine between them
+    // is well-defined and meaningless, so a query would return a confidently
+    // ranked list of nothing. See ADR-0001 and M6.
+    throw new Error(
+      `Text search is not available with ${state.settings.modelVariant} — its image vectors ` +
+        'and the text model are in different embedding spaces. Use search-by-example, or ' +
+        'switch to another model.'
+    )
   }
 
   if (!textExtractor) throw new Error('Text model not loaded')
@@ -1805,7 +1818,9 @@ async function embedAll(files: PhotoFile[]) {
 
     // Resolve inputs for cache misses
     const missIndices: number[] = []
-    const missInputs: (File | RawImage | ImageBitmap | string)[] = []
+    // ImageBitmap[] entries are VLM frame groups: several frames for a video,
+    // one for a still, pooled to a single vector by the worker.
+    const missInputs: (File | RawImage | ImageBitmap | ImageBitmap[] | string)[] = []
 
     await Promise.all(
       batch.map(async (f, bi) => {
@@ -1831,10 +1846,21 @@ async function embedAll(files: PhotoFile[]) {
             } else if (isSapiens2) {
               missInputs.push(thumb)
             } else if (isVlm) {
-              // Clone: the bitmap is transferred to the worker, which closes
-              // it. Sharing the state.thumbnails reference would neuter the
-              // cached thumbnail and blank the tile on screen.
-              missInputs.push(await createImageBitmap(thumb, { resizeWidth: VLM_FRAME_PX }))
+              // Sample the video properly rather than upscaling the 224 px
+              // thumbnail: decode framesPerVideo frames at VLM resolution so a
+              // clip is represented by its content over time, not by whichever
+              // single frame the thumbnail happened to catch.
+              const tier = getVlmTier(state.settings.modelVariant)!
+              const frames = await videoFrameLimit(() =>
+                extractVideoFrames(f.file, tier.framesPerVideo, VLM_FRAME_PX)
+              )
+              if (frames.length > 0) {
+                missInputs.push(frames)
+              } else {
+                // Decoded for the thumbnail but not for us; fall back to a
+                // clone of it rather than dropping the file entirely.
+                missInputs.push([await createImageBitmap(thumb, { resizeWidth: VLM_FRAME_PX })])
+              }
             } else if (isChromeAI) {
               // Clone so Chrome AI doesn't close the bitmap that's cached in state.thumbnails
               missInputs.push(await createImageBitmap(thumb))
@@ -1874,7 +1900,8 @@ async function embedAll(files: PhotoFile[]) {
           missInputs.push(f.file)
         } else if (isVlm) {
           try {
-            missInputs.push(await createImageBitmap(f.file, { resizeWidth: VLM_FRAME_PX }))
+            // A group of one: a still image is a one-frame clip.
+            missInputs.push([await createImageBitmap(f.file, { resizeWidth: VLM_FRAME_PX })])
           } catch {
             // Undecodable image. A zero vector keeps this session going but is
             // never cached (see failedInputs below), so a later build can retry.
@@ -1937,7 +1964,7 @@ async function embedAll(files: PhotoFile[]) {
       // Inputs that failed even alone get a zero vector in RAM for this
       // session but must NOT be written to the cache — a cached zero would
       // permanently poison that file's embedding.
-      const failedInputs = new Set<File | RawImage | ImageBitmap | string>()
+      const failedInputs = new Set<File | RawImage | ImageBitmap | ImageBitmap[] | string>()
       try {
         let extracted: Float32Array[]
         if (isRemote) {
@@ -1945,7 +1972,7 @@ async function embedAll(files: PhotoFile[]) {
           extracted = await embedImages(remoteConfig, missInputs as string[])
         } else if (isVlm) {
           if (!vlmTier) throw new Error('SmolVLM2 tier not loaded')
-          extracted = await embedWithVlm(missInputs as ImageBitmap[])
+          extracted = await embedWithVlm(missInputs as ImageBitmap[][])
         } else if (isSapiens2) {
           if (!sapiens2Session) throw new Error('Sapiens2 session not loaded')
           extracted = await embedWithSapiens2(sapiens2Session, missInputs as (File | ImageBitmap)[])
@@ -3087,6 +3114,19 @@ dom.densitySlider.value = state.settings.density.toString()
 dom.drawBudgetSlider.value = state.settings.drawBudget.toString()
 dom.loopToggle.checked = state.settings.loopVideos
 dom.enableSearchToggle.checked = state.settings.enableTextSearch
+
+// Text search needs a text encoder sharing the image vectors' space. VLM tiers
+// have none yet, so the toggle is disabled with a reason rather than left on
+// to produce meaningless rankings.
+function updateTextSearchAvailability() {
+  const ok = supportsTextSearch(state.settings.modelVariant)
+  dom.enableSearchToggle.disabled = !ok
+  dom.enableSearchToggle.title = ok
+    ? ''
+    : `${state.settings.modelVariant} produces image-only vectors; text queries have nothing compatible to match against.`
+  if (!ok) dom.enableSearchToggle.checked = false
+}
+updateTextSearchAvailability()
 if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod
 dom.batchSizeInput.value = state.settings.batchSize.toString()
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString()
@@ -3100,11 +3140,12 @@ dom.customModelHostInput.value = state.settings.customModelHost
 {
   const group = document.getElementById('vlm-tier-group')
   if (group) {
-    for (const tier of allVlmTiers()) {
+    for (const tier of selectableVlmTiers()) {
       const opt = document.createElement('option')
       opt.value = tier.id
       const what = tier.visionOnly ? 'embeddings only' : 'captions + embeddings'
       opt.textContent = `${tier.id} (${what} · ${tier.downloadMB} MB)`
+      opt.title = 'Video-native, runs in a Web Worker. No text search yet.'
       group.appendChild(opt)
     }
   }
@@ -3369,6 +3410,7 @@ dom.modelSelect.addEventListener('change', () => {
   state.settings.modelVariant = dom.modelSelect.value as ModelVariant
   saveSettings()
   updateChromeAIPromptVisibility()
+  updateTextSearchAvailability()
   reloadIfModelLoaded()
 })
 
