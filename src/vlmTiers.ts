@@ -118,6 +118,31 @@ export function poolVision(data: Float32Array, dims: readonly number[]): Float32
 }
 
 /**
+ * Timestamps to seek to when sampling `n` frames from a clip of `duration`.
+ *
+ * Frames are spread uniformly over the *interior* of the clip, avoiding both
+ * endpoints: the first frame of a video is frequently black or a title card,
+ * and the last is often a fade-out, so sampling at 0 and `duration` reliably
+ * wastes two of a small budget on the least informative frames.
+ *
+ * n=1 reproduces the pre-M3 behaviour exactly — `min(1.0, duration / 2)` — so
+ * the thumbnail path is unchanged by the move to multi-frame.
+ */
+export function frameTimestamps(duration: number, n: number): number[] {
+  const count = Math.max(1, Math.floor(n))
+  if (!Number.isFinite(duration) || duration <= 0) {
+    // Unknown duration (some WebM streams): seek to 0 and take what we get.
+    return new Array(count).fill(0)
+  }
+  if (count === 1) return [Math.min(1.0, duration / 2)]
+
+  // n interior points: duration * i/(n+1) for i in 1..n.
+  const out: number[] = []
+  for (let i = 1; i <= count; i++) out.push((duration * i) / (count + 1))
+  return out
+}
+
+/**
  * Guard the assumption recorded in ADR-0001: that `vision_encoder.onnx` exports
  * the pre-connector SigLIP tensor and is therefore `visionDim` wide.
  *

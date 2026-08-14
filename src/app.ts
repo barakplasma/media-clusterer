@@ -9,7 +9,14 @@ import * as druid from '@saehrimnir/druidjs'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
 import { loadVlm, embedWithVlm, disposeVlm, vlmDevice } from './vlm'
-import { getVlmTier, isVlmVariant, allVlmTiers, VLM_FRAME_PX } from './vlmTiers'
+import {
+  getVlmTier,
+  isVlmVariant,
+  allVlmTiers,
+  frameTimestamps,
+  THUMB_FRAME_PX,
+  VLM_FRAME_PX
+} from './vlmTiers'
 import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2'
 import {
   modelDownloadUrls,
@@ -41,7 +48,15 @@ import {
   type OpenAICompatConfig
 } from './openaiCompat'
 import { l2normalize, extractVector, extractBatchedVectors, makeCacheKey } from './embeddings'
-import { openDB, cacheGet, cacheGetBatch, cachePutBatch, cacheStats } from './db'
+import {
+  openDB,
+  cacheGet,
+  cacheGetBatch,
+  cachePutBatch,
+  cacheStats,
+  captionGetBatch,
+  captionPutBatch
+} from './db'
 import { getNextImageInDirection } from './spatial'
 import {
   THUMB_WORLD,
@@ -564,13 +579,34 @@ async function loadDemoImages(): Promise<PhotoFile[]> {
 }
 
 // ── Media helpers ────────────────────────────────────────────────────────────
-async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
+/**
+ * Sample `n` frames from a video, each resized to `px` on its longest edge.
+ *
+ * One `<video>` element is seeked `n` times and torn down once. Creating an
+ * element per frame would multiply exactly the pressure the teardown and the
+ * `pLimit(4)` wrapper exist to contain: Chrome caps concurrent WebMediaPlayers
+ * at ~75 and starts refusing to decode past that.
+ *
+ * Resolution is a parameter, not a constant. Display thumbnails and VLM frames
+ * are deliberately different sizes — collapsing them would promote every cached
+ * video thumbnail to VLM resolution, over 5x the pixel memory per entry across
+ * an LRU holding up to MAX_THUMBNAILS_CACHE entries, on the low-memory device
+ * this whole feature targets.
+ *
+ * Returns fewer than `n` frames if some seeks fail, and [] if the video cannot
+ * be decoded at all.
+ */
+async function extractVideoFrames(file: File, n: number, px: number): Promise<ImageBitmap[]> {
   return new Promise((resolve) => {
     const video = document.createElement('video')
     video.preload = 'metadata'
     video.muted = true
     video.playsInline = true
     const url = URL.createObjectURL(file)
+    const frames: ImageBitmap[] = []
+    let timestamps: number[] = []
+    let cursor = 0
+    let settled = false
 
     // video.remove() is a no-op when the element was never added to the DOM.
     // The only way to release a WebMediaPlayer in Chrome is: pause → clear src → load().
@@ -588,33 +624,47 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
       video.load()
     }
 
+    const finish = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(frames)
+    }
+
     video.onloadedmetadata = () => {
-      video.currentTime = Math.min(1.0, video.duration / 2)
+      const duration = Number.isFinite(video.duration) ? video.duration : 0
+      timestamps = frameTimestamps(duration, n)
+      video.currentTime = timestamps[cursor]
     }
 
     video.onseeked = async () => {
       try {
-        const bitmap = await createImageBitmap(video, {
-          resizeWidth: 224,
-          resizeQuality: 'medium'
-        })
-        resolve(bitmap)
+        frames.push(await createImageBitmap(video, { resizeWidth: px, resizeQuality: 'medium' }))
       } catch (e) {
+        // One bad seek should cost one frame, not the whole video.
         console.warn('Failed to extract video frame:', e)
-        resolve(null)
-      } finally {
-        cleanup()
       }
+      cursor++
+      if (cursor >= timestamps.length) {
+        finish()
+        return
+      }
+      video.currentTime = timestamps[cursor]
     }
 
     video.onerror = () => {
       console.debug('Video load error (unsupported format):', file.name)
-      cleanup()
-      resolve(null)
+      finish()
     }
 
     video.src = url
   })
+}
+
+/** Single mid-video frame at thumbnail resolution — the pre-M3 behaviour. */
+async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
+  const [frame] = await extractVideoFrames(file, 1, THUMB_FRAME_PX)
+  return frame ?? null
 }
 
 // ── Thumbnail preloader ──────────────────────────────────────────────────────
@@ -748,6 +798,69 @@ const thumbnailLRU = new Set<number>() // indices in LRU order (most recently us
 // Chrome limits concurrent WebMediaPlayers to ~75; cap video frame extraction
 // well below that so the render loop + embedAll can't together exceed the limit.
 const videoFrameLimit = pLimit(4)
+
+// ── Caption storage ──────────────────────────────────────────────────────────
+// Captions live in IndexedDB (db.ts v2). They used to be one synchronous
+// localStorage.setItem per file inside the embed loop; see IMPROVEMENT_PLAN
+// P1-1. Reads fall back to the old localStorage keys once and migrate them
+// through, so captions generated by earlier builds survive the upgrade.
+
+const LEGACY_CAPTION_PREFIX = '@caption/'
+
+function captionKey(f: PhotoFile): CacheKey {
+  return `${f.name}:${f.size}:${f.lastModified}`
+}
+
+function legacyCaptionKey(f: PhotoFile): string {
+  return `${LEGACY_CAPTION_PREFIX}${captionKey(f)}`
+}
+
+/**
+ * Read captions for a batch, migrating any that are still in localStorage.
+ * Positional: entry i corresponds to files[i], null when there is no caption.
+ */
+async function readCaptions(files: PhotoFile[]): Promise<(string | null)[]> {
+  if (files.length === 0) return []
+  let stored: (string | null)[]
+  try {
+    stored = await captionGetBatch(files.map(captionKey))
+  } catch {
+    // A caption is a nice-to-have; never let its store take the embed down.
+    stored = new Array(files.length).fill(null)
+  }
+
+  const migrate: [CacheKey, string][] = []
+  for (let i = 0; i < files.length; i++) {
+    if (stored[i]) continue
+    const legacy = localStorage.getItem(legacyCaptionKey(files[i]))
+    if (legacy) {
+      stored[i] = legacy
+      migrate.push([captionKey(files[i]), legacy])
+    }
+  }
+
+  if (migrate.length > 0) {
+    // Migrate then drop the localStorage copy, so the quota it was occupying
+    // is actually returned rather than doubled.
+    captionPutBatch(migrate)
+      .then(() => {
+        for (const f of files) localStorage.removeItem(legacyCaptionKey(f))
+      })
+      .catch(() => {
+        /* keep the legacy copy if the write failed */
+      })
+  }
+
+  return stored
+}
+
+/** Persist captions. Fire-and-forget: failure costs a re-generation, nothing more. */
+function writeCaptions(entries: [CacheKey, string][]): void {
+  if (entries.length === 0) return
+  captionPutBatch(entries).catch(() => {
+    console.warn('Caption store write failed')
+  })
+}
 
 function resizeCanvas() {
   dom.canvas.width = window.innerWidth || 800
@@ -1807,16 +1920,20 @@ async function embedAll(files: PhotoFile[]) {
     )
 
     // Apply cache hits
+    const hitIndices: number[] = []
     for (let bi = 0; bi < batch.length; bi++) {
       if (cached[bi]) {
         vectors[i + bi] = cached[bi]!
         cacheHits++
-        if (isChromeAI) {
-          const f = batch[bi]
-          state.captions[i + bi] = localStorage.getItem(
-            `@caption/${f.name}:${f.size}:${f.lastModified}`
-          )
-        }
+        if (isChromeAI) hitIndices.push(bi)
+      }
+    }
+    if (hitIndices.length > 0) {
+      // One batched read for the whole batch instead of a synchronous
+      // localStorage hit per file.
+      const restored = await readCaptions(hitIndices.map((bi) => batch[bi]))
+      for (let h = 0; h < hitIndices.length; h++) {
+        state.captions[i + hitIndices[h]] = restored[h]
       }
     }
 
@@ -1848,15 +1965,12 @@ async function embedAll(files: PhotoFile[]) {
               chromeAIManager!.describe(input as ImageBitmap | Blob, prompt, undefined, m)
             )
           )
+          const captionWrites: [CacheKey, string][] = []
           for (let m = 0; m < descs.length; m++) {
             const description = descs[m]
             const f = batch[missIndices[m]]
             state.captions[i + missIndices[m]] = description
-            try {
-              localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description)
-            } catch (_) {
-              console.warn('Caption cache full')
-            }
+            captionWrites.push([captionKey(f), description])
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
             const output = await textExtractor(`search_document: ${description}`, {
               pooling: 'mean',
@@ -1864,6 +1978,8 @@ async function embedAll(files: PhotoFile[]) {
             })
             extracted.push(extractVector(output))
           }
+          // One transaction for the batch, off the critical path.
+          writeCaptions(captionWrites)
         } else {
           if (!extractor) throw new Error('Extractor not loaded')
           const ex = extractor
@@ -2767,13 +2883,30 @@ const openFileModal = (index: number) => {
     captionDebounceTimer = null
   }
 
-  // Warm from localStorage so captions survive page reload in all modes
-  if (!state.captions[index]) {
-    const stored = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`)
-    if (stored) state.captions[index] = stored
-  }
+  // Resolving a stored caption is now async (IndexedDB), so the whole
+  // show-or-generate decision moves into the continuation. Deciding before the
+  // read returned would race: the 400 ms debounce below would usually win, and
+  // we would regenerate a caption that was already on disk.
+  const resolveCaption = state.captions[index]
+    ? Promise.resolve(state.captions[index] ?? null)
+    : readCaptions([f]).then(([stored]) => {
+        if (stored) state.captions[index] = stored
+        return stored
+      })
 
-  const caption = state.captions[index] ?? null
+  void resolveCaption.then((caption) => {
+    // The user may have moved on while the store was read.
+    if (state.activeFileIndex !== index) return
+    showCaptionOrGenerate(index, f, caption)
+  })
+
+  dom.modal.showModal()
+  state.activeFileIndex = index
+  return finishOpenFileModal(index)
+}
+
+/** Render a known caption, or kick off lazy generation when enabled. */
+function showCaptionOrGenerate(index: number, f: PhotoFile, caption: string | null): void {
   if (caption) {
     dom.modalCaption.textContent = caption
     dom.modalCaption.style.display = 'block'
@@ -2814,14 +2947,7 @@ const openFileModal = (index: number) => {
         img.close()
         if (ac.signal.aborted) return
         state.captions[captureIndex] = desc
-        try {
-          localStorage.setItem(
-            `@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`,
-            desc
-          )
-        } catch (_) {
-          console.warn('Caption cache full')
-        }
+        writeCaptions([[captionKey(captureFile), desc]])
         if (state.activeFileIndex === captureIndex) {
           dom.modalCaption.textContent = desc
         }
@@ -2836,9 +2962,10 @@ const openFileModal = (index: number) => {
     dom.modalCaption.style.display = 'none'
     dom.modalFooter.style.borderRadius = ''
   }
+}
 
-  dom.modal.showModal()
-  state.activeFileIndex = index
+/** Everything openFileModal did after the caption block. */
+function finishOpenFileModal(index: number): void {
   state.lastViewedIndex = index
 
   // Center camera on the active image

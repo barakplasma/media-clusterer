@@ -5,6 +5,7 @@ import {
   getVlmTier,
   isVlmVariant,
   allVlmTiers,
+  frameTimestamps,
   THUMB_FRAME_PX,
   VLM_FRAME_PX
 } from './vlmTiers'
@@ -121,5 +122,51 @@ describe('tier table', () => {
     expect(THUMB_FRAME_PX).toBe(224)
     expect(VLM_FRAME_PX).toBe(512)
     expect(THUMB_FRAME_PX).toBeLessThan(VLM_FRAME_PX)
+  })
+})
+
+describe('frameTimestamps', () => {
+  it('reproduces the pre-M3 single-frame behaviour exactly', () => {
+    // The thumbnail path still calls this with n=1 and must not shift.
+    expect(frameTimestamps(10, 1)).toEqual([1.0]) // min(1.0, 10/2)
+    expect(frameTimestamps(1, 1)).toEqual([0.5]) // min(1.0, 1/2)
+  })
+
+  it('spreads n frames over the interior, avoiding both endpoints', () => {
+    // First and last frames are usually black or a title card.
+    const ts = frameTimestamps(10, 4)
+    expect(ts).toEqual([2, 4, 6, 8])
+    expect(ts[0]).toBeGreaterThan(0)
+    expect(ts[ts.length - 1]).toBeLessThan(10)
+  })
+
+  it('returns exactly n timestamps, ascending', () => {
+    for (const n of [1, 2, 3, 4, 8, 64]) {
+      const ts = frameTimestamps(37.5, n)
+      expect(ts).toHaveLength(n)
+      for (let i = 1; i < ts.length; i++) expect(ts[i]).toBeGreaterThan(ts[i - 1])
+    }
+  })
+
+  it('keeps every timestamp inside the clip', () => {
+    const duration = 3.3
+    for (const t of frameTimestamps(duration, 8)) {
+      expect(t).toBeGreaterThan(0)
+      expect(t).toBeLessThan(duration)
+    }
+  })
+
+  it('falls back to 0 when the duration is unknown or degenerate', () => {
+    // Some WebM streams report NaN/Infinity duration until fully buffered.
+    expect(frameTimestamps(NaN, 3)).toEqual([0, 0, 0])
+    expect(frameTimestamps(Infinity, 2)).toEqual([0, 0])
+    expect(frameTimestamps(0, 2)).toEqual([0, 0])
+    expect(frameTimestamps(-5, 1)).toEqual([0])
+  })
+
+  it('never returns an empty list', () => {
+    // Callers index straight into the result; [] would be a silent no-frame bug.
+    expect(frameTimestamps(10, 0)).toHaveLength(1)
+    expect(frameTimestamps(10, -3)).toHaveLength(1)
   })
 })
