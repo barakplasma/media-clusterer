@@ -8,6 +8,16 @@ import { pipeline, env, RawImage } from '@huggingface/transformers'
 import * as druid from '@saehrimnir/druidjs'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
+import { loadVlm, embedWithVlm, disposeVlm, vlmDevice } from './vlm'
+import {
+  getVlmTier,
+  isVlmVariant,
+  selectableVlmTiers,
+  supportsTextSearch,
+  frameTimestamps,
+  THUMB_FRAME_PX,
+  VLM_FRAME_PX
+} from './vlmTiers'
 import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2'
 import {
   modelDownloadUrls,
@@ -39,7 +49,15 @@ import {
   type OpenAICompatConfig
 } from './openaiCompat'
 import { l2normalize, extractVector, extractBatchedVectors, makeCacheKey } from './embeddings'
-import { openDB, cacheGet, cacheGetBatch, cachePutBatch, cacheStats } from './db'
+import {
+  openDB,
+  cacheGet,
+  cacheGetBatch,
+  cachePutBatch,
+  cacheStats,
+  captionGetBatch,
+  captionPutBatch
+} from './db'
 import { getNextImageInDirection } from './spatial'
 import {
   THUMB_WORLD,
@@ -69,7 +87,8 @@ import type {
   PointerState,
   CanvasPointerPos,
   CacheKey,
-  ModelVariant
+  ModelVariant,
+  VlmTier
 } from './types'
 
 // Enable caching and local model access for persistent storage
@@ -234,7 +253,7 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  modelVariant: 'sapiens2-fp16',
+  modelVariant: 'smolvlm2-vision',
   enableLazyCaption: false,
   doNotTrack: false,
   customModelHost: '',
@@ -295,6 +314,7 @@ let pendingSapiens2Buffer: ArrayBuffer | null = null
 let sapiens2Session: Sapiens2Session | null = null // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null // Chrome built-in AI session manager
 let remoteConfig: OpenAICompatConfig | null = null // Remote OpenAI-compatible endpoint
+let vlmTier: VlmTier | null = null // Loaded SmolVLM2 tier (worker-backed), see ADR-0001
 
 // Width of the vectors the active backend produces. All the local backends are
 // 768-d; a remote endpoint can be anything, so it is probed at load. Used for
@@ -356,6 +376,10 @@ function updateDeviceBadge() {
   if (state.settings.viewerOnly) {
     deviceBadgeEl.textContent = 'Viewer'
     deviceBadgeEl.style.color = '#4ade80'
+  } else if (vlmTier) {
+    const dev = vlmDevice() === 'webgpu' ? 'WebGPU' : 'WASM'
+    deviceBadgeEl.textContent = `${vlmTier.id} · ${dev} · worker`
+    deviceBadgeEl.style.color = vlmDevice() === 'webgpu' ? '#4ade80' : '#fbbf24'
   } else if (sapiens2Session) {
     const threads = navigator.hardwareConcurrency || 1
     const mt = typeof SharedArrayBuffer !== 'undefined'
@@ -409,6 +433,8 @@ function currentCachePrefix(): string {
     return openaiCacheNamespace({ baseUrl, apiKey: '', model: state.settings.openai.model })
   }
   if (v === 'chrome-ai') return '@chrome-ai/'
+  const tier = getVlmTier(v)
+  if (tier) return tier.cachePrefix
   if (!v.startsWith('sapiens2')) return ''
   if (v === 'sapiens2-fp16') return '@sapiens2/'
   return `@${v}/`
@@ -556,13 +582,34 @@ async function loadDemoImages(): Promise<PhotoFile[]> {
 }
 
 // ── Media helpers ────────────────────────────────────────────────────────────
-async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
+/**
+ * Sample `n` frames from a video, each resized to `px` on its longest edge.
+ *
+ * One `<video>` element is seeked `n` times and torn down once. Creating an
+ * element per frame would multiply exactly the pressure the teardown and the
+ * `pLimit(4)` wrapper exist to contain: Chrome caps concurrent WebMediaPlayers
+ * at ~75 and starts refusing to decode past that.
+ *
+ * Resolution is a parameter, not a constant. Display thumbnails and VLM frames
+ * are deliberately different sizes — collapsing them would promote every cached
+ * video thumbnail to VLM resolution, over 5x the pixel memory per entry across
+ * an LRU holding up to MAX_THUMBNAILS_CACHE entries, on the low-memory device
+ * this whole feature targets.
+ *
+ * Returns fewer than `n` frames if some seeks fail, and [] if the video cannot
+ * be decoded at all.
+ */
+async function extractVideoFrames(file: File, n: number, px: number): Promise<ImageBitmap[]> {
   return new Promise((resolve) => {
     const video = document.createElement('video')
     video.preload = 'metadata'
     video.muted = true
     video.playsInline = true
     const url = URL.createObjectURL(file)
+    const frames: ImageBitmap[] = []
+    let timestamps: number[] = []
+    let cursor = 0
+    let settled = false
 
     // video.remove() is a no-op when the element was never added to the DOM.
     // The only way to release a WebMediaPlayer in Chrome is: pause → clear src → load().
@@ -580,33 +627,47 @@ async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
       video.load()
     }
 
+    const finish = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(frames)
+    }
+
     video.onloadedmetadata = () => {
-      video.currentTime = Math.min(1.0, video.duration / 2)
+      const duration = Number.isFinite(video.duration) ? video.duration : 0
+      timestamps = frameTimestamps(duration, n)
+      video.currentTime = timestamps[cursor]
     }
 
     video.onseeked = async () => {
       try {
-        const bitmap = await createImageBitmap(video, {
-          resizeWidth: 224,
-          resizeQuality: 'medium'
-        })
-        resolve(bitmap)
+        frames.push(await createImageBitmap(video, { resizeWidth: px, resizeQuality: 'medium' }))
       } catch (e) {
+        // One bad seek should cost one frame, not the whole video.
         console.warn('Failed to extract video frame:', e)
-        resolve(null)
-      } finally {
-        cleanup()
       }
+      cursor++
+      if (cursor >= timestamps.length) {
+        finish()
+        return
+      }
+      video.currentTime = timestamps[cursor]
     }
 
     video.onerror = () => {
       console.debug('Video load error (unsupported format):', file.name)
-      cleanup()
-      resolve(null)
+      finish()
     }
 
     video.src = url
   })
+}
+
+/** Single mid-video frame at thumbnail resolution — the pre-M3 behaviour. */
+async function extractVideoFrame(file: File): Promise<ImageBitmap | null> {
+  const [frame] = await extractVideoFrames(file, 1, THUMB_FRAME_PX)
+  return frame ?? null
 }
 
 // ── Thumbnail preloader ──────────────────────────────────────────────────────
@@ -685,6 +746,18 @@ async function embedText(text: string): Promise<Float32Array> {
     return embedQuery(remoteConfig, text)
   }
 
+  if (!supportsTextSearch(state.settings.modelVariant)) {
+    // Refusing beats answering. state.vectors hold pooled SigLIP features and
+    // the only text encoder here is nomic-embed-text; the cosine between them
+    // is well-defined and meaningless, so a query would return a confidently
+    // ranked list of nothing. See ADR-0001 and M6.
+    throw new Error(
+      `Text search is not available with ${state.settings.modelVariant} — its image vectors ` +
+        'and the text model are in different embedding spaces. Use search-by-example, or ' +
+        'switch to another model.'
+    )
+  }
+
   if (!textExtractor) throw new Error('Text model not loaded')
 
   // Add required task prefix for nomic-embed-text
@@ -740,6 +813,69 @@ const thumbnailLRU = new Set<number>() // indices in LRU order (most recently us
 // Chrome limits concurrent WebMediaPlayers to ~75; cap video frame extraction
 // well below that so the render loop + embedAll can't together exceed the limit.
 const videoFrameLimit = pLimit(4)
+
+// ── Caption storage ──────────────────────────────────────────────────────────
+// Captions live in IndexedDB (db.ts v2). They used to be one synchronous
+// localStorage.setItem per file inside the embed loop; see IMPROVEMENT_PLAN
+// P1-1. Reads fall back to the old localStorage keys once and migrate them
+// through, so captions generated by earlier builds survive the upgrade.
+
+const LEGACY_CAPTION_PREFIX = '@caption/'
+
+function captionKey(f: PhotoFile): CacheKey {
+  return `${f.name}:${f.size}:${f.lastModified}`
+}
+
+function legacyCaptionKey(f: PhotoFile): string {
+  return `${LEGACY_CAPTION_PREFIX}${captionKey(f)}`
+}
+
+/**
+ * Read captions for a batch, migrating any that are still in localStorage.
+ * Positional: entry i corresponds to files[i], null when there is no caption.
+ */
+async function readCaptions(files: PhotoFile[]): Promise<(string | null)[]> {
+  if (files.length === 0) return []
+  let stored: (string | null)[]
+  try {
+    stored = await captionGetBatch(files.map(captionKey))
+  } catch {
+    // A caption is a nice-to-have; never let its store take the embed down.
+    stored = new Array(files.length).fill(null)
+  }
+
+  const migrate: [CacheKey, string][] = []
+  for (let i = 0; i < files.length; i++) {
+    if (stored[i]) continue
+    const legacy = localStorage.getItem(legacyCaptionKey(files[i]))
+    if (legacy) {
+      stored[i] = legacy
+      migrate.push([captionKey(files[i]), legacy])
+    }
+  }
+
+  if (migrate.length > 0) {
+    // Migrate then drop the localStorage copy, so the quota it was occupying
+    // is actually returned rather than doubled.
+    captionPutBatch(migrate)
+      .then(() => {
+        for (const f of files) localStorage.removeItem(legacyCaptionKey(f))
+      })
+      .catch(() => {
+        /* keep the legacy copy if the write failed */
+      })
+  }
+
+  return stored
+}
+
+/** Persist captions. Fire-and-forget: failure costs a re-generation, nothing more. */
+function writeCaptions(entries: [CacheKey, string][]): void {
+  if (entries.length === 0) return
+  captionPutBatch(entries).catch(() => {
+    console.warn('Caption store write failed')
+  })
+}
 
 function resizeCanvas() {
   dom.canvas.width = window.innerWidth || 800
@@ -1176,6 +1312,38 @@ async function loadModelOnce(signal?: AbortSignal) {
     return
   }
 
+  if (isVlmVariant(state.settings.modelVariant)) {
+    const tier = getVlmTier(state.settings.modelVariant)!
+    setStatus(`Loading ${tier.id} (${tier.downloadMB} MB)…`)
+    try {
+      await loadVlm(state.settings.modelVariant, normalizeHost(state.settings.customModelHost), (pct) => {
+        setProgress(pct)
+        setStatus(`Downloading ${tier.id}… ${pct.toFixed(0)}%`)
+      })
+    } catch (err) {
+      signal?.throwIfAborted()
+      throw err
+    }
+    vlmTier = tier
+    updateDeviceBadge()
+    setProgress(100)
+    state.phase = 'model_ready'
+    setProgress(0)
+    dom.loadModelBtn.hidden = true
+    dom.modelSelect.disabled = false
+    dom.openBtn.disabled = false
+    dom.openBtn.classList.add('primary')
+    dom.demoBtn.disabled = false
+    if (!dom.resumeBtn.hidden) {
+      dom.resumeBtn.disabled = false
+      dom.resumeBtn.classList.add('primary')
+      setStatus(`${tier.id} ready — resume or open a folder.`)
+    } else {
+      setStatus(`${tier.id} ready — open a folder to start.`)
+    }
+    return
+  }
+
   if (state.settings.modelVariant === 'chrome-ai') {
     setStatus('Checking Chrome AI availability…')
     const availability = await getChromeAIAvailability()
@@ -1490,7 +1658,7 @@ function applyFallbackChoice(choice: FallbackChoice) {
 
 // Load the model, retrying through the fallback modal on download failures.
 async function loadModel(signal?: AbortSignal) {
-  if (extractor || sapiens2Session || chromeAIManager || remoteConfig) return
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) return
   // Clear any custom upload cache from a previous run — env is a global
   // singleton, so a stale cache would otherwise keep serving old files when the
   // user switches models or starts a new session. A fresh upload re-sets it
@@ -1612,27 +1780,26 @@ async function embedAll(files: PhotoFile[]) {
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2')
   const isChromeAI = state.settings.modelVariant === 'chrome-ai'
   const isRemote = state.settings.modelVariant === 'openai'
+  const isVlm = isVlmVariant(state.settings.modelVariant)
   const reportedRemoteErrors = new Set<string>()
   // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel
   // session speedup. The transformers path adapts: the working batch size
   // halves after a GPU failure and creeps back up after sustained successes.
   const batcher = createAdaptiveBatcher(state.settings.batchSize)
-  // Separate cache namespace per variant so vectors don't collide across models.
-  // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
-  const cachePrefix = isRemote
-    ? currentCachePrefix()
-    : isChromeAI
-      ? '@chrome-ai/'
-      : !isSapiens2
-        ? ''
-        : state.settings.modelVariant === 'sapiens2-fp16'
-          ? '@sapiens2/'
-          : `@${state.settings.modelVariant}/`
+  // Separate cache namespace per variant so vectors don't collide across models
+  // (AGENT.md, "Embedding space"). This used to be a second copy of the same
+  // ternary chain that currentCachePrefix() already implements; the two are now
+  // one function, so the settings panel's cache count and the keys actually
+  // written cannot disagree.
+  const cachePrefix = currentCachePrefix()
 
   for (let i = 0; i < files.length; ) {
     // Remote batches are bounded by request size, not GPU memory, so the
     // adaptive batcher does not apply.
-    const batchSize = isRemote ? 8 : isChromeAI ? 2 : isSapiens2 ? 1 : batcher.size
+    // The VLM worker runs images one at a time internally (no VRAM headroom on
+    // the target device), so a larger batch here would only delay progress
+    // reporting without winning any throughput.
+    const batchSize = isRemote ? 8 : isChromeAI ? 2 : isSapiens2 || isVlm ? 1 : batcher.size
     const batch = files.slice(i, Math.min(i + batchSize, files.length))
 
     // One IDB transaction for the whole batch, with legacy-key fallback so
@@ -1651,7 +1818,9 @@ async function embedAll(files: PhotoFile[]) {
 
     // Resolve inputs for cache misses
     const missIndices: number[] = []
-    const missInputs: (File | RawImage | ImageBitmap | string)[] = []
+    // ImageBitmap[] entries are VLM frame groups: several frames for a video,
+    // one for a still, pooled to a single vector by the worker.
+    const missInputs: (File | RawImage | ImageBitmap | ImageBitmap[] | string)[] = []
 
     await Promise.all(
       batch.map(async (f, bi) => {
@@ -1676,6 +1845,22 @@ async function embedAll(files: PhotoFile[]) {
               missInputs.push(await imageToDataURL(thumb, state.settings.openai.maxImageWidth))
             } else if (isSapiens2) {
               missInputs.push(thumb)
+            } else if (isVlm) {
+              // Sample the video properly rather than upscaling the 224 px
+              // thumbnail: decode framesPerVideo frames at VLM resolution so a
+              // clip is represented by its content over time, not by whichever
+              // single frame the thumbnail happened to catch.
+              const tier = getVlmTier(state.settings.modelVariant)!
+              const frames = await videoFrameLimit(() =>
+                extractVideoFrames(f.file, tier.framesPerVideo, VLM_FRAME_PX)
+              )
+              if (frames.length > 0) {
+                missInputs.push(frames)
+              } else {
+                // Decoded for the thumbnail but not for us; fall back to a
+                // clone of it rather than dropping the file entirely.
+                missInputs.push([await createImageBitmap(thumb, { resizeWidth: VLM_FRAME_PX })])
+              }
             } else if (isChromeAI) {
               // Clone so Chrome AI doesn't close the bitmap that's cached in state.thumbnails
               missInputs.push(await createImageBitmap(thumb))
@@ -1713,6 +1898,16 @@ async function embedAll(files: PhotoFile[]) {
         } else if (isSapiens2) {
           // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
           missInputs.push(f.file)
+        } else if (isVlm) {
+          try {
+            // A group of one: a still image is a one-frame clip.
+            missInputs.push([await createImageBitmap(f.file, { resizeWidth: VLM_FRAME_PX })])
+          } catch {
+            // Undecodable image. A zero vector keeps this session going but is
+            // never cached (see failedInputs below), so a later build can retry.
+            vectors[idx] = zeroVector()
+            return
+          }
         } else if (isChromeAI) {
           // Use cached thumbnail if already decoded, else create a small bitmap.
           // Always create a fresh bitmap for the inference queue — never share the
@@ -1747,16 +1942,20 @@ async function embedAll(files: PhotoFile[]) {
     )
 
     // Apply cache hits
+    const hitIndices: number[] = []
     for (let bi = 0; bi < batch.length; bi++) {
       if (cached[bi]) {
         vectors[i + bi] = cached[bi]!
         cacheHits++
-        if (isChromeAI) {
-          const f = batch[bi]
-          state.captions[i + bi] = localStorage.getItem(
-            `@caption/${f.name}:${f.size}:${f.lastModified}`
-          )
-        }
+        if (isChromeAI) hitIndices.push(bi)
+      }
+    }
+    if (hitIndices.length > 0) {
+      // One batched read for the whole batch instead of a synchronous
+      // localStorage hit per file.
+      const restored = await readCaptions(hitIndices.map((bi) => batch[bi]))
+      for (let h = 0; h < hitIndices.length; h++) {
+        state.captions[i + hitIndices[h]] = restored[h]
       }
     }
 
@@ -1765,12 +1964,15 @@ async function embedAll(files: PhotoFile[]) {
       // Inputs that failed even alone get a zero vector in RAM for this
       // session but must NOT be written to the cache — a cached zero would
       // permanently poison that file's embedding.
-      const failedInputs = new Set<File | RawImage | ImageBitmap | string>()
+      const failedInputs = new Set<File | RawImage | ImageBitmap | ImageBitmap[] | string>()
       try {
         let extracted: Float32Array[]
         if (isRemote) {
           if (!remoteConfig) throw new Error('Remote endpoint not connected')
           extracted = await embedImages(remoteConfig, missInputs as string[])
+        } else if (isVlm) {
+          if (!vlmTier) throw new Error('SmolVLM2 tier not loaded')
+          extracted = await embedWithVlm(missInputs as ImageBitmap[][])
         } else if (isSapiens2) {
           if (!sapiens2Session) throw new Error('Sapiens2 session not loaded')
           extracted = await embedWithSapiens2(sapiens2Session, missInputs as (File | ImageBitmap)[])
@@ -1785,15 +1987,12 @@ async function embedAll(files: PhotoFile[]) {
               chromeAIManager!.describe(input as ImageBitmap | Blob, prompt, undefined, m)
             )
           )
+          const captionWrites: [CacheKey, string][] = []
           for (let m = 0; m < descs.length; m++) {
             const description = descs[m]
             const f = batch[missIndices[m]]
             state.captions[i + missIndices[m]] = description
-            try {
-              localStorage.setItem(`@caption/${f.name}:${f.size}:${f.lastModified}`, description)
-            } catch (_) {
-              console.warn('Caption cache full')
-            }
+            captionWrites.push([captionKey(f), description])
             // search_document: prefix for nomic-embed-text indexing (vs search_query: for querying)
             const output = await textExtractor(`search_document: ${description}`, {
               pooling: 'mean',
@@ -1801,6 +2000,8 @@ async function embedAll(files: PhotoFile[]) {
             })
             extracted.push(extractVector(output))
           }
+          // One transaction for the batch, off the critical path.
+          writeCaptions(captionWrites)
         } else {
           if (!extractor) throw new Error('Extractor not loaded')
           const ex = extractor
@@ -2704,13 +2905,30 @@ const openFileModal = (index: number) => {
     captionDebounceTimer = null
   }
 
-  // Warm from localStorage so captions survive page reload in all modes
-  if (!state.captions[index]) {
-    const stored = localStorage.getItem(`@caption/${f.name}:${f.size}:${f.lastModified}`)
-    if (stored) state.captions[index] = stored
-  }
+  // Resolving a stored caption is now async (IndexedDB), so the whole
+  // show-or-generate decision moves into the continuation. Deciding before the
+  // read returned would race: the 400 ms debounce below would usually win, and
+  // we would regenerate a caption that was already on disk.
+  const resolveCaption = state.captions[index]
+    ? Promise.resolve(state.captions[index] ?? null)
+    : readCaptions([f]).then(([stored]) => {
+        if (stored) state.captions[index] = stored
+        return stored
+      })
 
-  const caption = state.captions[index] ?? null
+  void resolveCaption.then((caption) => {
+    // The user may have moved on while the store was read.
+    if (state.activeFileIndex !== index) return
+    showCaptionOrGenerate(index, f, caption)
+  })
+
+  dom.modal.showModal()
+  state.activeFileIndex = index
+  return finishOpenFileModal(index)
+}
+
+/** Render a known caption, or kick off lazy generation when enabled. */
+function showCaptionOrGenerate(index: number, f: PhotoFile, caption: string | null): void {
   if (caption) {
     dom.modalCaption.textContent = caption
     dom.modalCaption.style.display = 'block'
@@ -2751,14 +2969,7 @@ const openFileModal = (index: number) => {
         img.close()
         if (ac.signal.aborted) return
         state.captions[captureIndex] = desc
-        try {
-          localStorage.setItem(
-            `@caption/${captureFile.name}:${captureFile.size}:${captureFile.lastModified}`,
-            desc
-          )
-        } catch (_) {
-          console.warn('Caption cache full')
-        }
+        writeCaptions([[captionKey(captureFile), desc]])
         if (state.activeFileIndex === captureIndex) {
           dom.modalCaption.textContent = desc
         }
@@ -2773,9 +2984,10 @@ const openFileModal = (index: number) => {
     dom.modalCaption.style.display = 'none'
     dom.modalFooter.style.borderRadius = ''
   }
+}
 
-  dom.modal.showModal()
-  state.activeFileIndex = index
+/** Everything openFileModal did after the caption block. */
+function finishOpenFileModal(index: number): void {
   state.lastViewedIndex = index
 
   // Center camera on the active image
@@ -2902,6 +3114,19 @@ dom.densitySlider.value = state.settings.density.toString()
 dom.drawBudgetSlider.value = state.settings.drawBudget.toString()
 dom.loopToggle.checked = state.settings.loopVideos
 dom.enableSearchToggle.checked = state.settings.enableTextSearch
+
+// Text search needs a text encoder sharing the image vectors' space. VLM tiers
+// have none yet, so the toggle is disabled with a reason rather than left on
+// to produce meaningless rankings.
+function updateTextSearchAvailability() {
+  const ok = supportsTextSearch(state.settings.modelVariant)
+  dom.enableSearchToggle.disabled = !ok
+  dom.enableSearchToggle.title = ok
+    ? ''
+    : `${state.settings.modelVariant} produces image-only vectors; text queries have nothing compatible to match against.`
+  if (!ok) dom.enableSearchToggle.checked = false
+}
+updateTextSearchAvailability()
 if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod
 dom.batchSizeInput.value = state.settings.batchSize.toString()
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString()
@@ -2909,6 +3134,23 @@ dom.viewerOnlyToggle.checked = state.settings.viewerOnly
 dom.lazyCaptionToggle.checked = state.settings.enableLazyCaption
 dom.doNotTrackToggle.checked = state.settings.doNotTrack
 dom.customModelHostInput.value = state.settings.customModelHost
+// Build the SmolVLM2 options from the tier table rather than hand-writing them
+// in index.html, so a new tier row shows up in the UI automatically and the
+// advertised download sizes cannot drift from the ones actually fetched.
+{
+  const group = document.getElementById('vlm-tier-group')
+  if (group) {
+    for (const tier of selectableVlmTiers()) {
+      const opt = document.createElement('option')
+      opt.value = tier.id
+      const what = tier.visionOnly ? 'embeddings only' : 'captions + embeddings'
+      opt.textContent = `${tier.id} (${what} · ${tier.downloadMB} MB)`
+      opt.title = 'Video-native, runs in a Web Worker. No text search yet.'
+      group.appendChild(opt)
+    }
+  }
+}
+
 dom.modelSelect.value = state.settings.modelVariant
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
@@ -3156,7 +3398,10 @@ dom.enableSearchToggle.addEventListener('change', async () => {
  * rankings with nothing to trip on, so a reload is the safe response.
  */
 function reloadIfModelLoaded() {
-  if (extractor || sapiens2Session || chromeAIManager || remoteConfig) {
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) {
+    // The VLM worker holds a loaded model and a GPU device; drop it before the
+    // reload so the old worker cannot outlive the page that owns it.
+    disposeVlm()
     window.location.reload()
   }
 }
@@ -3165,6 +3410,7 @@ dom.modelSelect.addEventListener('change', () => {
   state.settings.modelVariant = dom.modelSelect.value as ModelVariant
   saveSettings()
   updateChromeAIPromptVisibility()
+  updateTextSearchAvailability()
   reloadIfModelLoaded()
 })
 
@@ -3359,7 +3605,7 @@ if (_savedKeys) {
 }
 
 dom.loadModelBtn.addEventListener('click', async () => {
-  if (extractor || sapiens2Session || chromeAIManager || remoteConfig) return
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) return
   dom.loadModelBtn.disabled = true
   await loadModel()
 })

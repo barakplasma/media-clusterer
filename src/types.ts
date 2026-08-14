@@ -45,6 +45,45 @@ export type ModelVariant =
   | 'sapiens2-fp32'
   | 'chrome-ai'
   | 'openai'
+  | 'smolvlm2-vision'
+  | 'smolvlm2-256m'
+  | 'smolvlm2-500m'
+
+/** ONNX weight quantisation, as named by Transformers.js `dtype`. */
+export type VlmDtype = 'q4f16' | 'q4' | 'int8' | 'fp16' | 'fp32'
+
+/**
+ * One row of the SmolVLM2 tier table (`src/vlmTiers.ts`). See ADR-0001: the
+ * tier is data, so adding a future sub-1B video model is a new row rather than
+ * a new branch.
+ */
+export interface VlmTier {
+  id: ModelVariant
+  repo: string // HuggingFace repo, e.g. 'HuggingFaceTB/SmolVLM2-256M-Video-Instruct'
+  dtype: VlmDtype
+  visionOnly: boolean // tier A: never download embed_tokens/decoder
+  visionDim: number // width of the pooled vision vector
+  framesPerVideo: number // frames sampled per video (1 = today's behaviour)
+  cachePrefix: string // IndexedDB namespace, e.g. '@smolvlm2-vision/'
+  downloadMB: number // approximate, for the settings UI
+  selectable: boolean // false while the code cannot deliver what the label claims
+}
+
+/** Request sent from the main thread to the VLM worker. */
+export type VlmRequest =
+  | { type: 'load'; id: number; tier: VlmTier; remoteHost: string }
+  | { type: 'embed'; id: number; groups: ImageBitmap[][] }
+  | { type: 'dispose'; id: number }
+
+/** Response sent from the VLM worker back to the main thread. */
+export type VlmResponse =
+  | { type: 'progress'; id: number; loaded: number; total: number; file: string }
+  | { type: 'loaded'; id: number; device: VlmDevice; visionDim: number }
+  | { type: 'embedded'; id: number; vectors: Float32Array[] }
+  | { type: 'error'; id: number; message: string; name: string }
+
+/** Backend the worker actually got, after the webgpu→wasm fallback. */
+export type VlmDevice = 'webgpu' | 'wasm'
 
 /**
  * Remote OpenAI-compatible endpoint settings.
