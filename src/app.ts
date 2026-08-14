@@ -8,6 +8,8 @@ import { pipeline, env, RawImage } from '@huggingface/transformers'
 import * as druid from '@saehrimnir/druidjs'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
+import { loadVlm, embedWithVlm, disposeVlm, vlmDevice } from './vlm'
+import { getVlmTier, isVlmVariant, allVlmTiers, VLM_FRAME_PX } from './vlmTiers'
 import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2'
 import {
   modelDownloadUrls,
@@ -69,7 +71,8 @@ import type {
   PointerState,
   CanvasPointerPos,
   CacheKey,
-  ModelVariant
+  ModelVariant,
+  VlmTier
 } from './types'
 
 // Enable caching and local model access for persistent storage
@@ -295,6 +298,7 @@ let pendingSapiens2Buffer: ArrayBuffer | null = null
 let sapiens2Session: Sapiens2Session | null = null // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null // Chrome built-in AI session manager
 let remoteConfig: OpenAICompatConfig | null = null // Remote OpenAI-compatible endpoint
+let vlmTier: VlmTier | null = null // Loaded SmolVLM2 tier (worker-backed), see ADR-0001
 
 // Width of the vectors the active backend produces. All the local backends are
 // 768-d; a remote endpoint can be anything, so it is probed at load. Used for
@@ -356,6 +360,10 @@ function updateDeviceBadge() {
   if (state.settings.viewerOnly) {
     deviceBadgeEl.textContent = 'Viewer'
     deviceBadgeEl.style.color = '#4ade80'
+  } else if (vlmTier) {
+    const dev = vlmDevice() === 'webgpu' ? 'WebGPU' : 'WASM'
+    deviceBadgeEl.textContent = `${vlmTier.id} · ${dev} · worker`
+    deviceBadgeEl.style.color = vlmDevice() === 'webgpu' ? '#4ade80' : '#fbbf24'
   } else if (sapiens2Session) {
     const threads = navigator.hardwareConcurrency || 1
     const mt = typeof SharedArrayBuffer !== 'undefined'
@@ -1176,6 +1184,38 @@ async function loadModelOnce(signal?: AbortSignal) {
     return
   }
 
+  if (isVlmVariant(state.settings.modelVariant)) {
+    const tier = getVlmTier(state.settings.modelVariant)!
+    setStatus(`Loading ${tier.id} (${tier.downloadMB} MB)…`)
+    try {
+      await loadVlm(state.settings.modelVariant, (pct) => {
+        setProgress(pct)
+        setStatus(`Downloading ${tier.id}… ${pct.toFixed(0)}%`)
+      })
+    } catch (err) {
+      signal?.throwIfAborted()
+      throw err
+    }
+    vlmTier = tier
+    updateDeviceBadge()
+    setProgress(100)
+    state.phase = 'model_ready'
+    setProgress(0)
+    dom.loadModelBtn.hidden = true
+    dom.modelSelect.disabled = false
+    dom.openBtn.disabled = false
+    dom.openBtn.classList.add('primary')
+    dom.demoBtn.disabled = false
+    if (!dom.resumeBtn.hidden) {
+      dom.resumeBtn.disabled = false
+      dom.resumeBtn.classList.add('primary')
+      setStatus(`${tier.id} ready — resume or open a folder.`)
+    } else {
+      setStatus(`${tier.id} ready — open a folder to start.`)
+    }
+    return
+  }
+
   if (state.settings.modelVariant === 'chrome-ai') {
     setStatus('Checking Chrome AI availability…')
     const availability = await getChromeAIAvailability()
@@ -1490,7 +1530,7 @@ function applyFallbackChoice(choice: FallbackChoice) {
 
 // Load the model, retrying through the fallback modal on download failures.
 async function loadModel(signal?: AbortSignal) {
-  if (extractor || sapiens2Session || chromeAIManager || remoteConfig) return
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) return
   // Clear any custom upload cache from a previous run — env is a global
   // singleton, so a stale cache would otherwise keep serving old files when the
   // user switches models or starts a new session. A fresh upload re-sets it
@@ -1612,6 +1652,7 @@ async function embedAll(files: PhotoFile[]) {
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2')
   const isChromeAI = state.settings.modelVariant === 'chrome-ai'
   const isRemote = state.settings.modelVariant === 'openai'
+  const isVlm = isVlmVariant(state.settings.modelVariant)
   const reportedRemoteErrors = new Set<string>()
   // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel
   // session speedup. The transformers path adapts: the working batch size
@@ -1621,18 +1662,23 @@ async function embedAll(files: PhotoFile[]) {
   // fp16 keeps the legacy '@sapiens2/' prefix to reuse already-cached embeddings.
   const cachePrefix = isRemote
     ? currentCachePrefix()
-    : isChromeAI
-      ? '@chrome-ai/'
-      : !isSapiens2
-        ? ''
-        : state.settings.modelVariant === 'sapiens2-fp16'
-          ? '@sapiens2/'
-          : `@${state.settings.modelVariant}/`
+    : isVlm
+      ? getVlmTier(state.settings.modelVariant)!.cachePrefix
+      : isChromeAI
+        ? '@chrome-ai/'
+        : !isSapiens2
+          ? ''
+          : state.settings.modelVariant === 'sapiens2-fp16'
+            ? '@sapiens2/'
+            : `@${state.settings.modelVariant}/`
 
   for (let i = 0; i < files.length; ) {
     // Remote batches are bounded by request size, not GPU memory, so the
     // adaptive batcher does not apply.
-    const batchSize = isRemote ? 8 : isChromeAI ? 2 : isSapiens2 ? 1 : batcher.size
+    // The VLM worker runs images one at a time internally (no VRAM headroom on
+    // the target device), so a larger batch here would only delay progress
+    // reporting without winning any throughput.
+    const batchSize = isRemote ? 8 : isChromeAI ? 2 : isSapiens2 || isVlm ? 1 : batcher.size
     const batch = files.slice(i, Math.min(i + batchSize, files.length))
 
     // One IDB transaction for the whole batch, with legacy-key fallback so
@@ -1676,6 +1722,11 @@ async function embedAll(files: PhotoFile[]) {
               missInputs.push(await imageToDataURL(thumb, state.settings.openai.maxImageWidth))
             } else if (isSapiens2) {
               missInputs.push(thumb)
+            } else if (isVlm) {
+              // Clone: the bitmap is transferred to the worker, which closes
+              // it. Sharing the state.thumbnails reference would neuter the
+              // cached thumbnail and blank the tile on screen.
+              missInputs.push(await createImageBitmap(thumb, { resizeWidth: VLM_FRAME_PX }))
             } else if (isChromeAI) {
               // Clone so Chrome AI doesn't close the bitmap that's cached in state.thumbnails
               missInputs.push(await createImageBitmap(thumb))
@@ -1713,6 +1764,15 @@ async function embedAll(files: PhotoFile[]) {
         } else if (isSapiens2) {
           // Pass File directly; sapiens2 embedder resizes to 1024×768 internally
           missInputs.push(f.file)
+        } else if (isVlm) {
+          try {
+            missInputs.push(await createImageBitmap(f.file, { resizeWidth: VLM_FRAME_PX }))
+          } catch {
+            // Undecodable image. A zero vector keeps this session going but is
+            // never cached (see failedInputs below), so a later build can retry.
+            vectors[idx] = zeroVector()
+            return
+          }
         } else if (isChromeAI) {
           // Use cached thumbnail if already decoded, else create a small bitmap.
           // Always create a fresh bitmap for the inference queue — never share the
@@ -1771,6 +1831,9 @@ async function embedAll(files: PhotoFile[]) {
         if (isRemote) {
           if (!remoteConfig) throw new Error('Remote endpoint not connected')
           extracted = await embedImages(remoteConfig, missInputs as string[])
+        } else if (isVlm) {
+          if (!vlmTier) throw new Error('SmolVLM2 tier not loaded')
+          extracted = await embedWithVlm(missInputs as ImageBitmap[])
         } else if (isSapiens2) {
           if (!sapiens2Session) throw new Error('Sapiens2 session not loaded')
           extracted = await embedWithSapiens2(sapiens2Session, missInputs as (File | ImageBitmap)[])
@@ -2909,6 +2972,22 @@ dom.viewerOnlyToggle.checked = state.settings.viewerOnly
 dom.lazyCaptionToggle.checked = state.settings.enableLazyCaption
 dom.doNotTrackToggle.checked = state.settings.doNotTrack
 dom.customModelHostInput.value = state.settings.customModelHost
+// Build the SmolVLM2 options from the tier table rather than hand-writing them
+// in index.html, so a new tier row shows up in the UI automatically and the
+// advertised download sizes cannot drift from the ones actually fetched.
+{
+  const group = document.getElementById('vlm-tier-group')
+  if (group) {
+    for (const tier of allVlmTiers()) {
+      const opt = document.createElement('option')
+      opt.value = tier.id
+      const what = tier.visionOnly ? 'embeddings only' : 'captions + embeddings'
+      opt.textContent = `${tier.id} (${what} · ${tier.downloadMB} MB)`
+      group.appendChild(opt)
+    }
+  }
+}
+
 dom.modelSelect.value = state.settings.modelVariant
 
 // Disable the Chrome AI option on unsupported browsers/platforms at startup
@@ -3156,7 +3235,10 @@ dom.enableSearchToggle.addEventListener('change', async () => {
  * rankings with nothing to trip on, so a reload is the safe response.
  */
 function reloadIfModelLoaded() {
-  if (extractor || sapiens2Session || chromeAIManager || remoteConfig) {
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) {
+    // The VLM worker holds a loaded model and a GPU device; drop it before the
+    // reload so the old worker cannot outlive the page that owns it.
+    disposeVlm()
     window.location.reload()
   }
 }
@@ -3359,7 +3441,7 @@ if (_savedKeys) {
 }
 
 dom.loadModelBtn.addEventListener('click', async () => {
-  if (extractor || sapiens2Session || chromeAIManager || remoteConfig) return
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) return
   dom.loadModelBtn.disabled = true
   await loadModel()
 })
