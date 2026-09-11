@@ -210,11 +210,28 @@ Two findings for `pickVlmTier()` when M6 writes it, both of which cost Aura a de
   absent, which is the right instinct for a batch size and the wrong one for a tier choice —
   Firefox and Safari don't implement the property at all, and treating "absent" as "tiny" would
   hand every non-Chrome browser the smallest tier regardless of hardware.
-- **The real constraint is the GPU buffer limit, not RAM.** ORT allocates each ONNX initializer
-  into a GPU buffer, so a model whose largest weight file exceeds the adapter's
-  `maxStorageBufferBindingSize` fails at session creation — and Android adapters report far
-  smaller limits than desktop ones. `requestAdapter().limits` is already probed for other reasons
-  in `src/sapiens2.ts:270-321`.
+- **The real constraint is the GPU buffer limit, not RAM** — and this repo already knows it.
+  `src/sapiens2.ts:270-306` pre-creates a `GPUDevice` with the adapter's own
+  `maxStorageBufferBindingSize`, precisely because ORT's default device uses the WebGPU spec
+  minimum of 128 MB and the fp16 model is ~228 MB. It even has a `'vram-limit'` fallback reason
+  for when the adapter itself can't take the model. That probe is the right input for
+  `pickVlmTier()` too: it is what actually decides whether a tier can run, and Android adapters
+  report far smaller limits than desktop ones.
+
+  **`src/vlmWorker.ts` does not do any of this.** It calls
+  `AutoModel.from_pretrained(..., device: 'webgpu')` and lets transformers.js create the session,
+  and transformers.js does not raise the limits either — it calls `requestAdapter()` only to
+  probe fp16 support (its `src/utils/dtypes.js`) and otherwise sets nothing but
+  `powerPreference`. So the VLM path runs against the 128 MB spec minimum while the sapiens2
+  path runs against the real hardware limit. Tier A survives on 55 MB of vision encoder by luck;
+  L2's 481 MB decoder would not, and the symptom is a silent drop to WASM that reads as "no
+  WebGPU on this device" rather than as a ceiling that could have been raised. Setting
+  `env.backends.onnx.webgpu.device` from the worker is the same fix `sapiens2.ts` already
+  applies — note that *reading* that property before the first session is itself
+  device-creating, so guard with a local flag rather than a read.
+
+  Aura had the identical gap and has now taken the fix from `sapiens2.ts`; this is the clearest
+  case in this document of the two codebases each holding half of something.
 
 ## L9 · Drop the stored API key when the endpoint's origin changes
 
@@ -226,7 +243,7 @@ that host.
 
 Aura's rule is that changing the base URL to a different origin clears the stored key, with
 `sameOrigin()` (`lib/monitor.js`) returning `false` for unparseable input so a half-typed URL can
-never read as a match and skip the clear. `normalizeBaseUrl()` (`src/openaiCompat.ts:90-120`)
+never read as a match and skip the clear. `normalizeBaseUrl()` (`src/openaiCompat.ts:92`)
 already does the parsing; this is a comparison on top of it.
 
 ---
@@ -249,7 +266,8 @@ a line. L7 and L9 are their own tracks.
 
 ## What went the other way
 
-For the record, three things this repo does that Aura does not and should: the offline/corporate-proxy
+For the record, four things this repo does that Aura does not and should: the offline/corporate-proxy
 fallback (`src/modelFallback.ts` — upload the weights from disk, or point at a mirror), `isDownloadError()`'s
-careful refusal to treat a bare `TypeError` as a network failure, and the ADR discipline in `docs/adr/`.
-Aura has a `docs/PRD-*.md` convention that records what was built but not what was rejected.
+careful refusal to treat a bare `TypeError` as a network failure, `src/sapiens2.ts`'s WebGPU device
+pre-creation (see L8 — Aura has now ported it), and the ADR discipline in `docs/adr/`. Aura has a
+`docs/PRD-*.md` convention that records what was built but not what was rejected.
