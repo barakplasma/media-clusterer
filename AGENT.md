@@ -18,6 +18,10 @@
 - **Architecture decisions** live in `docs/adr/` — see `docs/adr/README.md` for the convention.
   Write an ADR when a change is hard to reverse or constrains later work.
 - **Feature plans** live in root-level `*_PLAN.md` files.
+- `AURA_LESSONS.md` holds cross-repository findings from the sibling
+  [Aura](https://github.com/barakplasma/Aura) project, which runs the same
+  Transformers.js/WebGPU stack against a live camera. Two of its items propose changes to
+  decisions already recorded in `docs/adr/`.
 
 ## Core Workflows
 
