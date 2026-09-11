@@ -64,12 +64,12 @@ decoder; q8 is explicitly not WebGPU-compatible). Transformers.js 4.2.0 — the 
 
 What matters for the decision recorded in ADR-0001:
 
-| | SmolVLM2-256M | LFM2.5-VL-450M |
-| --- | --- | --- |
-| `vision_config.hidden_size` | 768 | **768** (SigLIP2) |
-| Vision encoder alone | 55 MB (q4f16) | 57 MB (q4) / 180 MB (fp16) |
-| Decoder | 134 MB → paraphrases prompts | LFM2-350M → follows them |
-| Export maintained by | community | the model's authors |
+|                             | SmolVLM2-256M                | LFM2.5-VL-450M             |
+|-----------------------------|------------------------------|----------------------------|
+| `vision_config.hidden_size` | 768                          | **768** (SigLIP2)          |
+| Vision encoder alone        | 55 MB (q4f16)                | 57 MB (q4) / 180 MB (fp16) |
+| Decoder                     | 134 MB → paraphrases prompts | LFM2-350M → follows them   |
+| Export maintained by        | community                    | the model's authors        |
 
 The 768 is the load-bearing number: ADR-0001's whole "pooled features are a drop-in" argument
 survives the swap, and `assertVisionDim()` (`src/vlmTiers.ts`) already exists to catch it if the
@@ -238,14 +238,14 @@ and L1 is what happens if M4 ships before that is faced. L4 should land before e
 is what makes the swap arguable rather than assertable. L3 and L5 are independent and small. L6 is
 a line. L7 and L9 are their own tracks.
 
-| Step | Item | Why here |
-| --- | --- | --- |
-| 1 | L4 — measurement surface | Nothing about a model swap is decidable without it |
-| 2 | L3 — Hub-tree progress sizing | Prerequisite for L2: external-data models break the current bar |
-| 3 | L2 + L1 — LFM2.5-VL tier, echo guard | Supersedes ADR-0001's model choice; write a new ADR, don't edit it |
-| 4 | L5 — abort + test seam | Independent; grows more valuable as generation gets slower |
-| 5 | L8 — tier picker | Needs more than one credible tier to choose between, i.e. needs L2 |
-| 6 | L6, L7, L9 | Independent of the above and of each other |
+| Step | Item                                 | Why here                                                           |
+|------|--------------------------------------|--------------------------------------------------------------------|
+| 1    | L4 — measurement surface             | Nothing about a model swap is decidable without it                 |
+| 2    | L3 — Hub-tree progress sizing        | Prerequisite for L2: external-data models break the current bar    |
+| 3    | L2 + L1 — LFM2.5-VL tier, echo guard | Supersedes ADR-0001's model choice; write a new ADR, don't edit it |
+| 4    | L5 — abort + test seam               | Independent; grows more valuable as generation gets slower         |
+| 5    | L8 — tier picker                     | Needs more than one credible tier to choose between, i.e. needs L2 |
+| 6    | L6, L7, L9                           | Independent of the above and of each other                         |
 
 ## What went the other way
 
