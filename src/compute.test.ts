@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { searchByCosine, cullAndPrioritize, formatEta } from './compute'
+import { searchByCosine, cullAndPrioritize, formatEta, spreadPointsAsync } from './compute'
 import type { Point } from './types'
+import { THUMB_WORLD } from './compute'
 
 describe('formatEta', () => {
   it('formats seconds, minutes, and hours', () => {
@@ -123,5 +124,27 @@ describe('searchByCosine', () => {
     const { scores } = searchByCosine(Float32Array.from([1, 0, 0, 0]), mixed)
     expect(scores[0]).toBeCloseTo(1, 5)
     expect(Array.from(scores).some(Number.isNaN)).toBe(false)
+  })
+})
+
+describe('spreadPointsAsync', () => {
+  const noYield = async () => {}
+
+  it('separates identical points instead of leaving them stacked', async () => {
+    const pts = await spreadPointsAsync(Array.from({ length: 20 }, () => [0.5, 0.5]), 1, noYield)
+    for (let i = 0; i < pts.length; i++)
+      for (let j = i + 1; j < pts.length; j++) {
+        expect(Math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1])).toBeGreaterThan(1)
+      }
+  })
+
+  it('keeps the bulk spread out when one outlier is far away', async () => {
+    const raw = Array.from({ length: 100 }, (_, i) => [i % 10, Math.floor(i / 10)])
+    raw.push([10000, 10000])
+    const pts = await spreadPointsAsync(raw, 1, noYield)
+    const xs = pts.slice(0, 100).map((p) => p[0])
+    // Min/max scaling collapsed the grid and relaxation only packed it into a
+    // ~10-thumbnail-wide blob; a normal layout spans well over that.
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(THUMB_WORLD * 15)
   })
 })

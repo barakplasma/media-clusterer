@@ -650,6 +650,7 @@
   <div class="tb-brand">
     <span class="brand-title">MediaClusterer</span>
     <button id="about-btn" class="icon-btn" title="About &amp; Instructions">ⓘ</button>
+    <button id="shortcuts-btn" class="icon-btn" title="Keyboard shortcuts (?)">⌨️</button>
     <button id="settings-btn" class="icon-btn" title="Settings">⚙️</button>
   </div>
   <div class="tb-actions">
@@ -761,6 +762,7 @@
         <li><strong>Pan:</strong> Click &amp; drag · <strong>Zoom:</strong> Scroll/pinch</li>
         <li><strong>Search:</strong> Type a description (requires text model)</li>
         <li><strong>Resume:</strong> Reload your last session</li>
+        <li><strong>Keyboard:</strong> Press <kbd>?</kbd> for all shortcuts</li>
       </ul>
     </div>
 
@@ -781,6 +783,27 @@
         · Built with ❤️ for Privacy
       </small>
     </footer>
+  </article>
+</dialog>
+
+<!-- ── Keyboard shortcuts dialog (PicoCSS article) ──────────────────────── -->
+<dialog id="shortcuts-modal">
+  <article class="pico">
+    <header>
+      <button id="shortcuts-close" rel="prev" aria-label="Close"></button>
+      <p><strong>⌨️ Keyboard Shortcuts</strong></p>
+    </header>
+    <table>
+      <tbody>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></td><td>Nearest photo in that direction on the map</td></tr>
+        <tr><td><kbd>N</kbd> / <kbd>P</kbd></td><td>Next / previous photo by date</td></tr>
+        <tr><td><kbd>R</kbd></td><td>Random photo</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Close the viewer or this dialog</td></tr>
+        <tr><td><kbd>?</kbd></td><td>Show this guide</td></tr>
+        <tr><td><kbd>`</kbd></td><td>Toggle the debug overlay</td></tr>
+        <tr><td>Drag · Scroll / pinch · Click</td><td>Pan · Zoom · Open a photo</td></tr>
+      </tbody>
+    </table>
   </article>
 </dialog>
 

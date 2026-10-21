@@ -170,6 +170,9 @@ export interface DOMElements {
   fileInput: HTMLInputElement
   aboutBtn: HTMLButtonElement
   aboutModal: HTMLDialogElement
+  shortcutsBtn: HTMLButtonElement
+  shortcutsModal: HTMLDialogElement
+  shortcutsClose: HTMLButtonElement
   aboutClose: HTMLButtonElement
   statsEl: HTMLDivElement
   settingsBtn: HTMLButtonElement

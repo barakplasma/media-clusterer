@@ -99,20 +99,17 @@ export async function spreadPointsAsync(
   const n = projectedPoints.length
   if (n === 0) return []
 
-  // Normalize to zero-centered unit space
-  let minX = Infinity,
-    maxX = -Infinity,
-    minY = Infinity,
-    maxY = -Infinity
-  for (const [x, y] of projectedPoints) {
-    if (x < minX) minX = x
-    if (x > maxX) maxX = x
-    if (y < minY) minY = y
-    if (y > maxY) maxY = y
-  }
-  const cx = (minX + maxX) / 2,
-    cy = (minY + maxY) / 2
-  const r = Math.max(maxX - cx, maxY - cy) || 1
+  // Normalize to zero-centered unit space. Median center and a 95th-percentile
+  // radius instead of min/max: one outlier (a failed file's zero vector, an
+  // odd photo) used to squash every other point into a clump in the middle.
+  const sortedX = projectedPoints.map((p) => p[0]).sort((a, b) => a - b)
+  const sortedY = projectedPoints.map((p) => p[1]).sort((a, b) => a - b)
+  const cx = sortedX[n >> 1],
+    cy = sortedY[n >> 1]
+  const radii = projectedPoints
+    .map(([x, y]) => Math.max(Math.abs(x - cx), Math.abs(y - cy)))
+    .sort((a, b) => a - b)
+  const r = radii[Math.floor((n - 1) * 0.95)] || radii[n - 1] || 1
 
   const vsize = Math.sqrt(n) * THUMB_WORLD * 1.4 * density
   // Flat typed arrays instead of an array of [x, y] tuples: the relaxation
@@ -153,11 +150,14 @@ export async function spreadPointsAsync(
             const dx = xs[j] - xs[i],
               dy = ys[j] - ys[i]
             const d2 = dx * dx + dy * dy
-            if (d2 < THUMB_WORLD * THUMB_WORLD && d2 > 0) {
+            if (d2 < THUMB_WORLD * THUMB_WORLD) {
               const dist = Math.sqrt(d2)
               const push = (THUMB_WORLD - dist) / 2 + 0.1
-              const nx = dx / dist,
-                ny = dy / dist
+              // Identical points (duplicate photos, zero vectors) have no
+              // direction to push along; pick a stable one per pair.
+              const angle = i * 7919 + j * 104729 // radians; any value works
+              const nx = dist > 0 ? dx / dist : Math.cos(angle),
+                ny = dist > 0 ? dy / dist : Math.sin(angle)
               xs[i] -= nx * push
               ys[i] -= ny * push
               xs[j] += nx * push
