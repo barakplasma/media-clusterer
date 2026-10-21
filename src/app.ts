@@ -185,6 +185,9 @@ const dom: DOMElements = {
   fileInput: document.getElementById('file-input') as HTMLInputElement,
   aboutBtn: document.getElementById('about-btn') as HTMLButtonElement,
   aboutModal: document.getElementById('about-modal') as HTMLDialogElement,
+  shortcutsBtn: document.getElementById('shortcuts-btn') as HTMLButtonElement,
+  shortcutsModal: document.getElementById('shortcuts-modal') as HTMLDialogElement,
+  shortcutsClose: document.getElementById('shortcuts-close') as HTMLButtonElement,
   aboutClose: document.getElementById('about-close') as HTMLButtonElement,
   statsEl: document.getElementById('stats') as HTMLDivElement,
   settingsBtn: document.getElementById('settings-btn') as HTMLButtonElement,
@@ -340,6 +343,10 @@ const getChromeAIPrompt = () =>
 let progressiveProjectionRunning = false
 let lastProgressiveCount = 0
 let lastProgressiveTime = 0
+// Refit the camera on every progressive layout until the user pans or zooms;
+// the layout grows with sqrt(n), so a camera fitted once at the start ends
+// up zoomed into the middle of the pile.
+let cameraFollow = true
 const PROGRESSIVE_MIN = 3 // min vectors before first progressive projection
 const PROGRESSIVE_MIN_MS = 2500 // min time between progressive projections — a
 // per-N-vectors trigger meant PCA + spread ran
@@ -1775,6 +1782,7 @@ async function embedAll(files: PhotoFile[]) {
   const writeQueue: [CacheKey, Float32Array][] = []
   lastProgressiveCount = 0
   lastProgressiveTime = 0
+  cameraFollow = true
   const embedStart = performance.now()
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2')
@@ -2100,7 +2108,7 @@ async function embedAll(files: PhotoFile[]) {
           if (state.phase === 'embedding') {
             state.points = spreadPts
             resizeCanvas()
-            if (isFirst) fitCamera()
+            if (isFirst || cameraFollow) fitCamera()
             scheduleRender()
           }
         })
@@ -2555,6 +2563,7 @@ dom.canvas.addEventListener('pointermove', (e) => {
     camera.x -= dx / camera.scale
     camera.y -= dy / camera.scale
     state.lastViewedIndex = null
+    cameraFollow = false
     scheduleRender()
   } else if (pointers.size === 2) {
     const pts = [...pointers.values()]
@@ -2573,6 +2582,7 @@ dom.canvas.addEventListener('pointermove', (e) => {
       camera.y += py / camera.scale - py / (camera.scale * ratio)
       camera.scale = Math.max(0.05, Math.min(20, camera.scale * ratio))
       state.lastViewedIndex = null
+      cameraFollow = false
       scheduleRender()
     }
     lastPinchDist = dist
@@ -2624,17 +2634,20 @@ dom.canvas.addEventListener(
     camera.y += py / camera.scale - py / (camera.scale * factor)
     camera.scale = Math.max(0.05, Math.min(20, camera.scale * factor))
     state.lastViewedIndex = null
+    cameraFollow = false
     scheduleRender()
   },
   { passive: false }
 )
 
 dom.recenterBtn.addEventListener('click', () => {
+  cameraFollow = true
   fitCamera()
   scheduleRender()
 })
 dom.resetBtn.addEventListener('click', resetAll)
 dom.headerRecenterBtn.addEventListener('click', () => {
+  cameraFollow = true
   fitCamera()
   scheduleRender()
 })
@@ -3578,6 +3591,12 @@ dom.aboutModal.addEventListener('click', (e) => {
   if (e.target === dom.aboutModal) dom.aboutModal.close()
 })
 
+dom.shortcutsBtn.addEventListener('click', () => dom.shortcutsModal.showModal())
+dom.shortcutsClose.addEventListener('click', () => dom.shortcutsModal.close())
+dom.shortcutsModal.addEventListener('click', (e) => {
+  if (e.target === dom.shortcutsModal) dom.shortcutsModal.close()
+})
+
 window.addEventListener('resize', () => {
   resizeCanvas()
   if (state.phase === 'done' && state.points.length) scheduleRender()
@@ -3970,10 +3989,36 @@ function getChronologicalOrder(): number[] {
   return chronologicalOrderCache
 }
 
+function openRandomFile() {
+  const len = state.points.length
+  if (!len) return
+  // Skip the photo already on screen so R always shows something new.
+  const current = state.activeFileIndex ?? -1
+  let next = Math.floor(Math.random() * len)
+  if (len > 1 && next === current) next = (next + 1) % len
+  openFileModal(next)
+}
+
 dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1))
 dom.modalNextBtn.addEventListener('click', () => navigateSequential(1))
 
 document.addEventListener('keydown', (e) => {
+  const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName ?? '')
+  // Another dialog (settings, about, shortcuts) owns the keyboard while open.
+  const otherDialog = document.querySelector('dialog[open]:not(#modal)')
+  if (typing || otherDialog || e.ctrlKey || e.metaKey || e.altKey) return
+
+  if (e.key === '?') {
+    if (!dom.shortcutsModal.open) dom.shortcutsModal.showModal()
+    return
+  }
+
+  if (e.key.toLowerCase() === 'r' && state.points.length > 0) {
+    e.preventDefault()
+    openRandomFile()
+    return
+  }
+
   if (e.key === '`') {
     const open = debugOverlay.style.display === 'none'
     debugOverlay.style.display = open ? 'block' : 'none'
@@ -3996,7 +4041,7 @@ document.addEventListener('keydown', (e) => {
     if (state.activeFileIndex !== null) {
       e.preventDefault()
       navigateModal(dir)
-    } else if (state.phase === 'done' && document.activeElement?.tagName !== 'INPUT') {
+    } else if (state.phase === 'done') {
       e.preventDefault()
       navigateCanvas(dir)
     }
@@ -4004,11 +4049,7 @@ document.addEventListener('keydown', (e) => {
 
   // n/p keys for sequential next/previous (in datetime order)
   const key = e.key.toLowerCase()
-  if (
-    (key === 'n' || key === 'p') &&
-    state.points.length > 0 &&
-    !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')
-  ) {
+  if ((key === 'n' || key === 'p') && state.points.length > 0) {
     e.preventDefault()
     navigateSequential(key === 'n' ? 1 : -1)
   }
