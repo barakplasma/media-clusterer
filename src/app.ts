@@ -851,6 +851,7 @@ const thumbDecoding = new Set<number>() // indices currently being decoded
 const thumbFailed = new Set<number>() // indices where video frame extraction permanently failed
 const embedFailed = new Set<number>() // indices whose embedding failed (zero vector stand-in)
 let hideFailed = false
+let embedFailReason = '' // first error message of the run, shown in the end-of-run toast
 const isHidden = (i: number) => hideFailed && embedFailed.has(i)
 const thumbnailLRU = new Set<number>() // indices in LRU order (most recently used at end)
 
@@ -956,6 +957,7 @@ function resetAll() {
   thumbDecoding.clear()
   thumbFailed.clear()
   embedFailed.clear()
+  embedFailReason = ''
   updateFailedChip()
   thumbnailLRU.clear()
   for (const f of state.files) {
@@ -1188,7 +1190,9 @@ function render() {
       }
     }
 
-    if (embedFailed.has(i) && drawSize >= 12) drawFailedBadge(ctx, sx + half, sy - half, drawSize)
+    // When every file failed a badge on each says nothing; the chip and toast do.
+    if (embedFailed.has(i) && embedFailed.size < pts.length && drawSize >= 12)
+      drawFailedBadge(ctx, sx + half, sy - half, drawSize)
   }
 
   drawClusterLabels(ctx, pts, s, cxW, cyW, drawSize)
@@ -2188,6 +2192,7 @@ async function embedAll(files: PhotoFile[]) {
             },
             (input, err) => {
               failedInputs.add(input)
+              embedFailReason ||= (err as Error).message
               console.warn(
                 'Embedding failed for one file, using zero vector:',
                 (err as Error).message
@@ -2213,6 +2218,7 @@ async function embedAll(files: PhotoFile[]) {
         }
       } catch (err) {
         console.warn('Batch inference failed, filling zeros:', (err as Error).message)
+        embedFailReason ||= (err as Error).message
         // A remote failure usually repeats for every remaining batch (a bad key
         // stays bad), so without a toast the whole run silently zero-fills.
         // One per error kind keeps that from becoming a wall of notifications.
@@ -2323,6 +2329,7 @@ async function processFiles(files: PhotoFile[]) {
   thumbDecoding.clear()
   thumbFailed.clear()
   embedFailed.clear()
+  embedFailReason = ''
   updateFailedChip()
   thumbnailLRU.clear()
 
@@ -2430,6 +2437,11 @@ async function processFiles(files: PhotoFile[]) {
 
     state.phase = 'done'
     updateFailedChip()
+    if (embedFailed.size > 0) {
+      // Failures only reach the console otherwise, which a phone can't show.
+      const why = embedFailReason ? `: ${embedFailReason}` : ''
+      showToast(`${embedFailed.size} of ${files.length} files could not be embedded${why}`, 'warn', 12000)
+    }
     resizeCanvas()
     setStatus('Arranging layout…')
     setPointsAnimated(
@@ -3193,6 +3205,7 @@ const closeModal = () => {
 // Cleanup happens on the native close event (handles X button, Escape, and backdrop click)
 dom.modal.addEventListener('close', () => {
   stopSlideshow()
+  slideshowOrder = null
   dom.modalVideo.pause()
   dom.modalVideo.src = ''
   state.activeFileIndex = null
@@ -3504,6 +3517,9 @@ const updateSearchUI = () => {
     dom.headerRecenterBtn.parentElement!.style.display = 'flex'
   }
   dom.searchInput.disabled = !state.settings.enableTextSearch || state.phase !== 'done'
+  // Keep the failed chip in whichever strip is on screen.
+  const strip = dom.bottomPanel.style.display === 'none' ? dom.headerRecenterBtn : dom.recenterBtn
+  strip.parentElement!.prepend(dom.failedChip)
 }
 updateSearchUI()
 refreshCacheSize()
@@ -4216,6 +4232,9 @@ let slideshow: {
   timer: ReturnType<typeof setInterval>
   seen: Set<number>
 } | null = null
+// Order picked for this viewer session: ▶/⏸ pause and resume it without
+// asking again. Cleared when the viewer closes, so the next ▶ asks afresh.
+let slideshowOrder: SlideshowOrder | null = null
 
 function openSlideshowPicker() {
   if (!state.points.length) return
@@ -4229,12 +4248,14 @@ function startSlideshow(order: SlideshowOrder) {
   const start = currentOrCenterIndex()
   if (start === null) return
   if (state.activeFileIndex === null) openFileModal(start)
+  slideshowOrder = order
   slideshow = {
     order,
     seen: new Set([start]),
     timer: setInterval(slideshowStep, state.settings.slideshowSeconds * 1000)
   }
   dom.modalPlayBtn.textContent = '⏸'
+  dom.modalPlayBtn.title = 'Pause slideshow (Space)'
 }
 
 function stopSlideshow() {
@@ -4242,10 +4263,23 @@ function stopSlideshow() {
   clearInterval(slideshow.timer)
   slideshow = null
   dom.modalPlayBtn.textContent = '▶'
+  dom.modalPlayBtn.title = 'Play slideshow (Space)'
+}
+
+/** ▶/⏸ and Space: pause, resume the picked order, or ask for one the first time. */
+function toggleSlideshow() {
+  if (slideshow) stopSlideshow()
+  else if (slideshowOrder) startSlideshow(slideshowOrder)
+  else openSlideshowPicker()
 }
 
 function slideshowStep() {
   if (!slideshow) return
+  // Never advance behind a closed viewer, however it was closed.
+  if (!dom.modal.open) {
+    slideshowOrder = null
+    return stopSlideshow()
+  }
   if (slideshow.order === 'date') return navigateSequential(1)
   if (slideshow.order === 'random') return openRandomFile()
   const cur = state.activeFileIndex
@@ -4271,7 +4305,7 @@ dom.slideshowClose.addEventListener('click', () => dom.slideshowModal.close())
 dom.slideshowModal.addEventListener('click', (e) => {
   if (e.target === dom.slideshowModal) dom.slideshowModal.close()
 })
-dom.modalPlayBtn.addEventListener('click', () => (slideshow ? stopSlideshow() : openSlideshowPicker()))
+dom.modalPlayBtn.addEventListener('click', toggleSlideshow)
 dom.modalImg.addEventListener('click', stopSlideshow)
 
 dom.modalRandomBtn.addEventListener('click', openRandomFile)
@@ -4302,8 +4336,7 @@ document.addEventListener('keydown', (e) => {
 
   if (e.key === ' ' && !onButton && state.points.length > 0) {
     e.preventDefault()
-    if (slideshow) stopSlideshow()
-    else openSlideshowPicker()
+    toggleSlideshow()
     return
   }
 

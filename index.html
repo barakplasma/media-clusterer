@@ -277,6 +277,8 @@
       bottom: 20px;
       right: 20px;
       z-index: 100;
+      align-items: center;
+      gap: 8px;
     }
     #header-recenter-btn {
       width: 44px;
@@ -395,7 +397,19 @@
     }
     .bottom-controls button:hover:not(:disabled) { background: var(--surface-hover); }
     .bottom-controls button:disabled { opacity: 0.38; cursor: not-allowed; }
-    #failed-chip { color: #dc2626; border-color: #dc262666; }
+    /* Styled on its own: it moves between the bottom panel and the floating
+       recenter strip (whichever is visible). */
+    #failed-chip {
+      padding: 5px 11px;
+      border-radius: var(--radius);
+      border: 1px solid #dc262666;
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      color: #dc2626;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
 
     #cache-size { font-size: 11px; color: var(--text-dim); }
     #stats { font-size: 11px; color: var(--text-dim); margin-left: auto; }
@@ -821,7 +835,7 @@
         <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></td><td>Nearest photo in that direction on the map</td></tr>
         <tr><td><kbd>N</kbd> / <kbd>P</kbd></td><td>Next / previous photo by date</td></tr>
         <tr><td><kbd>R</kbd></td><td>Random photo</td></tr>
-        <tr><td><kbd>Space</kbd></td><td>Start / stop a slideshow (by date, random or similarity)</td></tr>
+        <tr><td><kbd>Space</kbd></td><td>Play / pause the slideshow (asks the order — date, random or similarity — the first time)</td></tr>
         <tr><td><kbd>Enter</kbd></td><td>Open the highlighted photo on the map</td></tr>
         <tr><td><kbd>/</kbd></td><td>Jump to the search box</td></tr>
         <tr><td><kbd>Esc</kbd></td><td>Close the viewer or this dialog</td></tr>
@@ -840,7 +854,7 @@
       <button id="slideshow-close" rel="prev" aria-label="Close"></button>
       <p><strong>▶ Play slideshow</strong></p>
     </header>
-    <p>Starts from the current photo. Press <kbd>Space</kbd>, <kbd>Esc</kbd> or click the photo to stop.</p>
+    <p>Starts from the current photo. Tap ⏸ (or <kbd>Space</kbd>, or the photo) to pause and ▶ to resume. Closing the photo stops it.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button data-order="date" autofocus>📅 By date</button>
       <button data-order="random">🎲 Random</button>
