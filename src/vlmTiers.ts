@@ -32,6 +32,7 @@ const SIGLIP_HIDDEN_SIZE = 768
 const TIERS: Record<string, VlmTier> = {
   'smolvlm2-vision': {
     id: 'smolvlm2-vision',
+    family: 'smolvlm2',
     repo: 'HuggingFaceTB/SmolVLM2-256M-Video-Instruct',
     dtype: 'q4f16',
     visionOnly: true,
@@ -40,10 +41,12 @@ const TIERS: Record<string, VlmTier> = {
     cachePrefix: '@smolvlm2-vision/',
     downloadMB: 55,
     // The only tier the worker can actually honour today.
-    selectable: true
+    selectable: true,
+    queryPrefix: null
   },
   'smolvlm2-256m': {
     id: 'smolvlm2-256m',
+    family: 'smolvlm2',
     repo: 'HuggingFaceTB/SmolVLM2-256M-Video-Instruct',
     dtype: 'q4f16',
     visionOnly: false,
@@ -54,10 +57,12 @@ const TIERS: Record<string, VlmTier> = {
     // Not offered until M4 builds the decoder path. The worker loads only
     // vision_encoder, so selecting this today would deliver tier A behaviour
     // under a label promising captions.
-    selectable: false
+    selectable: false,
+    queryPrefix: null
   },
   'smolvlm2-500m': {
     id: 'smolvlm2-500m',
+    family: 'smolvlm2',
     repo: 'HuggingFaceTB/SmolVLM2-500M-Video-Instruct',
     dtype: 'q4f16',
     visionOnly: false,
@@ -65,7 +70,28 @@ const TIERS: Record<string, VlmTier> = {
     framesPerVideo: 4,
     cachePrefix: '@smolvlm2-500m/',
     downloadMB: 358,
-    selectable: false // as above — needs M4
+    selectable: false, // as above — needs M4
+    queryPrefix: null
+  },
+  // Multimodal embedder: images, video frames and text share one 768-d space,
+  // so the same worker answers text search. q4 is the model card's WebGPU
+  // pick; q4f16 is out because the activations overflow fp16 (Google's docs).
+  // Audio encoder is never loaded (worker drops audio_config).
+  embeddinggemma2: {
+    id: 'embeddinggemma2',
+    family: 'embeddinggemma2',
+    repo: 'onnx-community/embeddinggemma-2-ONNX',
+    dtype: 'q4',
+    visionOnly: true,
+    visionDim: 768,
+    // 8 frames × 140 soft tokens stays well under the ~2,700-token WebGPU
+    // dispatch limit the model card warns about.
+    framesPerVideo: 8,
+    cachePrefix: '@embeddinggemma2-q4/',
+    downloadMB: 316, // text 175 + vision 109 + tokenizer 32
+    selectable: true,
+    // Asymmetric retrieval: query prefix on text; media takes no prefix.
+    queryPrefix: 'task: search result | query: '
   }
 }
 
@@ -98,14 +124,16 @@ export function selectableVlmTiers(): VlmTier[] {
 /**
  * Whether a variant can answer a typed text query.
  *
- * False for every VLM tier: `state.vectors` hold pooled SigLIP features, and
- * the only text encoder in the app is nomic-embed-text, whose output lives in
- * an unrelated space. Equal width (768) is not compatibility — cosine over the
- * two is well-defined and meaningless, which is worse than an error because it
- * looks like it worked. A compatible path arrives with M6.
+ * A worker tier can only when its own checkpoint embeds text into the same
+ * space (`queryPrefix` set). SmolVLM2 tiers cannot: `state.vectors` hold pooled
+ * SigLIP features, and the app's other text encoder, nomic-embed-text, lives
+ * in an unrelated space. Equal width (768) is not compatibility — cosine over
+ * the two is well-defined and meaningless, which is worse than an error
+ * because it looks like it worked.
  */
 export function supportsTextSearch(variant: ModelVariant): boolean {
-  return !isVlmVariant(variant)
+  const tier = getVlmTier(variant)
+  return tier ? tier.queryPrefix !== null : true
 }
 
 /**

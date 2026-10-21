@@ -48,6 +48,7 @@ export type ModelVariant =
   | 'smolvlm2-vision'
   | 'smolvlm2-256m'
   | 'smolvlm2-500m'
+  | 'embeddinggemma2'
 
 /** ONNX weight quantisation, as named by Transformers.js `dtype`. */
 export type VlmDtype = 'q4f16' | 'q4' | 'int8' | 'fp16' | 'fp32'
@@ -59,6 +60,9 @@ export type VlmDtype = 'q4f16' | 'q4' | 'int8' | 'fp16' | 'fp32'
  */
 export interface VlmTier {
   id: ModelVariant
+  // How the worker drives the checkpoint: SmolVLM2 pools raw vision-encoder
+  // features; EmbeddingGemma 2 returns a finished multimodal sentence embedding.
+  family: 'smolvlm2' | 'embeddinggemma2'
   repo: string // HuggingFace repo, e.g. 'HuggingFaceTB/SmolVLM2-256M-Video-Instruct'
   dtype: VlmDtype
   visionOnly: boolean // tier A: never download embed_tokens/decoder
@@ -67,12 +71,16 @@ export interface VlmTier {
   cachePrefix: string // IndexedDB namespace, e.g. '@smolvlm2-vision/'
   downloadMB: number // approximate, for the settings UI
   selectable: boolean // false while the code cannot deliver what the label claims
+  // Text queries land in the same space as the media vectors, embedded by the
+  // worker with this prefix. null = no text encoder shares the space.
+  queryPrefix: string | null
 }
 
 /** Request sent from the main thread to the VLM worker. */
 export type VlmRequest =
   | { type: 'load'; id: number; tier: VlmTier; remoteHost: string }
   | { type: 'embed'; id: number; groups: ImageBitmap[][] }
+  | { type: 'embedText'; id: number; texts: string[] }
   | { type: 'dispose'; id: number }
 
 /** Response sent from the VLM worker back to the main thread. */

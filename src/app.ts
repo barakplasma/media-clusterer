@@ -8,7 +8,7 @@ import { pipeline, env, RawImage } from '@huggingface/transformers'
 import * as druid from '@saehrimnir/druidjs'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
-import { loadVlm, embedWithVlm, disposeVlm, vlmDevice } from './vlm'
+import { loadVlm, embedWithVlm, embedTextWithVlm, disposeVlm, vlmDevice } from './vlm'
 import {
   getVlmTier,
   isVlmVariant,
@@ -251,12 +251,12 @@ const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
   drawBudget: IS_MOBILE ? 150 : 400,
-  enableTextSearch: false,
+  enableTextSearch: true, // the default model embeds text itself, so search costs no extra download
   projectionMethod: 'TSNE',
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  modelVariant: 'smolvlm2-vision',
+  modelVariant: 'embeddinggemma2',
   enableLazyCaption: false,
   doNotTrack: false,
   customModelHost: '',
@@ -751,6 +751,15 @@ async function embedText(text: string): Promise<Float32Array> {
   if (state.settings.modelVariant === 'openai') {
     if (!remoteConfig) throw new Error('Remote endpoint not connected')
     return embedQuery(remoteConfig, text)
+  }
+
+  const tier = getVlmTier(state.settings.modelVariant)
+  if (tier?.queryPrefix != null) {
+    // The worker's own text encoder shares the media vectors' space; its
+    // retrieval scheme prefixes the query only (media take none).
+    if (!vlmTier) throw new Error(`${tier.id} not loaded`)
+    const [vec] = await embedTextWithVlm([tier.queryPrefix + text])
+    return vec
   }
 
   if (!supportsTextSearch(state.settings.modelVariant)) {
@@ -1979,7 +1988,7 @@ async function embedAll(files: PhotoFile[]) {
           if (!remoteConfig) throw new Error('Remote endpoint not connected')
           extracted = await embedImages(remoteConfig, missInputs as string[])
         } else if (isVlm) {
-          if (!vlmTier) throw new Error('SmolVLM2 tier not loaded')
+          if (!vlmTier) throw new Error(`${state.settings.modelVariant} not loaded`)
           extracted = await embedWithVlm(missInputs as ImageBitmap[][])
         } else if (isSapiens2) {
           if (!sapiens2Session) throw new Error('Sapiens2 session not loaded')
@@ -3156,9 +3165,15 @@ dom.customModelHostInput.value = state.settings.customModelHost
     for (const tier of selectableVlmTiers()) {
       const opt = document.createElement('option')
       opt.value = tier.id
-      const what = tier.visionOnly ? 'embeddings only' : 'captions + embeddings'
+      const what = tier.queryPrefix
+        ? 'embeddings + text search'
+        : tier.visionOnly
+          ? 'embeddings only'
+          : 'captions + embeddings'
       opt.textContent = `${tier.id} (${what} · ${tier.downloadMB} MB)`
-      opt.title = 'Video-native, runs in a Web Worker. No text search yet.'
+      opt.title = tier.queryPrefix
+        ? 'Video-native, runs in a Web Worker. Photos, video and text search share one model.'
+        : 'Video-native, runs in a Web Worker. No text search.'
       group.appendChild(opt)
     }
   }
@@ -3364,7 +3379,9 @@ dom.enableSearchToggle.addEventListener('change', async () => {
     state.phase !== 'idle' &&
     state.phase !== 'loading_model' &&
     !textExtractor &&
-    state.settings.modelVariant !== 'openai'
+    state.settings.modelVariant !== 'openai' &&
+    // Tiers with their own text encoder need no nomic text model.
+    getVlmTier(state.settings.modelVariant)?.queryPrefix == null
   ) {
     // We duplicate the text loading logic here for dynamic loading
     dom.settingsModal.close()

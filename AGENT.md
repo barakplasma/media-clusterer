@@ -4,9 +4,12 @@
 
 - **Frontend**: Vite (v8+), TypeScript, Vanilla CSS
 - **AI**: Three interchangeable embedding backends selected by `settings.modelVariant`:
-  - `sapiens2-*` (**default** `sapiens2-fp16`) — `src/sapiens2.ts`, raw onnxruntime-web
+  - `sapiens2-*` (`sapiens2-fp16`) — `src/sapiens2.ts`, raw onnxruntime-web
   - `nomic` — Transformers.js (v4.2.0) multimodal Nomic embeddings
   - `chrome-ai` — `src/chromeAI.ts`, Chrome Prompt API caption → `nomic-embed-text` vector
+  - `embeddinggemma2` (**default**) and `smolvlm2-*` — worker-backed tiers in `src/vlmTiers.ts` /
+    `src/vlmWorker.ts`. EmbeddingGemma 2 embeds images, video (as one clip) and text queries into one
+    space, so it answers text search itself (query prefix `task: search result | query: `, media unprefixed).
 
   All three produce 768-dim L2-normalized vectors.
 - **Projections**: DruidJS (UMAP, t-SNE, PCA, Isomap, LLE, MDS, Sammon, TriMap)

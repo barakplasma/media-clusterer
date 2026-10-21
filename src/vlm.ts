@@ -138,6 +138,20 @@ export async function embedWithVlm(groups: ImageBitmap[][]): Promise<Float32Arra
   return res.vectors
 }
 
+/**
+ * Embed text queries with the loaded tier's own text encoder, one vector per
+ * text. Only tiers with a `queryPrefix` have one; the caller adds the prefix.
+ */
+export async function embedTextWithVlm(texts: string[]): Promise<Float32Array[]> {
+  if (texts.length === 0) return []
+  const res = await send<Extract<VlmResponse, { type: 'embedded' }>>({
+    type: 'embedText',
+    id: nextId++,
+    texts
+  })
+  return res.vectors
+}
+
 /** Tear the worker down and free the model. Safe to call when never started. */
 export function disposeVlm(): void {
   if (!worker) return

@@ -101,7 +101,7 @@ describe('tier table', () => {
     // silently mix them in IndexedDB.
     const prefixes = allVlmTiers().map((t) => t.cachePrefix)
     expect(new Set(prefixes).size).toBe(prefixes.length)
-    for (const p of prefixes) expect(p).toMatch(/^@smolvlm2-.+\/$/)
+    for (const t of allVlmTiers()) expect(t.cachePrefix).toMatch(new RegExp(`^@${t.id}(-.+)?/$`))
   })
 
   it('orders tiers by download size', () => {
@@ -179,7 +179,7 @@ describe('selectableVlmTiers', () => {
     // The worker loads vision_encoder only, so the captioning tiers would
     // deliver tier-A behaviour under a label promising captions.
     const ids = selectableVlmTiers().map((t) => t.id)
-    expect(ids).toEqual(['smolvlm2-vision'])
+    expect(ids).toEqual(['smolvlm2-vision', 'embeddinggemma2'])
   })
 
   it('still declares the unreleased tiers', () => {
@@ -194,10 +194,17 @@ describe('selectableVlmTiers', () => {
 })
 
 describe('supportsTextSearch', () => {
-  it('is false for every VLM tier', () => {
+  it('is true only for tiers whose own checkpoint embeds text', () => {
     // Pooled SigLIP vectors and nomic-embed-text live in unrelated spaces;
     // equal width is not compatibility.
-    for (const t of allVlmTiers()) expect(supportsTextSearch(t.id)).toBe(false)
+    for (const t of allVlmTiers()) expect(supportsTextSearch(t.id)).toBe(t.queryPrefix !== null)
+    expect(supportsTextSearch('smolvlm2-vision')).toBe(false)
+    expect(supportsTextSearch('embeddinggemma2')).toBe(true)
+  })
+
+  it('uses the EmbeddingGemma 2 retrieval prefix for queries', () => {
+    // Model card: asymmetric retrieval prefixes the query; media get none.
+    expect(getVlmTier('embeddinggemma2')?.queryPrefix).toBe('task: search result | query: ')
   })
 
   it('leaves the existing embedders alone', () => {

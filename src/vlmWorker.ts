@@ -11,7 +11,7 @@
  * B/C add caption generation on the same forward pass in M4.
  */
 
-import { AutoModel, RawImage, env } from '@huggingface/transformers'
+import { AutoConfig, AutoModel, RawImage, RawVideo, env } from '@huggingface/transformers'
 import { assertVisionDim, poolVectors, poolVision } from './vlmTiers'
 import type { VlmDevice, VlmRequest, VlmResponse, VlmTier } from './types'
 
@@ -63,6 +63,18 @@ let processor: { (images: RawImage[]): Promise<Record<string, unknown>> } | null
 let loadedTier: VlmTier | null = null
 let device: VlmDevice = 'wasm'
 
+// EmbeddingGemma 2: the processor turns (text, images, audio, videos) into
+// model inputs and the model returns a pooled, L2-normalized embedding.
+type Gemma2Processor = (
+  text: string[] | null,
+  images?: RawImage[][] | null,
+  audio?: null,
+  videos?: RawVideo[] | null
+) => Promise<Record<string, unknown>>
+type Gemma2Model = ((inputs: Record<string, unknown>) => Promise<{ sentence_embedding: VisionOutput }>) & {
+  dispose?: () => Promise<void>
+}
+
 function post(message: VlmResponse, transfer: Transferable[] = []): void {
   ;(self as unknown as Worker).postMessage(message, transfer)
 }
@@ -107,6 +119,24 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     progress_callback
   })) as unknown as typeof processor
 
+  if (tier.family === 'embeddinggemma2') {
+    // Dropping audio_config skips the 189 MB audio encoder: this app embeds
+    // images and video frames only.
+    const config = await AutoConfig.from_pretrained(tier.repo, { progress_callback })
+    ;(config as unknown as { audio_config: unknown }).audio_config = null
+    const opts = { config, dtype: tier.dtype, progress_callback }
+    try {
+      model = (await AutoModel.from_pretrained(tier.repo, { ...opts, device: 'webgpu' })) as unknown as typeof model
+      device = 'webgpu'
+    } catch {
+      model = (await AutoModel.from_pretrained(tier.repo, { ...opts, device: 'wasm' })) as unknown as typeof model
+      device = 'wasm'
+    }
+    loadedTier = tier
+    post({ type: 'loaded', id, device, visionDim: tier.visionDim })
+    return
+  }
+
   const opts = { dtype: tier.dtype, progress_callback }
   // `model_file_name` pins the load to the vision tower; without it the loader
   // would also fetch embed_tokens and the decoder, which tier A never runs.
@@ -143,7 +173,68 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
  * discrete GPU, but the target device has neither the VRAM headroom nor a
  * discrete GPU, and a batch that OOMs costs the whole tab.
  */
+/** Decoded pixels of a bitmap, without re-decoding it as RawImage.fromBlob would. */
+function bitmapToRaw(bitmap: ImageBitmap): RawImage {
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('VLM worker: no 2d context for frame conversion')
+  ctx.drawImage(bitmap, 0, 0)
+  const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height)
+  return new RawImage(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height, 4)
+}
+
+/** One EmbeddingGemma 2 forward pass → its sentence embedding as a plain vector. */
+async function embedGemma2(inputs: Record<string, unknown>): Promise<Float32Array> {
+  const out = await (model as unknown as Gemma2Model)(inputs)
+  const emb = out.sentence_embedding
+  assertVisionDim(loadedTier!, emb.dims[emb.dims.length - 1])
+  return Float32Array.from(emb.data)
+}
+
+/**
+ * EmbeddingGemma 2 embeds a still as an image and a multi-frame group as one
+ * video (140 soft tokens per frame, vs 280 for an image), so a clip gets a
+ * single native embedding rather than a centroid of per-frame ones. One item
+ * per forward pass: batches risk the WebGPU dispatch limit and the memory
+ * budget alike.
+ */
+async function embedGroupsGemma2(id: number, groups: ImageBitmap[][]): Promise<void> {
+  const run = processor as unknown as Gemma2Processor
+  const vectors: Float32Array[] = []
+  for (const group of groups) {
+    const frames = group.map(bitmapToRaw)
+    for (const b of group) b.close()
+    // Frames arrive without timestamps; space them one second apart, the
+    // model's default sampling rate.
+    const inputs =
+      frames.length === 1
+        ? await run(null, [frames])
+        : await run(null, null, null, [new RawVideo(frames, frames.length)])
+    vectors.push(await embedGemma2(inputs))
+  }
+  post(
+    { type: 'embedded', id, vectors },
+    vectors.map((v) => v.buffer)
+  )
+}
+
+async function embedText(id: number, texts: string[]): Promise<void> {
+  if (!processor || !loadedTier || loadedTier.family !== 'embeddinggemma2') {
+    throw new Error('VLM worker: text embedding needs a loaded EmbeddingGemma 2 tier')
+  }
+  const run = processor as unknown as Gemma2Processor
+  const vectors: Float32Array[] = []
+  for (const text of texts) vectors.push(await embedGemma2(await run([text])))
+  post(
+    { type: 'embedded', id, vectors },
+    vectors.map((v) => v.buffer)
+  )
+}
+
 async function embed(id: number, groups: ImageBitmap[][]): Promise<void> {
+  if (loadedTier?.family === 'embeddinggemma2' && model && processor) {
+    return embedGroupsGemma2(id, groups)
+  }
   if (!runVision || !processor || !loadedTier) {
     throw new Error('VLM worker: embed before load')
   }
@@ -153,19 +244,7 @@ async function embed(id: number, groups: ImageBitmap[][]): Promise<void> {
   for (const group of groups) {
     const frameVectors: Float32Array[] = []
     for (const bitmap of group) {
-      // RawImage.fromBlob would re-decode; the bitmap is already decoded, so
-      // go through a canvas to hand the processor raw pixels directly.
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
-      const ctx = canvas.getContext('2d')
-      if (!ctx) throw new Error('VLM worker: no 2d context for frame conversion')
-      ctx.drawImage(bitmap, 0, 0)
-      const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height)
-      const raw = new RawImage(
-        new Uint8ClampedArray(imageData.data),
-        imageData.width,
-        imageData.height,
-        4
-      )
+      const raw = bitmapToRaw(bitmap)
 
       // do_image_splitting: false is load-bearing — the default tiles each
       // frame against size.longest_edge 2048, which is the easiest way to blow
@@ -218,6 +297,7 @@ self.addEventListener('message', (event: MessageEvent<VlmRequest>) => {
     try {
       if (req.type === 'load') await load(req.id, req.tier, req.remoteHost)
       else if (req.type === 'embed') await embed(req.id, req.groups)
+      else if (req.type === 'embedText') await embedText(req.id, req.texts)
       else if (req.type === 'dispose') await dispose()
     } catch (err) {
       // Free any bitmaps the failed request still owns, or the tab leaks one
