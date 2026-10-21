@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { searchByCosine, cullAndPrioritize, formatEta, spreadPointsAsync } from './compute'
+import {
+  searchByCosine,
+  cullAndPrioritize,
+  formatEta,
+  spreadPointsAsync,
+  mostSimilarIndex,
+  clusterCaptionLabels
+} from './compute'
 import type { Point } from './types'
 import { THUMB_WORLD } from './compute'
 
@@ -146,5 +153,41 @@ describe('spreadPointsAsync', () => {
     // Min/max scaling collapsed the grid and relaxation only packed it into a
     // ~10-thumbnail-wide blob; a normal layout spans well over that.
     expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(THUMB_WORLD * 15)
+  })
+})
+
+describe('mostSimilarIndex', () => {
+  const v = (...xs: number[]) => Float32Array.from(xs)
+  const vecs = [v(1, 0), v(0.9, 0.1), v(0, 1), v(0.6, 0.4)]
+
+  it('picks the nearest vector by dot product', () => {
+    expect(mostSimilarIndex(vecs, 0, () => false)).toBe(1)
+  })
+
+  it('honours skip and returns -1 when nothing is left', () => {
+    expect(mostSimilarIndex(vecs, 0, (i) => i === 1)).toBe(3)
+    expect(mostSimilarIndex(vecs, 0, () => true)).toBe(-1)
+  })
+})
+
+describe('clusterCaptionLabels', () => {
+  it('labels a cluster with its most shared words, skipping filler', () => {
+    const labels = clusterCaptionLabels(
+      [0, 0, 0, 1, 1],
+      [
+        'A photo of a dog on the beach',
+        'Dog running on a sandy beach at sunset',
+        'The dog sleeping',
+        'A plate of pasta',
+        null
+      ]
+    )
+    expect(labels.get(0)).toBe('dog · beach')
+    // Cluster 1 has only one caption: no label.
+    expect(labels.has(1)).toBe(false)
+  })
+
+  it('gives no label when no word repeats', () => {
+    expect(clusterCaptionLabels([0, 0], ['red car', 'green tree']).size).toBe(0)
   })
 })
