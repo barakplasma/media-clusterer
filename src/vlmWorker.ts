@@ -181,7 +181,13 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
         config,
         dtype: tier.dtype,
         progress_callback,
-        device: 'webgpu'
+        device: 'webgpu',
+        session_options: {
+          // The default 'bucket' cache keeps every freed GPU buffer for reuse.
+          // Photos vary in shape, so it grew until a Pixel 7a had no device
+          // memory left for the first search (VK_ERROR_OUT_OF_DEVICE_MEMORY).
+          executionProviders: [{ name: 'webgpu', storageBufferCacheMode: 'lazyRelease' }]
+        }
       })) as unknown as typeof model
     } catch (err) {
       // Release whatever the half-built sessions allocated before reporting.
@@ -191,6 +197,11 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     }
     device = 'webgpu'
     loadedTier = tier
+    // Build the text path's GPU pipelines now, while memory is free, instead
+    // of at the first search after a whole folder has been embedded.
+    if (tier.queryPrefix) {
+      await embedGemma2(await (processor as unknown as Gemma2Processor)([tier.queryPrefix + 'warm up']))
+    }
     post({ type: 'loaded', id, device, visionDim: tier.visionDim })
     return
   }
