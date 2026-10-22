@@ -7,7 +7,8 @@ import type { Point } from './types'
 export function getNextImageInDirection(
   currentIndex: number,
   points: Point[],
-  direction: 'left' | 'right' | 'up' | 'down'
+  direction: 'left' | 'right' | 'up' | 'down',
+  skip?: (index: number) => boolean
 ): number {
   if (points.length <= 1) return currentIndex
 
@@ -24,7 +25,7 @@ export function getNextImageInDirection(
 
   // 1. Find the nearest neighbor that lies strictly in the requested direction
   for (let i = 0; i < points.length; i++) {
-    if (i === currentIndex) continue
+    if (i === currentIndex || skip?.(i)) continue
     const p = points[i]
     const vx = p[0] - cur[0]
     const vy = p[1] - cur[1]
@@ -53,7 +54,7 @@ export function getNextImageInDirection(
   let wrapIdx = -1
   let minWrapScore = Infinity
   for (let i = 0; i < points.length; i++) {
-    if (i === currentIndex) continue
+    if (i === currentIndex || skip?.(i)) continue
     const p = points[i]
     const vx = p[0] - cur[0]
     const vy = p[1] - cur[1]

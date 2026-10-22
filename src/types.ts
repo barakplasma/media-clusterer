@@ -114,6 +114,7 @@ export interface Settings {
   density: number // 1.0 = default, smaller = tighter, larger = sparse
   loopVideos: boolean
   drawBudget: number // MAX_DRAW_PER_FRAME
+  slideshowSeconds: number // seconds each photo stays up in a slideshow
   enableTextSearch: boolean
   projectionMethod: ProjectionMethod
   batchSize: number // GPU inference batch size (higher = faster, more memory)
@@ -182,10 +183,19 @@ export interface DOMElements {
   aboutBtn: HTMLButtonElement
   aboutModal: HTMLDialogElement
   shortcutsBtn: HTMLButtonElement
+  slideshowModal: HTMLDialogElement
+  slideshowClose: HTMLButtonElement
+  slideshowSimilarBtn: HTMLButtonElement
+  slideshowSecondsSlider: HTMLInputElement
+  slideshowSecondsLabel: HTMLSpanElement
+  modalRandomBtn: HTMLButtonElement
+  modalPlayBtn: HTMLButtonElement
+  modalPosition: HTMLSpanElement
   shortcutsModal: HTMLDialogElement
   shortcutsClose: HTMLButtonElement
   aboutClose: HTMLButtonElement
   statsEl: HTMLDivElement
+  failedChip: HTMLButtonElement
   settingsBtn: HTMLButtonElement
   settingsModal: HTMLDialogElement
   settingsClose: HTMLButtonElement

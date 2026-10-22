@@ -277,6 +277,8 @@
       bottom: 20px;
       right: 20px;
       z-index: 100;
+      align-items: center;
+      gap: 8px;
     }
     #header-recenter-btn {
       width: 44px;
@@ -395,6 +397,19 @@
     }
     .bottom-controls button:hover:not(:disabled) { background: var(--surface-hover); }
     .bottom-controls button:disabled { opacity: 0.38; cursor: not-allowed; }
+    /* Styled on its own: it moves between the bottom panel and the floating
+       recenter strip (whichever is visible). */
+    #failed-chip {
+      padding: 5px 11px;
+      border-radius: var(--radius);
+      border: 1px solid #dc262666;
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      color: #dc2626;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
 
     #cache-size { font-size: 11px; color: var(--text-dim); }
     #stats { font-size: 11px; color: var(--text-dim); margin-left: auto; }
@@ -595,6 +610,23 @@
     dialog#settings-modal > article { max-width: 440px; }
     dialog#about-modal    > article { max-width: 620px; }
 
+    /* Pico's close-button rules expect .pico *around* the dialog; ours is on
+       the article inside it, so they never matched and the bare button
+       rendered as a blank primary-colored square. */
+    dialog > article.pico > header [rel=prev] {
+      display: block;
+      float: right;
+      width: 1rem;
+      height: 1rem;
+      margin: 0 0 0 var(--pico-spacing);
+      padding: 0;
+      border: none;
+      background: var(--pico-icon-close) center / auto 1rem no-repeat transparent;
+      opacity: 0.5;
+      cursor: pointer;
+    }
+    dialog > article.pico > header [rel=prev]:is(:hover, :focus) { opacity: 1; }
+
     /* Setting rows */
     .setting-item { margin-bottom: 20px; }
     .setting-item > label {
@@ -634,6 +666,7 @@
     @keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
     dialog[open] > article { animation: fadeIn 0.18s ease-out; }
     dialog#modal[open] > #modal-content { animation: fadeIn 0.18s ease-out; }
+    #modal-content:focus { outline: none; } /* focused only so shortcuts work, not a control */
 
     /* Light mode glass tweaks */
     @media (prefers-color-scheme: light) {
@@ -690,6 +723,7 @@
   <div class="panel-row bottom-controls">
     <button id="recenter-btn" disabled title="Recenter View">⌖ Recenter</button>
     <button id="reset-btn" disabled title="Reset All Data">Reset</button>
+    <button id="failed-chip" hidden></button>
     <span id="cache-size"></span>
     <span id="stats"></span>
   </div>
@@ -704,7 +738,7 @@
 
 <!-- ── File viewer (native dialog, full-screen) ───────────────────────────── -->
 <dialog id="modal">
-  <div id="modal-content">
+  <div id="modal-content" tabindex="-1" autofocus>
     <button id="modal-nav-up"    class="modal-nav-btn" title="Up">▲</button>
     <button id="modal-nav-left"  class="modal-nav-btn" title="Left">◀</button>
     <button id="modal-nav-right" class="modal-nav-btn" title="Right">▶</button>
@@ -714,7 +748,10 @@
     <video id="modal-video" controls loop style="width:100%;flex:1;min-height:0;object-fit:contain;display:none;background:#000;border-radius:12px 12px 0 0;"></video>
     <div id="modal-footer">
       <button id="modal-prev-btn" class="modal-seq-btn" title="Previous (P)">‹</button>
+      <button id="modal-random-btn" class="modal-seq-btn" title="Random (R)">⤨</button>
       <button id="modal-next-btn" class="modal-seq-btn" title="Next (N)">›</button>
+      <button id="modal-play-btn" class="modal-seq-btn" title="Slideshow (Space)">▶</button>
+      <span id="modal-position" class="modal-meta" title="Position by date"></span>
       <span class="modal-sep" style="margin-right:4px;"> </span>
       <span id="modal-up"       class="modal-link" title="Up one level">↑</span>
       <span class="modal-sep"> · </span>
@@ -798,12 +835,31 @@
         <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></td><td>Nearest photo in that direction on the map</td></tr>
         <tr><td><kbd>N</kbd> / <kbd>P</kbd></td><td>Next / previous photo by date</td></tr>
         <tr><td><kbd>R</kbd></td><td>Random photo</td></tr>
+        <tr><td><kbd>Space</kbd></td><td>Play / pause the slideshow (asks the order — date, random or similarity — the first time)</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>Open the highlighted photo on the map</td></tr>
+        <tr><td><kbd>/</kbd></td><td>Jump to the search box</td></tr>
         <tr><td><kbd>Esc</kbd></td><td>Close the viewer or this dialog</td></tr>
         <tr><td><kbd>?</kbd></td><td>Show this guide</td></tr>
         <tr><td><kbd>`</kbd></td><td>Toggle the debug overlay</td></tr>
         <tr><td>Drag · Scroll / pinch · Click</td><td>Pan · Zoom · Open a photo</td></tr>
       </tbody>
     </table>
+  </article>
+</dialog>
+
+<!-- ── Slideshow order picker (PicoCSS article) ─────────────────────────── -->
+<dialog id="slideshow-modal">
+  <article class="pico">
+    <header>
+      <button id="slideshow-close" rel="prev" aria-label="Close"></button>
+      <p><strong>▶ Play slideshow</strong></p>
+    </header>
+    <p>Starts from the current photo. Tap ⏸ (or <kbd>Space</kbd>, or the photo) to pause and ▶ to resume. Closing the photo stops it.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button data-order="date" autofocus>📅 By date</button>
+      <button data-order="random">🎲 Random</button>
+      <button data-order="similar" id="slideshow-similar-btn">🧲 By similarity</button>
+    </div>
   </article>
 </dialog>
 
@@ -908,6 +964,11 @@
         <input type="range" id="draw-budget-slider" min="50" max="1000" step="50" value="400" style="flex:1;accent-color:var(--primary);cursor:pointer;">
         <span style="font-size:12px;color:var(--text-dim);">Best</span>
       </div>
+    </div>
+
+    <div class="setting-item">
+      <label>Slideshow: <span id="slideshow-seconds-label">3</span>s per photo</label>
+      <input type="range" id="slideshow-seconds-slider" min="1" max="15" step="1" value="3" style="width:100%;accent-color:var(--primary);cursor:pointer;">
     </div>
 
     <div class="setting-item">
