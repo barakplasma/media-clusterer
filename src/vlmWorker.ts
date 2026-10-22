@@ -158,6 +158,16 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
   })) as unknown as typeof processor
 
   if (tier.family === 'embeddinggemma2') {
+    if (tier.imageTokens) {
+      const p = processor as unknown as {
+        image_processor: { max_soft_tokens: number }
+        video_processor?: { frame_processor?: { max_soft_tokens: number } }
+      }
+      p.image_processor.max_soft_tokens = tier.imageTokens
+      // Video frames default to a smaller budget than stills; only ever lower it.
+      const frames = p.video_processor?.frame_processor
+      if (frames) frames.max_soft_tokens = Math.min(frames.max_soft_tokens, tier.imageTokens)
+    }
     // Dropping audio_config skips the 189 MB audio encoder: this app embeds
     // images and video frames only.
     const config = await AutoConfig.from_pretrained(tier.repo, { progress_callback })

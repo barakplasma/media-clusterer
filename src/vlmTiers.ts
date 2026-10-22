@@ -91,18 +91,36 @@ const TIERS: Record<string, VlmTier> = {
     downloadMB: 316, // text 175 + vision 109 + tokenizer 32
     selectable: true,
     // Asymmetric retrieval: query prefix on text; media takes no prefix.
-    queryPrefix: 'task: search result | query: '
+    queryPrefix: 'task: search result | query: ',
+    imageTokens: 280
   }
 }
+
+// A phone locked up running EmbeddingGemma 2 at the default budget: ~2,500
+// vision patches per image, and attention memory grows with their square.
+// 70 tokens (~630 patches) cuts that ~16x. Its own cache prefix, because a
+// different budget embeds the same photo differently (AGENT.md).
+// shortcut: UA sniffing, upgrade to the adapter's limits once pickVlmTier() (M6) exists.
+const PHONE_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
+  embeddinggemma2: { imageTokens: 70, framesPerVideo: 4, cachePrefix: '@embeddinggemma2-q4-t70/' }
+}
+const IS_PHONE =
+  typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 
 /** True when `variant` is one of the SmolVLM2 tiers. */
 export function isVlmVariant(variant: ModelVariant): boolean {
   return variant in TIERS
 }
 
-/** Tier descriptor for a variant, or null when the variant is not a VLM tier. */
-export function getVlmTier(variant: ModelVariant): VlmTier | null {
-  return TIERS[variant] ?? null
+/**
+ * Tier descriptor for a variant, or null when the variant is not a VLM tier.
+ * On phones, tiers with a PHONE_OVERRIDES row come back with its lighter settings.
+ */
+export function getVlmTier(variant: ModelVariant, phone = IS_PHONE): VlmTier | null {
+  const tier = TIERS[variant]
+  if (!tier) return null
+  const phoneRow = phone ? PHONE_OVERRIDES[variant] : undefined
+  return phoneRow ? { ...tier, ...phoneRow } : tier
 }
 
 /** Every declared tier, including ones not yet offered to users. */

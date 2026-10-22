@@ -202,6 +202,18 @@ describe('supportsTextSearch', () => {
     expect(supportsTextSearch('embeddinggemma2')).toBe(true)
   })
 
+  it('gives phones a lighter EmbeddingGemma 2 with its own cache', () => {
+    const desktop = getVlmTier('embeddinggemma2', false)!
+    const phone = getVlmTier('embeddinggemma2', true)!
+    expect(desktop.imageTokens).toBe(280)
+    expect(phone.imageTokens).toBe(70)
+    expect(phone.framesPerVideo).toBeLessThan(desktop.framesPerVideo)
+    // A different budget embeds differently: vectors must never share a cache.
+    expect(phone.cachePrefix).not.toBe(desktop.cachePrefix)
+    // Tiers without an override are the same object on every device.
+    expect(getVlmTier('smolvlm2-vision', true)).toBe(getVlmTier('smolvlm2-vision', false))
+  })
+
   it('uses the EmbeddingGemma 2 retrieval prefix for queries', () => {
     // Model card: asymmetric retrieval prefixes the query; media get none.
     expect(getVlmTier('embeddinggemma2')?.queryPrefix).toBe('task: search result | query: ')

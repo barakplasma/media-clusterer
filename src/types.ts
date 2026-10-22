@@ -74,6 +74,9 @@ export interface VlmTier {
   // Text queries land in the same space as the media vectors, embedded by the
   // worker with this prefix. null = no text encoder shares the space.
   queryPrefix: string | null
+  // Soft-token budget per image (EmbeddingGemma 2: 70–1120, default 280).
+  // Attention memory grows with its square, so phones get a smaller one.
+  imageTokens?: number
 }
 
 /** Request sent from the main thread to the VLM worker. */
