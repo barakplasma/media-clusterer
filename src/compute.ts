@@ -396,3 +396,80 @@ export function cullAndPrioritize(
 
   return visibleIndices
 }
+
+/**
+ * Index of the vector most similar (dot product; vectors are L2-normalized)
+ * to vectors[from], ignoring indices `skip` rejects. -1 when none is left.
+ */
+export function mostSimilarIndex(
+  vectors: Float32Array[],
+  from: number,
+  skip: (index: number) => boolean
+): number {
+  const a = vectors[from]
+  let best = -1,
+    bestScore = -Infinity
+  for (let i = 0; i < vectors.length; i++) {
+    if (i === from || skip(i)) continue
+    const b = vectors[i]
+    let dot = 0
+    for (let d = 0; d < a.length; d++) dot += a[d] * b[d]
+    if (dot > bestScore) {
+      bestScore = dot
+      best = i
+    }
+  }
+  return best
+}
+
+// Words that say nothing about a group: English filler plus caption boilerplate.
+const LABEL_STOPWORDS = new Set(
+  (
+    'the and with for from that this there their they are was were has have had its ' +
+    'into onto over under near next some several many few one two three four five ' +
+    'his her him she he who what which while where when then than very also just ' +
+    'image photo picture photograph shows showing shown depicts depicting features ' +
+    'featuring appears seems seen visible view scene background foreground front ' +
+    'side top bottom left right center middle area close closeup up out off on of ' +
+    'in at by an a is be been being it as or but not no can could would should may ' +
+    'other another each both all any more most such like small large big little ' +
+    'white black dark light bright colorful various different looking'
+  ).split(' ')
+)
+
+/**
+ * A short label per cluster from the captions its photos already have: the
+ * one or two words that appear in the most captions (at least two). Clusters
+ * with fewer than `minCaptions` captions get no label.
+ */
+export function clusterCaptionLabels(
+  clusters: ArrayLike<number>,
+  captions: ArrayLike<string | null | undefined>,
+  minCaptions = 2
+): Map<number, string> {
+  const df = new Map<number, Map<string, number>>()
+  const captioned = new Map<number, number>()
+  for (let i = 0; i < clusters.length; i++) {
+    const caption = captions[i]
+    if (!caption) continue
+    const c = clusters[i]
+    captioned.set(c, (captioned.get(c) ?? 0) + 1)
+    let counts = df.get(c)
+    if (!counts) df.set(c, (counts = new Map()))
+    // Count each word once per caption, so one wordy caption can't dominate.
+    for (const w of new Set(caption.toLowerCase().match(/[a-z]{3,}/g) ?? [])) {
+      if (!LABEL_STOPWORDS.has(w)) counts.set(w, (counts.get(w) ?? 0) + 1)
+    }
+  }
+  const labels = new Map<number, string>()
+  for (const [c, counts] of df) {
+    if ((captioned.get(c) ?? 0) < minCaptions) continue
+    const top = [...counts]
+      .filter(([, n]) => n >= 2)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 2)
+      .map(([w]) => w)
+    if (top.length) labels.set(c, top.join(' · '))
+  }
+  return labels
+}

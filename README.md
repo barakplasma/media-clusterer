@@ -96,7 +96,12 @@ npm run deploy
 - **Arrow keys / WASD** - Pan around the canvas
 - **Mouse wheel** - Zoom in/out
 - **n / p** - Next/previous file (in datetime order)
+- **r** - Random file
+- **Space** - Play/pause the slideshow (asks the order the first time: date, random, or similarity; speed in Settings)
+- **Enter** - Open the highlighted file on the map
+- **/** - Focus the search box
 - **Escape** - Close modal or clear search
+- **?** - Show the keyboard shortcut guide
 - **`** - Toggle debug overlay
 
 ## 📋 Settings

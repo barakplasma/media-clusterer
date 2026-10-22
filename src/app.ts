@@ -62,6 +62,8 @@ import { getNextImageInDirection } from './spatial'
 import {
   THUMB_WORLD,
   kmeansAsync,
+  mostSimilarIndex,
+  clusterCaptionLabels,
   spreadPointsAsync,
   generateMetadataBasedLayout,
   cullAndPrioritize,
@@ -186,10 +188,19 @@ const dom: DOMElements = {
   aboutBtn: document.getElementById('about-btn') as HTMLButtonElement,
   aboutModal: document.getElementById('about-modal') as HTMLDialogElement,
   shortcutsBtn: document.getElementById('shortcuts-btn') as HTMLButtonElement,
+  slideshowModal: document.getElementById('slideshow-modal') as HTMLDialogElement,
+  slideshowClose: document.getElementById('slideshow-close') as HTMLButtonElement,
+  slideshowSimilarBtn: document.getElementById('slideshow-similar-btn') as HTMLButtonElement,
+  slideshowSecondsSlider: document.getElementById('slideshow-seconds-slider') as HTMLInputElement,
+  slideshowSecondsLabel: document.getElementById('slideshow-seconds-label') as HTMLSpanElement,
+  modalRandomBtn: document.getElementById('modal-random-btn') as HTMLButtonElement,
+  modalPlayBtn: document.getElementById('modal-play-btn') as HTMLButtonElement,
+  modalPosition: document.getElementById('modal-position') as HTMLSpanElement,
   shortcutsModal: document.getElementById('shortcuts-modal') as HTMLDialogElement,
   shortcutsClose: document.getElementById('shortcuts-close') as HTMLButtonElement,
   aboutClose: document.getElementById('about-close') as HTMLButtonElement,
   statsEl: document.getElementById('stats') as HTMLDivElement,
+  failedChip: document.getElementById('failed-chip') as HTMLButtonElement,
   settingsBtn: document.getElementById('settings-btn') as HTMLButtonElement,
   settingsModal: document.getElementById('settings-modal') as HTMLDialogElement,
   settingsClose: document.getElementById('settings-close') as HTMLButtonElement,
@@ -251,6 +262,7 @@ const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
   drawBudget: IS_MOBILE ? 150 : 400,
+  slideshowSeconds: 3,
   enableTextSearch: false,
   projectionMethod: 'TSNE',
   batchSize: IS_MOBILE ? 4 : 16,
@@ -328,6 +340,12 @@ let activeEmbeddingDim = 768
 /** Placeholder for an embedding that could not be computed. */
 function zeroVector(): Float32Array {
   return new Float32Array(activeEmbeddingDim)
+}
+
+/** zeroVector() for file `idx`, recorded so the map can badge or hide it. */
+function failedVector(idx: number): Float32Array {
+  embedFailed.add(idx)
+  return zeroVector()
 }
 let lazyCaptionManager: ChromeAISessionManager | null = null // On-demand caption for non-chrome-ai modes
 let captionAbortController: AbortController | null = null // Cancels in-flight lazy caption
@@ -475,6 +493,22 @@ function scheduleRender() {
       renderPending = false
     })
   }
+}
+
+// ── Layout tween ─────────────────────────────────────────────────────────────
+// render() eases from the previous layout to state.points, so photos glide to
+// their new spot instead of jumping. state.points always holds the target, so
+// saves and hit-tests see final positions.
+const LAYOUT_TWEEN_MS = 450
+let layoutTween: { from: Point[]; start: number } | null = null
+let displayedPoints: Point[] = []
+
+function setPointsAnimated(next: Point[]) {
+  // Mid-tween, start from where photos are drawn right now, not the old target.
+  const from = layoutTween ? displayedPoints : state.points
+  state.points = next
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  layoutTween = from.length && !reduce ? { from, start: performance.now() } : null
 }
 
 // ── File collection ──────────────────────────────────────────────────────────
@@ -815,6 +849,10 @@ const fullImages = new Map<number, HTMLImageElement>() // index → HTMLImageEle
 const fullImageLRU = new Set<number>() // LRU tracking for full-res images
 const thumbDecoding = new Set<number>() // indices currently being decoded
 const thumbFailed = new Set<number>() // indices where video frame extraction permanently failed
+const embedFailed = new Set<number>() // indices whose embedding failed (zero vector stand-in)
+let hideFailed = false
+let embedFailReason = '' // first error message of the run, shown in the end-of-run toast
+const isHidden = (i: number) => hideFailed && embedFailed.has(i)
 const thumbnailLRU = new Set<number>() // indices in LRU order (most recently used at end)
 
 // Chrome limits concurrent WebMediaPlayers to ~75; cap video frame extraction
@@ -889,8 +927,7 @@ function resizeCanvas() {
   dom.canvas.height = window.innerHeight || 600
 }
 
-function fitCamera() {
-  const pts = state.points
+function fitCamera(pts: Point[] = state.points) {
   if (!pts.length) return
   let minX = Infinity,
     maxX = -Infinity,
@@ -919,6 +956,9 @@ function resetAll() {
   fullImageLRU.clear()
   thumbDecoding.clear()
   thumbFailed.clear()
+  embedFailed.clear()
+  embedFailReason = ''
+  updateFailedChip()
   thumbnailLRU.clear()
   for (const f of state.files) {
     if (f.objectURL) {
@@ -930,6 +970,7 @@ function resetAll() {
   state.files = []
   state.vectors = []
   state.points = []
+  layoutTween = null
   state.clusters = null
   state.thumbnails = []
   state.captions = []
@@ -968,7 +1009,22 @@ function render() {
   const ctx = dom.canvas.getContext('2d')
   if (!ctx) return
   ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height)
-  const pts = state.points
+  let pts = state.points
+  if (layoutTween) {
+    const t = (performance.now() - layoutTween.start) / LAYOUT_TWEEN_MS
+    if (t >= 1) layoutTween = null
+    else {
+      const e = 1 - (1 - t) ** 3 // ease-out cubic
+      const from = layoutTween.from
+      pts = state.points.map((p, i): Point => {
+        const f = from[i]
+        return f ? [f[0] + (p[0] - f[0]) * e, f[1] + (p[1] - f[1]) * e] : p
+      })
+      // scheduleRender() is a no-op while this frame is still pending.
+      requestAnimationFrame(scheduleRender)
+    }
+  }
+  displayedPoints = pts
   const thumbs = state.thumbnails
   if (!pts.length) return
 
@@ -1014,6 +1070,7 @@ function render() {
   )
 
   for (const i of visibleIndices) {
+    if (isHidden(i)) continue
     const sx = (pts[i][0] - camera.x) * s + cxW
     const sy = (pts[i][1] - camera.y) * s + cyW
 
@@ -1132,7 +1189,13 @@ function render() {
         }
       }
     }
+
+    // When every file failed a badge on each says nothing; the chip and toast do.
+    if (embedFailed.has(i) && embedFailed.size < pts.length && drawSize >= 12)
+      drawFailedBadge(ctx, sx + half, sy - half, drawSize)
   }
+
+  drawClusterLabels(ctx, pts, s, cxW, cyW, drawSize)
 
   if (useFull && drawnFull) {
     // Evict full images that weren't drawn this frame
@@ -1149,6 +1212,103 @@ function render() {
     fullImages.clear()
     fullImageLRU.clear()
   }
+}
+
+// ── Cluster labels ───────────────────────────────────────────────────────────
+// Recomputed only when the clusters or the number of captions change; counting
+// captions each frame is a cheap O(n) scan next to drawing.
+let clusterLabelCache: { clusters: Int32Array; captionCount: number; labels: Map<number, string> } | null =
+  null
+let clusterLabelHits: { x: number; y: number; w: number; h: number; cluster: number }[] = []
+const LABEL_MAX_THUMB_PX = 64 // only label when zoomed out enough that thumbnails are small
+
+function currentClusterLabels(): Map<number, string> | null {
+  const clusters = state.clusters
+  if (!clusters) return null
+  let captionCount = 0
+  for (const c of state.captions) if (c) captionCount++
+  const cache = clusterLabelCache
+  if (cache && cache.clusters === clusters && cache.captionCount === captionCount) return cache.labels
+  const labels = clusterCaptionLabels(clusters, state.captions)
+  clusterLabelCache = { clusters, captionCount, labels }
+  return labels
+}
+
+function drawClusterLabels(
+  ctx: CanvasRenderingContext2D,
+  pts: Point[],
+  s: number,
+  cxW: number,
+  cyW: number,
+  drawSize: number
+) {
+  clusterLabelHits = []
+  const labels = drawSize < LABEL_MAX_THUMB_PX ? currentClusterLabels() : null
+  if (!labels?.size || !state.clusters) return
+  const sum = new Map<number, [number, number, number]>()
+  for (let i = 0; i < pts.length; i++) {
+    const c = state.clusters[i]
+    if (!labels.has(c) || isHidden(i)) continue
+    const acc = sum.get(c) ?? [0, 0, 0]
+    acc[0] += pts[i][0]
+    acc[1] += pts[i][1]
+    acc[2]++
+    sum.set(c, acc)
+  }
+  ctx.font = '600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (const [c, [x, y, n]] of sum) {
+    const text = labels.get(c)!
+    const sx = (x / n - camera.x) * s + cxW
+    const sy = (y / n - camera.y) * s + cyW
+    const w = ctx.measureText(text).width + 16
+    const h = 24
+    ctx.fillStyle = 'rgba(17, 24, 39, 0.78)'
+    ctx.beginPath()
+    ctx.roundRect(sx - w / 2, sy - h / 2, w, h, h / 2)
+    ctx.fill()
+    ctx.strokeStyle = CLUSTER_COLORS[c % CLUSTER_COLORS.length]
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+    ctx.fillStyle = '#fff'
+    ctx.fillText(text, sx, sy + 0.5)
+    clusterLabelHits.push({ x: sx - w / 2, y: sy - h / 2, w, h, cluster: c })
+  }
+}
+
+/** Zoom the camera onto one cluster's photos. */
+function zoomToCluster(cluster: number) {
+  if (!state.clusters) return
+  const members = state.points.filter((_, i) => state.clusters![i] === cluster && !isHidden(i))
+  cameraFollow = false
+  state.lastViewedIndex = null
+  fitCamera(members)
+  camera.scale = Math.min(camera.scale, 20) // same cap as wheel/pinch zoom
+  scheduleRender()
+}
+
+/** Red "!" disc on a thumbnail's top-right corner: its embedding failed. */
+function drawFailedBadge(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
+  const r = Math.min(10, Math.max(5, size * 0.12))
+  ctx.beginPath()
+  ctx.arc(x - r, y + r, r, 0, Math.PI * 2)
+  ctx.fillStyle = '#dc2626'
+  ctx.fill()
+  ctx.fillStyle = '#fff'
+  ctx.font = `bold ${Math.round(r * 1.5)}px sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('!', x - r, y + r + 0.5)
+}
+
+function updateFailedChip() {
+  const n = embedFailed.size
+  dom.failedChip.hidden = n === 0
+  dom.failedChip.textContent = hideFailed ? `⚠ ${n} failed (hidden) · show` : `⚠ ${n} failed · hide`
+  dom.failedChip.title = hideFailed
+    ? 'Show the files whose embedding failed'
+    : 'These files could not be embedded and sit at a meaningless spot on the map. Click to hide them.'
 }
 
 // ── Projection ───────────────────────────────────────────────────────────────
@@ -1889,7 +2049,7 @@ async function embedAll(files: PhotoFile[]) {
             // File where embedImages expects a data URI; JSON.stringify turns
             // it into {}, which the provider rejects — taking the whole batch,
             // and every valid item in it, down with one bad video.
-            vectors[idx] = zeroVector()
+            vectors[idx] = failedVector(idx)
             return
           } else {
             missInputs.push(f.file)
@@ -1900,7 +2060,7 @@ async function embedAll(files: PhotoFile[]) {
           } catch {
             // Undecodable image — skip it rather than uploading the original
             // at full size, which is what this downscale exists to prevent.
-            vectors[idx] = zeroVector()
+            vectors[idx] = failedVector(idx)
             return
           }
         } else if (isSapiens2) {
@@ -1913,7 +2073,7 @@ async function embedAll(files: PhotoFile[]) {
           } catch {
             // Undecodable image. A zero vector keeps this session going but is
             // never cached (see failedInputs below), so a later build can retry.
-            vectors[idx] = zeroVector()
+            vectors[idx] = failedVector(idx)
             return
           }
         } else if (isChromeAI) {
@@ -1941,7 +2101,7 @@ async function embedAll(files: PhotoFile[]) {
             missInputs.push(resized)
           } else {
             // Cannot resize — use zero vector rather than risking OOM with full-res
-            vectors[i + bi] = zeroVector()
+            vectors[i + bi] = failedVector(i + bi)
             return
           }
         }
@@ -2032,6 +2192,7 @@ async function embedAll(files: PhotoFile[]) {
             },
             (input, err) => {
               failedInputs.add(input)
+              embedFailReason ||= (err as Error).message
               console.warn(
                 'Embedding failed for one file, using zero vector:',
                 (err as Error).message
@@ -2052,12 +2213,12 @@ async function embedAll(files: PhotoFile[]) {
           const bi = missIndices[m]
           const idx = i + bi
           vectors[idx] = extracted[m]
-          if (!failedInputs.has(missInputs[m])) {
-            writeQueue.push([keys[bi], vectors[idx]])
-          }
+          if (failedInputs.has(missInputs[m])) embedFailed.add(idx)
+          else writeQueue.push([keys[bi], vectors[idx]])
         }
       } catch (err) {
         console.warn('Batch inference failed, filling zeros:', (err as Error).message)
+        embedFailReason ||= (err as Error).message
         // A remote failure usually repeats for every remaining batch (a bad key
         // stays bad), so without a toast the whole run silently zero-fills.
         // One per error kind keeps that from becoming a wall of notifications.
@@ -2069,7 +2230,7 @@ async function embedAll(files: PhotoFile[]) {
           }
         }
         for (const bi of missIndices) {
-          vectors[i + bi] = zeroVector()
+          vectors[i + bi] = failedVector(i + bi)
         }
       }
     }
@@ -2106,7 +2267,7 @@ async function embedAll(files: PhotoFile[]) {
         .then((rawPts) => spreadPointsAsync(rawPts, state.settings.density))
         .then((spreadPts) => {
           if (state.phase === 'embedding') {
-            state.points = spreadPts
+            setPointsAnimated(spreadPts)
             resizeCanvas()
             if (isFirst || cameraFollow) fitCamera()
             scheduleRender()
@@ -2167,12 +2328,20 @@ async function processFiles(files: PhotoFile[]) {
   }
   thumbDecoding.clear()
   thumbFailed.clear()
+  embedFailed.clear()
+  embedFailReason = ''
+  updateFailedChip()
   thumbnailLRU.clear()
 
   // Clear points immediately so render() exits early while state.files is being replaced.
   // Without this, a render triggered during async embedding would iterate old point indices
   // against the new (possibly shorter) files array, causing objectURL access on undefined.
   state.points = []
+  // Indices into the old list must not outlive it: a breadcrumb/date filter
+  // replaces the files while the viewer is open, and its ‹ › or a key press
+  // then indexed past the new list (Bugsink: "reading 'name'" / "'0'").
+  state.lastViewedIndex = null
+  if (dom.modal.open) closeModal()
 
   state.files = files
 
@@ -2272,10 +2441,18 @@ async function processFiles(files: PhotoFile[]) {
     state.clusters = await kmeansAsync(rawPoints, k, 60, undefined, (f) => setProgress(94 + f * 2))
 
     state.phase = 'done'
+    updateFailedChip()
+    if (embedFailed.size > 0) {
+      // Failures only reach the console otherwise, which a phone can't show.
+      const why = embedFailReason ? `: ${embedFailReason}` : ''
+      showToast(`${embedFailed.size} of ${files.length} files could not be embedded${why}`, 'warn', 12000)
+    }
     resizeCanvas()
     setStatus('Arranging layout…')
-    state.points = await spreadPointsAsync(rawPoints, state.settings.density, undefined, (f) =>
-      setProgress(96 + f * 4)
+    setPointsAnimated(
+      await spreadPointsAsync(rawPoints, state.settings.density, undefined, (f) =>
+        setProgress(96 + f * 4)
+      )
     )
     fitCamera()
     scheduleRender()
@@ -2597,12 +2774,18 @@ dom.canvas.addEventListener('pointerup', (e) => {
 
   if (wasSingleTap && state.points.length) {
     const { cx, cy } = pointerPos(e)
+    const label = clusterLabelHits.find((r) => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h)
+    if (label) {
+      zoomToCluster(label.cluster)
+      return
+    }
     const wx = (cx - dom.canvas.width / 2) / camera.scale + camera.x
     const wy = (cy - dom.canvas.height / 2) / camera.scale + camera.y
     const hitRadius = (THUMB_WORLD / 2) ** 2
     let closest = -1,
       minD = hitRadius * 4
     for (let i = 0; i < state.points.length; i++) {
+      if (isHidden(i)) continue
       const ddx = state.points[i][0] - wx,
         ddy = state.points[i][1] - wy
       const d = ddx * ddx + ddy * ddy
@@ -2646,6 +2829,12 @@ dom.recenterBtn.addEventListener('click', () => {
   scheduleRender()
 })
 dom.resetBtn.addEventListener('click', resetAll)
+dom.failedChip.addEventListener('click', () => {
+  hideFailed = !hideFailed
+  if (state.activeFileIndex === null && isHidden(state.lastViewedIndex ?? -1)) state.lastViewedIndex = null
+  updateFailedChip()
+  scheduleRender()
+})
 dom.headerRecenterBtn.addEventListener('click', () => {
   cameraFollow = true
   fitCamera()
@@ -2698,6 +2887,8 @@ dom.searchClearBtn.addEventListener('click', () => {
 
 const openFileModal = (index: number) => {
   const f = state.files[index]
+  dom.modalPosition.textContent = `${sequencePosition(index) + 1} / ${state.files.length}`
+  dom.modalPosition.title = state.settings.viewerOnly ? 'Position in folder order' : 'Position by date'
   const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
 
   if (VIDEO_EXTS.has(ext)) {
@@ -3018,6 +3209,8 @@ const closeModal = () => {
 
 // Cleanup happens on the native close event (handles X button, Escape, and backdrop click)
 dom.modal.addEventListener('close', () => {
+  stopSlideshow()
+  slideshowOrder = null
   dom.modalVideo.pause()
   dom.modalVideo.src = ''
   state.activeFileIndex = null
@@ -3125,6 +3318,8 @@ const saveSettings = () => {
 // Sync UI with initial settings
 dom.densitySlider.value = state.settings.density.toString()
 dom.drawBudgetSlider.value = state.settings.drawBudget.toString()
+dom.slideshowSecondsSlider.value = state.settings.slideshowSeconds.toString()
+dom.slideshowSecondsLabel.textContent = state.settings.slideshowSeconds.toString()
 dom.loopToggle.checked = state.settings.loopVideos
 dom.enableSearchToggle.checked = state.settings.enableTextSearch
 
@@ -3327,6 +3522,9 @@ const updateSearchUI = () => {
     dom.headerRecenterBtn.parentElement!.style.display = 'flex'
   }
   dom.searchInput.disabled = !state.settings.enableTextSearch || state.phase !== 'done'
+  // Keep the failed chip in whichever strip is on screen.
+  const strip = dom.bottomPanel.style.display === 'none' ? dom.headerRecenterBtn : dom.recenterBtn
+  strip.parentElement!.prepend(dom.failedChip)
 }
 updateSearchUI()
 refreshCacheSize()
@@ -3431,7 +3629,7 @@ dom.densitySlider.addEventListener('input', async () => {
   state.settings.density = parseFloat(dom.densitySlider.value)
   saveSettings()
   if (state.phase === 'done' && state.rawPoints && state.files.length) {
-    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density)
+    setPointsAnimated(await spreadPointsAsync(state.rawPoints, state.settings.density))
     scheduleRender()
   }
 })
@@ -3440,6 +3638,17 @@ dom.drawBudgetSlider.addEventListener('input', () => {
   state.settings.drawBudget = parseInt(dom.drawBudgetSlider.value)
   saveSettings()
   scheduleRender()
+})
+
+dom.slideshowSecondsSlider.addEventListener('input', () => {
+  state.settings.slideshowSeconds = parseInt(dom.slideshowSecondsSlider.value)
+  dom.slideshowSecondsLabel.textContent = dom.slideshowSecondsSlider.value
+  saveSettings()
+  // Apply to a running slideshow right away rather than on the next start.
+  if (slideshow) {
+    clearInterval(slideshow.timer)
+    slideshow.timer = setInterval(slideshowStep, state.settings.slideshowSeconds * 1000)
+  }
 })
 
 dom.batchSizeInput.addEventListener('input', () => {
@@ -3552,7 +3761,7 @@ if (dom.projectionSelect) {
         state.clusters = await kmeansAsync(rawPoints, k)
 
         setStatus('Arranging layout…')
-        state.points = await spreadPointsAsync(rawPoints, state.settings.density)
+        setPointsAnimated(await spreadPointsAsync(rawPoints, state.settings.density))
 
         try {
           localStorage.setItem('po_projectedPoints', JSON.stringify(state.points))
@@ -3779,14 +3988,15 @@ dom.resumeBtn.addEventListener('click', async () => {
       // Same width guard as the embedding loop: a restored vector of the wrong
       // width is from a different embedding space, and mixing the two yields
       // plausible, meaningless rankings with nothing to trip on.
-      state.vectors = cachedVectors.map((v) =>
-        v && v.length === activeEmbeddingDim ? v : zeroVector()
+      state.vectors = cachedVectors.map((v, i) =>
+        v && v.length === activeEmbeddingDim ? v : failedVector(i)
       )
       dom.searchInput.disabled = false
     }
 
     state.thumbnails = initThumbnails(matched)
     state.phase = 'done'
+    updateFailedChip()
     resizeCanvas()
     fitCamera()
     scheduleRender()
@@ -3906,7 +4116,7 @@ function refreshDebugOverlay() {
 
 function navigateModal(dir: 'left' | 'right' | 'up' | 'down') {
   if (state.activeFileIndex === null) return
-  const nextIndex = getNextImageInDirection(state.activeFileIndex, state.points, dir)
+  const nextIndex = getNextImageInDirection(state.activeFileIndex, state.points, dir, isHidden)
   if (nextIndex !== state.activeFileIndex) {
     openFileModal(nextIndex)
   }
@@ -3932,7 +4142,7 @@ function navigateCanvas(dir: 'left' | 'right' | 'up' | 'down') {
 
   if (startIndex === null) return
 
-  const nextIndex = getNextImageInDirection(startIndex, pts, dir)
+  const nextIndex = getNextImageInDirection(startIndex, pts, dir, isHidden)
   if (nextIndex !== startIndex) {
     state.lastViewedIndex = nextIndex
     camera.x = pts[nextIndex][0]
@@ -3941,12 +4151,13 @@ function navigateCanvas(dir: 'left' | 'right' | 'up' | 'down') {
   }
 }
 
-function navigateSequential(delta: 1 | -1) {
-  if (!state.points.length) return
+/** The open photo, else the last one viewed, else the one nearest the view center. */
+function currentOrCenterIndex(): number | null {
   let currentIndex = state.activeFileIndex ?? state.lastViewedIndex
   if (currentIndex === null) {
     let minD = Infinity
     for (let i = 0; i < state.points.length; i++) {
+      if (isHidden(i)) continue
       const dx = state.points[i][0] - camera.x,
         dy = state.points[i][1] - camera.y
       const d = dx * dx + dy * dy
@@ -3956,26 +4167,40 @@ function navigateSequential(delta: 1 | -1) {
       }
     }
   }
-  if (currentIndex === null) return
-
-  // Viewer mode already arranges state.files in visual order (folder then date),
-  // so currentIndex is also its position — step directly in O(1), no sort/alloc.
-  if (state.settings.viewerOnly) {
-    const len = state.files.length
-    openFileModal((currentIndex + delta + len) % len)
-    return
-  }
-
-  // AI mode: step in chronological (lastModified) order. Cache the sorted order
-  // and rebuild it only when the state.files reference changes, so repeated n/p
-  // presses don't re-sort on every step.
-  const order = getChronologicalOrder()
-  const pos = order.indexOf(currentIndex)
-  if (pos === -1) return
-  const nextPos = (pos + delta + order.length) % order.length
-  openFileModal(order[nextPos])
+  return currentIndex
 }
 
+function navigateSequential(delta: 1 | -1) {
+  if (!state.points.length) return
+  const currentIndex = currentOrCenterIndex()
+  if (currentIndex === null) return
+
+  const len = state.files.length
+  let pos = sequencePosition(currentIndex)
+  if (pos === -1) return
+  // Step past hidden (failed) files; give up after one full lap.
+  for (let step = 0; step < len; step++) {
+    pos = (pos + delta + len) % len
+    const next = sequenceAt(pos)
+    if (!isHidden(next)) {
+      openFileModal(next)
+      return
+    }
+  }
+}
+
+// Viewer mode already arranges state.files in visual order (folder then date),
+// so an index is also its position — no sort/alloc. AI mode steps in
+// chronological (lastModified) order.
+function sequencePosition(index: number): number {
+  return state.settings.viewerOnly ? index : getChronologicalOrder().indexOf(index)
+}
+function sequenceAt(pos: number): number {
+  return state.settings.viewerOnly ? pos : getChronologicalOrder()[pos]
+}
+
+// Cache the sorted order and rebuild it only when the state.files reference
+// changes, so repeated n/p presses don't re-sort on every step.
 let chronologicalOrderCache: number[] | null = null
 let chronologicalOrderFilesRef: PhotoFile[] | null = null
 function getChronologicalOrder(): number[] {
@@ -3992,17 +4217,110 @@ function getChronologicalOrder(): number[] {
 function openRandomFile() {
   const len = state.points.length
   if (!len) return
-  // Skip the photo already on screen so R always shows something new.
+  // Skip the photo already on screen (and hidden ones) so R always shows
+  // something new; probe forward from a random start.
   const current = state.activeFileIndex ?? -1
-  let next = Math.floor(Math.random() * len)
-  if (len > 1 && next === current) next = (next + 1) % len
-  openFileModal(next)
+  const start = Math.floor(Math.random() * len)
+  for (let k = 0; k < len; k++) {
+    const next = (start + k) % len
+    if (next !== current && !isHidden(next)) {
+      openFileModal(next)
+      return
+    }
+  }
 }
 
+// ── Slideshow ────────────────────────────────────────────────────────────────
+type SlideshowOrder = 'date' | 'random' | 'similar'
+let slideshow: {
+  order: SlideshowOrder
+  timer: ReturnType<typeof setInterval>
+  seen: Set<number>
+} | null = null
+// Order picked for this viewer session: ▶/⏸ pause and resume it without
+// asking again. Cleared when the viewer closes, so the next ▶ asks afresh.
+let slideshowOrder: SlideshowOrder | null = null
+
+function openSlideshowPicker() {
+  if (!state.points.length) return
+  // Similarity walks the embeddings; viewer mode has none.
+  dom.slideshowSimilarBtn.hidden = state.vectors.length === 0
+  dom.slideshowModal.showModal()
+}
+
+function startSlideshow(order: SlideshowOrder) {
+  stopSlideshow()
+  const start = currentOrCenterIndex()
+  if (start === null) return
+  if (state.activeFileIndex === null) openFileModal(start)
+  slideshowOrder = order
+  slideshow = {
+    order,
+    seen: new Set([start]),
+    timer: setInterval(slideshowStep, state.settings.slideshowSeconds * 1000)
+  }
+  dom.modalPlayBtn.textContent = '⏸'
+  dom.modalPlayBtn.title = 'Pause slideshow (Space)'
+}
+
+function stopSlideshow() {
+  if (!slideshow) return
+  clearInterval(slideshow.timer)
+  slideshow = null
+  dom.modalPlayBtn.textContent = '▶'
+  dom.modalPlayBtn.title = 'Play slideshow (Space)'
+}
+
+/** ▶/⏸ and Space: pause, resume the picked order, or ask for one the first time. */
+function toggleSlideshow() {
+  if (slideshow) stopSlideshow()
+  else if (slideshowOrder) startSlideshow(slideshowOrder)
+  else openSlideshowPicker()
+}
+
+function slideshowStep() {
+  if (!slideshow) return
+  // Never advance behind a closed viewer, however it was closed.
+  if (!dom.modal.open) {
+    slideshowOrder = null
+    return stopSlideshow()
+  }
+  if (slideshow.order === 'date') return navigateSequential(1)
+  if (slideshow.order === 'random') return openRandomFile()
+  const cur = state.activeFileIndex
+  if (cur === null) return stopSlideshow()
+  slideshow.seen.add(cur)
+  const seen = slideshow.seen
+  let next = mostSimilarIndex(state.vectors, cur, (i) => seen.has(i) || isHidden(i))
+  if (next === -1) {
+    // Every photo shown once: start another lap from here.
+    slideshow.seen = new Set([cur])
+    next = mostSimilarIndex(state.vectors, cur, (i) => i === cur || isHidden(i))
+  }
+  if (next !== -1) openFileModal(next)
+}
+
+for (const btn of dom.slideshowModal.querySelectorAll<HTMLButtonElement>('button[data-order]')) {
+  btn.addEventListener('click', () => {
+    dom.slideshowModal.close()
+    startSlideshow(btn.dataset.order as SlideshowOrder)
+  })
+}
+dom.slideshowClose.addEventListener('click', () => dom.slideshowModal.close())
+dom.slideshowModal.addEventListener('click', (e) => {
+  if (e.target === dom.slideshowModal) dom.slideshowModal.close()
+})
+dom.modalPlayBtn.addEventListener('click', toggleSlideshow)
+dom.modalImg.addEventListener('click', stopSlideshow)
+
+dom.modalRandomBtn.addEventListener('click', openRandomFile)
 dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1))
 dom.modalNextBtn.addEventListener('click', () => navigateSequential(1))
 
 document.addEventListener('keydown', (e) => {
+  // Chrome fires keydown with no key for autofill; e.key.toLowerCase() threw
+  // (Bugsink: 13 events of "reading 'toLowerCase'").
+  if (!e.key) return
   const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName ?? '')
   // Another dialog (settings, about, shortcuts) owns the keyboard while open.
   const otherDialog = document.querySelector('dialog[open]:not(#modal)')
@@ -4016,6 +4334,29 @@ document.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'r' && state.points.length > 0) {
     e.preventDefault()
     openRandomFile()
+    return
+  }
+
+  // A button the user tabbed to already acts on Space/Enter; don't fire a
+  // second action. Mouse-clicked buttons keep focus too but aren't
+  // :focus-visible, so the shortcuts still work after clicking ›.
+  const onButton = !!document.activeElement?.matches('button:focus-visible')
+
+  if (e.key === ' ' && !onButton && state.points.length > 0) {
+    e.preventDefault()
+    toggleSlideshow()
+    return
+  }
+
+  if (e.key === 'Enter' && !onButton && state.activeFileIndex === null && state.points.length > 0) {
+    const i = currentOrCenterIndex()
+    if (i !== null) openFileModal(i)
+    return
+  }
+
+  if (e.key === '/' && !dom.searchInput.disabled && dom.searchInput.offsetParent !== null) {
+    e.preventDefault()
+    dom.searchInput.focus()
     return
   }
 
@@ -4100,6 +4441,9 @@ debugCopyBtn.addEventListener('click', async () => {
   },
   get thumbDecoding() {
     return thumbDecoding
+  },
+  get embedFailed() {
+    return embedFailed
   },
   buildDebugInfo
 }
