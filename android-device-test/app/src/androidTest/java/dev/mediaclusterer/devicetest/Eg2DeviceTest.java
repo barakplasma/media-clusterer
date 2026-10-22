@@ -30,7 +30,7 @@ import java.util.regex.Pattern;
 @RunWith(AndroidJUnit4.class)
 public class Eg2DeviceTest {
     private static final String TAG = "EG2TEST";
-    private static final String CHROME = "com.android.chrome";
+    private static final String DEFAULT_BROWSER = "com.android.chrome";
     private static final String DEFAULT_URL =
             "https://claude-eg2-device-test.media-clusterer.pages.dev/device-test.html";
     private static final long TIMEOUT_MS = 20 * 60 * 1000;
@@ -43,15 +43,18 @@ public class Eg2DeviceTest {
     public void runEmbeddingGemma2() throws Exception {
         Bundle args = InstrumentationRegistry.getArguments();
         String url = args.getString("url", DEFAULT_URL);
+        // Test Lab images can ship a Chrome too old for WebGPU; a sideloaded
+        // Chromium (org.chromium.chrome) is picked with -e browser.
+        String browser = args.getString("browser", DEFAULT_BROWSER);
         UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
         Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
 
-        Log.i(TAG, "harness opening " + url);
+        Log.i(TAG, "harness opening " + url + " in " + browser);
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                .setPackage(CHROME)
+                .setPackage(browser)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         ctx.startActivity(intent);
-        device.wait(Until.hasObject(By.pkg(CHROME).depth(0)), 30_000);
+        device.wait(Until.hasObject(By.pkg(browser).depth(0)), 30_000);
 
         long deadline = SystemClock.uptimeMillis() + TIMEOUT_MS;
         int logged = 0;
@@ -60,10 +63,10 @@ public class Eg2DeviceTest {
         while (SystemClock.uptimeMillis() < deadline && !done) {
             dismissDialogs(device);
             // Chrome's first run can swallow the intent; send it again once.
-            if (!reopened && device.hasObject(By.res(CHROME, "url_bar"))
+            if (!reopened && device.hasObject(By.res(browser, "url_bar"))
                     && !device.hasObject(By.textContains("EG2"))
                     && !device.hasObject(By.textContains("START"))) {
-                UiObject2 bar = device.findObject(By.res(CHROME, "url_bar"));
+                UiObject2 bar = device.findObject(By.res(browser, "url_bar"));
                 if (bar != null && !String.valueOf(bar.getText()).contains("device-test")) {
                     Log.i(TAG, "harness re-sending intent after first run");
                     ctx.startActivity(intent);
