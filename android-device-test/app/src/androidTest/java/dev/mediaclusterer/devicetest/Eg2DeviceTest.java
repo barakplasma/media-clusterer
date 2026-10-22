@@ -33,7 +33,7 @@ public class Eg2DeviceTest {
     private static final String DEFAULT_BROWSER = "com.android.chrome";
     private static final String DEFAULT_URL =
             "https://claude-eg2-device-test.media-clusterer.pages.dev/device-test.html";
-    private static final long TIMEOUT_MS = 20 * 60 * 1000;
+    private static final long TIMEOUT_MS = 40 * 60 * 1000;
     // Chrome first-run and promo buttons, across versions.
     private static final Pattern DISMISS = Pattern.compile(
             "(?i)(accept & continue|accept and continue|use without an account|continue as guest|"

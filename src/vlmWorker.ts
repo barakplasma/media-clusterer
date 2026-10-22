@@ -139,9 +139,14 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     })
   }
 
+  // Device-test branch only: phase markers ride the progress channel so
+  // device-test.html can tell a slow download from a hung session build.
+  const phase = (name: string) => post({ type: 'progress', id, file: `@phase ${name}`, loaded: 0, total: 0 })
+  phase('processor start')
   processor = (await AutoProcessor.from_pretrained(tier.repo, {
     progress_callback
   })) as unknown as typeof processor
+  phase('processor done')
 
   if (tier.family === 'embeddinggemma2') {
     if (tier.imageTokens) {
@@ -162,6 +167,7 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     // (q4, q8) use GatherBlockQuantized, which onnxruntime-web implements only
     // on WebGPU ("Could not find an implementation", verified in Chromium), and
     // fp32 is ~1.75 GB.
+    phase('sessions start')
     model = (await AutoModel.from_pretrained(tier.repo, {
       config,
       dtype: tier.dtype,
@@ -174,14 +180,17 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
         executionProviders: [{ name: 'webgpu', storageBufferCacheMode: 'lazyRelease' }]
       }
     })) as unknown as typeof model
+    phase('sessions done')
     device = 'webgpu'
     loadedTier = tier
     // Build the text path's GPU pipelines now, while memory is free, instead
     // of at the first search after a whole folder has been embedded.
     if (tier.queryPrefix) {
+      phase('warm-up start')
       await embedGemma2(
         await (processor as unknown as Gemma2Processor)([tier.queryPrefix + 'warm up'], null, null, null, seqOptions(tier))
       )
+      phase('warm-up done')
     }
     post({ type: 'loaded', id, device, visionDim: tier.visionDim })
     return

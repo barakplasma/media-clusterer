@@ -81,20 +81,38 @@ async function run(): Promise<void> {
 
   let t = performance.now()
   let lastPct = -10
+  const seenFiles = new Set<string>()
+  let status = 'starting'
+  // Heartbeat, so a hang shows which phase it hung in and for how long.
+  const beat = setInterval(() => log(`wait ${since(t)} ${status}`), 30_000)
   try {
-    const tier = await loadVlm('embeddinggemma2', 'https://huggingface.co', (pct) => {
+    const tier = await loadVlm('embeddinggemma2', 'https://huggingface.co', (pct, file) => {
+      if (file.startsWith('@phase ')) {
+        status = file.slice(7)
+        log(`phase ${status} at ${since(t)}`)
+        return
+      }
+      status = `download ${pct.toFixed(0)}% ${file}`
+      if (!seenFiles.has(file)) {
+        seenFiles.add(file)
+        log(`download file ${file} at ${since(t)}`)
+      }
       if (pct - lastPct >= 10) {
         lastPct = pct
         log(`download ${pct.toFixed(0)}%`)
       }
     })
+    clearInterval(beat)
     log(`LOAD ok ${since(t)} imageTokens=${tier.imageTokens} frames=${tier.framesPerVideo} seq=${tier.fixedSeqLen}`)
   } catch (err) {
+    clearInterval(beat)
     fail('load', err)
     log(`DONE fail total=${since(t0)}`)
     return
   }
 
+  let step = 'embedding'
+  const stepBeat = setInterval(() => log(`wait ${step}`), 60_000)
   const items: { name: string; vec: Float32Array }[] = []
   const photos: [string, number, number, number][] = [
     ['landscape-4x3', 640, 480, 0],
@@ -104,6 +122,7 @@ async function run(): Promise<void> {
   ]
   let failures = 0
   for (const [name, w, h, hue] of photos) {
+    step = `photo ${name}`
     t = performance.now()
     try {
       const [vec] = await embedWithVlm([[await drawImage(w, h, hue, name)]])
@@ -115,6 +134,7 @@ async function run(): Promise<void> {
     }
   }
 
+  step = 'video'
   t = performance.now()
   try {
     const frames = await Promise.all([0, 1, 2, 3].map((k) => drawImage(480, 270, k * 60, `frame ${k}`)))
@@ -128,6 +148,7 @@ async function run(): Promise<void> {
 
   const queries = ['a white circle on a red background', 'a tall portrait photo', 'a wide panorama', 'a video of colourful frames']
   for (const q of queries) {
+    step = `search "${q}"`
     t = performance.now()
     try {
       const [qv] = await embedTextWithVlm(['task: search result | query: ' + q])
@@ -139,6 +160,7 @@ async function run(): Promise<void> {
     }
   }
 
+  clearInterval(stepBeat)
   log(`DONE ${failures === 0 ? 'pass' : `fail failures=${failures}`} total=${since(t0)}`)
 }
 
