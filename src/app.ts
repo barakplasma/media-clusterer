@@ -256,7 +256,9 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  modelVariant: 'embeddinggemma2',
+  // EmbeddingGemma 2 runs only on WebGPU (src/vlmWorker.ts), so it is the
+  // default only where the browser has it.
+  modelVariant: 'gpu' in navigator ? 'embeddinggemma2' : 'smolvlm2-vision',
   enableLazyCaption: false,
   doNotTrack: false,
   customModelHost: '',

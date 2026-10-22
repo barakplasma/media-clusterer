@@ -75,6 +75,35 @@ type Gemma2Model = ((inputs: Record<string, unknown>) => Promise<{ sentence_embe
   dispose?: () => Promise<void>
 }
 
+// ORT's default WebGPU device uses the spec minimum of 128 MB per storage
+// buffer binding; the real adapter allows far more on desktop and less than
+// the model needs on some phones. Same fix as src/sapiens2.ts (and
+// AURA_LESSONS.md L8): create the device ourselves with the adapter's own
+// limits and hand it to ORT before the first session. Tracked locally because
+// reading env.backends.onnx.webgpu.device would itself create a default device.
+let gpuDevice: GPUDevice | null = null
+async function createGpuDevice(): Promise<GPUDevice | null> {
+  if (gpuDevice) return gpuDevice
+  const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
+  if (!adapter) return null
+  try {
+    gpuDevice = await adapter.requestDevice({
+      requiredLimits: {
+        maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+        maxBufferSize: adapter.limits.maxBufferSize
+      }
+    })
+  } catch {
+    return null
+  }
+  // A lost device (GPU reset, memory pressure) must not be reused on reload.
+  void gpuDevice.lost.then(() => {
+    gpuDevice = null
+  })
+  ;(env.backends.onnx as unknown as { webgpu: { device: GPUDevice } }).webgpu.device = gpuDevice
+  return gpuDevice
+}
+
 function post(message: VlmResponse, transfer: Transferable[] = []): void {
   ;(self as unknown as Worker).postMessage(message, transfer)
 }
@@ -102,6 +131,15 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
   }
   await dispose()
 
+  // Checked before any download: without WebGPU this tier cannot run at all.
+  const gpu = tier.family === 'embeddinggemma2' ? await createGpuDevice() : null
+  if (tier.family === 'embeddinggemma2' && !gpu) {
+    throw new Error(
+      `${tier.id} needs WebGPU, which this browser or device does not offer. ` +
+        'Pick SmolVLM2 or nomic in Settings.'
+    )
+  }
+
   const { AutoProcessor } = await import('@huggingface/transformers')
 
   const progress_callback = (e: { status?: string; file?: string; loaded?: number; total?: number }) => {
@@ -124,14 +162,24 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     // images and video frames only.
     const config = await AutoConfig.from_pretrained(tier.repo, { progress_callback })
     ;(config as unknown as { audio_config: unknown }).audio_config = null
-    const opts = { config, dtype: tier.dtype, progress_callback }
+    // No WASM fallback (see the WebGPU check above): both quantized exports
+    // (q4, q8) use GatherBlockQuantized, which onnxruntime-web implements only
+    // on WebGPU ("Could not find an implementation", verified in Chromium), and
+    // fp32 is ~1.75 GB.
     try {
-      model = (await AutoModel.from_pretrained(tier.repo, { ...opts, device: 'webgpu' })) as unknown as typeof model
-      device = 'webgpu'
-    } catch {
-      model = (await AutoModel.from_pretrained(tier.repo, { ...opts, device: 'wasm' })) as unknown as typeof model
-      device = 'wasm'
+      model = (await AutoModel.from_pretrained(tier.repo, {
+        config,
+        dtype: tier.dtype,
+        progress_callback,
+        device: 'webgpu'
+      })) as unknown as typeof model
+    } catch (err) {
+      // Release whatever the half-built sessions allocated before reporting.
+      gpu!.destroy()
+      gpuDevice = null
+      throw err
     }
+    device = 'webgpu'
     loadedTier = tier
     post({ type: 'loaded', id, device, visionDim: tier.visionDim })
     return
