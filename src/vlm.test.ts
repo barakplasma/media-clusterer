@@ -208,6 +208,10 @@ describe('supportsTextSearch', () => {
     expect(desktop.imageTokens).toBe(280)
     expect(phone.imageTokens).toBe(70)
     expect(phone.framesPerVideo).toBeLessThan(desktop.framesPerVideo)
+    // The fixed length must hold the longest input (a video) untruncated:
+    // per frame boi + soft tokens + eoi, plus bos/eos.
+    expect(phone.fixedSeqLen).toBeGreaterThanOrEqual(phone.framesPerVideo * (phone.imageTokens! + 2) + 2)
+    expect(desktop.fixedSeqLen).toBeUndefined()
     // A different budget embeds differently: vectors must never share a cache.
     expect(phone.cachePrefix).not.toBe(desktop.cachePrefix)
     // Tiers without an override are the same object on every device.

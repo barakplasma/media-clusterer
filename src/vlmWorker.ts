@@ -69,8 +69,16 @@ type Gemma2Processor = (
   text: string[] | null,
   images?: RawImage[][] | null,
   audio?: null,
-  videos?: RawVideo[] | null
+  videos?: RawVideo[] | null,
+  tokenizerOptions?: Record<string, unknown>
 ) => Promise<Record<string, unknown>>
+
+/** Tokenizer options pinning every input to the tier's fixed length, if it has one. */
+function seqOptions(tier: VlmTier): Record<string, unknown> {
+  return tier.fixedSeqLen
+    ? { padding: 'max_length', max_length: tier.fixedSeqLen, truncation: true }
+    : {}
+}
 type Gemma2Model = ((inputs: Record<string, unknown>) => Promise<{ sentence_embedding: VisionOutput }>) & {
   dispose?: () => Promise<void>
 }
@@ -200,7 +208,9 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     // Build the text path's GPU pipelines now, while memory is free, instead
     // of at the first search after a whole folder has been embedded.
     if (tier.queryPrefix) {
-      await embedGemma2(await (processor as unknown as Gemma2Processor)([tier.queryPrefix + 'warm up']))
+      await embedGemma2(
+        await (processor as unknown as Gemma2Processor)([tier.queryPrefix + 'warm up'], null, null, null, seqOptions(tier))
+      )
     }
     post({ type: 'loaded', id, device, visionDim: tier.visionDim })
     return
@@ -275,10 +285,11 @@ async function embedGroupsGemma2(id: number, groups: ImageBitmap[][]): Promise<v
     for (const b of group) b.close()
     // Frames arrive without timestamps; space them one second apart, the
     // model's default sampling rate.
+    const opts = seqOptions(loadedTier!)
     const inputs =
       frames.length === 1
-        ? await run(null, [frames])
-        : await run(null, null, null, [new RawVideo(frames, frames.length)])
+        ? await run(null, [frames], null, null, opts)
+        : await run(null, null, null, [new RawVideo(frames, frames.length)], opts)
     vectors.push(await embedGemma2(inputs))
   }
   post(
@@ -293,7 +304,8 @@ async function embedText(id: number, texts: string[]): Promise<void> {
   }
   const run = processor as unknown as Gemma2Processor
   const vectors: Float32Array[] = []
-  for (const text of texts) vectors.push(await embedGemma2(await run([text])))
+  const opts = seqOptions(loadedTier)
+  for (const text of texts) vectors.push(await embedGemma2(await run([text], null, null, null, opts)))
   post(
     { type: 'embedded', id, vectors },
     vectors.map((v) => v.buffer)

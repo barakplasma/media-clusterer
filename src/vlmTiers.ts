@@ -101,8 +101,15 @@ const TIERS: Record<string, VlmTier> = {
 // 70 tokens (~630 patches) cuts that ~16x. Its own cache prefix, because a
 // different budget embeds the same photo differently (AGENT.md).
 // shortcut: UA sniffing, upgrade to the adapter's limits once pickVlmTier() (M6) exists.
+// fixedSeqLen fits the longest input, a 4-frame video: 4 × (70 soft tokens +
+// boi/eoi) + bos/eos = 292. Queries and photos are padded up to it.
 const PHONE_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
-  embeddinggemma2: { imageTokens: 70, framesPerVideo: 4, cachePrefix: '@embeddinggemma2-q4-t70/' }
+  embeddinggemma2: {
+    imageTokens: 70,
+    framesPerVideo: 4,
+    fixedSeqLen: 296,
+    cachePrefix: '@embeddinggemma2-q4-t70-s296/'
+  }
 }
 const IS_PHONE =
   typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)

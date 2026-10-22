@@ -77,6 +77,10 @@ export interface VlmTier {
   // Soft-token budget per image (EmbeddingGemma 2: 70–1120, default 280).
   // Attention memory grows with its square, so phones get a smaller one.
   imageTokens?: number
+  // Pad every text-model input to this many tokens. ONNX Runtime WebGPU builds
+  // new GPU pipelines per sequence length; a phone ran out of device memory on
+  // the second length it saw. One fixed length means one pipeline set.
+  fixedSeqLen?: number
 }
 
 /** Request sent from the main thread to the VLM worker. */
