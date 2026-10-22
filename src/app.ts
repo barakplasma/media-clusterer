@@ -2307,6 +2307,11 @@ async function embedAll(files: PhotoFile[]) {
       setStatus(
         `Low memory (${(pressure.freeRatio * 100).toFixed(0)}% free) — stopping at ${done} / ${files.length} files…`
       )
+      // console.error reaches Bugsink (src/sentry.ts); a status line on a phone does not.
+      console.error(
+        `Embedding stopped for low memory: ${state.settings.modelVariant}, ${done}/${files.length} files, ` +
+          `${(pressure.freeRatio * 100).toFixed(0)}% JS heap free`
+      )
       await cachePutBatch(writeQueue)
       writeQueue.length = 0
       return vectors.slice(0, done)
@@ -2457,6 +2462,9 @@ async function processFiles(files: PhotoFile[]) {
       // Failures only reach the console otherwise, which a phone can't show.
       const why = embedFailReason ? `: ${embedFailReason}` : ''
       showToast(`${embedFailed.size} of ${files.length} files could not be embedded${why}`, 'warn', 12000)
+      console.error(
+        `Embedding failed for ${embedFailed.size}/${files.length} files (${state.settings.modelVariant})${why}`
+      )
     }
     resizeCanvas()
     setStatus('Arranging layout…')
