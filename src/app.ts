@@ -2337,6 +2337,11 @@ async function processFiles(files: PhotoFile[]) {
   // Without this, a render triggered during async embedding would iterate old point indices
   // against the new (possibly shorter) files array, causing objectURL access on undefined.
   state.points = []
+  // Indices into the old list must not outlive it: a breadcrumb/date filter
+  // replaces the files while the viewer is open, and its ‹ › or a key press
+  // then indexed past the new list (Bugsink: "reading 'name'" / "'0'").
+  state.lastViewedIndex = null
+  if (dom.modal.open) closeModal()
 
   state.files = files
 
@@ -4313,6 +4318,9 @@ dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1))
 dom.modalNextBtn.addEventListener('click', () => navigateSequential(1))
 
 document.addEventListener('keydown', (e) => {
+  // Chrome fires keydown with no key for autofill; e.key.toLowerCase() threw
+  // (Bugsink: 13 events of "reading 'toLowerCase'").
+  if (!e.key) return
   const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName ?? '')
   // Another dialog (settings, about, shortcuts) owns the keyboard while open.
   const otherDialog = document.querySelector('dialog[open]:not(#modal)')
