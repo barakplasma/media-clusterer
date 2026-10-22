@@ -1961,6 +1961,7 @@ async function embedAll(files: PhotoFile[]) {
   const isRemote = state.settings.modelVariant === 'openai'
   const isVlm = isVlmVariant(state.settings.modelVariant)
   const reportedRemoteErrors = new Set<string>()
+  let gpuLost = false
   // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel
   // session speedup. The transformers path adapts: the working batch size
   // halves after a GPU failure and creeps back up after sustained successes.
@@ -2230,6 +2231,10 @@ async function embedAll(files: PhotoFile[]) {
       } catch (err) {
         console.warn('Batch inference failed, filling zeros:', (err as Error).message)
         embedFailReason ||= (err as Error).message
+        // A lost GPU device never comes back for this page: every later
+        // batch would fail the same way (a Pixel 7a log had one reset
+        // followed by a failure per remaining photo).
+        if (/device[^.]*\blost|DEVICE_LOST/i.test((err as Error).message)) gpuLost = true
         // A remote failure usually repeats for every remaining batch (a bad key
         // stays bad), so without a toast the whole run silently zero-fills.
         // One per error kind keeps that from becoming a wall of notifications.
@@ -2301,6 +2306,20 @@ async function embedAll(files: PhotoFile[]) {
         : ''
     setStatus(`Embedding ${done} / ${files.length} images…${eta}${fromCache}`)
     setProgress(10 + (done / files.length) * 80) // 10% to 90%
+
+    if (gpuLost) {
+      setStatus(`The GPU reset — stopped at ${done} / ${files.length} files. Reload the page to retry.`)
+      showToast(
+        `The GPU reset (device lost) after ${done} of ${files.length} files. ` +
+          'Reload the page to retry, or pick SmolVLM2 in Settings on this device.',
+        'error',
+        15000
+      )
+      console.error(`GPU device lost while embedding: ${state.settings.modelVariant}, ${done}/${files.length} files`)
+      await cachePutBatch(writeQueue)
+      writeQueue.length = 0
+      return vectors.slice(0, done)
+    }
 
     const pressure = getMemoryPressure()
     if (pressure !== null && pressure.freeRatio < 0.2) {

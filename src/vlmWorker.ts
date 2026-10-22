@@ -83,33 +83,12 @@ type Gemma2Model = ((inputs: Record<string, unknown>) => Promise<{ sentence_embe
   dispose?: () => Promise<void>
 }
 
-// ORT's default WebGPU device uses the spec minimum of 128 MB per storage
-// buffer binding; the real adapter allows far more on desktop and less than
-// the model needs on some phones. Same fix as src/sapiens2.ts (and
-// AURA_LESSONS.md L8): create the device ourselves with the adapter's own
-// limits and hand it to ORT before the first session. Tracked locally because
-// reading env.backends.onnx.webgpu.device would itself create a default device.
-let gpuDevice: GPUDevice | null = null
-async function createGpuDevice(): Promise<GPUDevice | null> {
-  if (gpuDevice) return gpuDevice
-  const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
-  if (!adapter) return null
-  try {
-    gpuDevice = await adapter.requestDevice({
-      requiredLimits: {
-        maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
-        maxBufferSize: adapter.limits.maxBufferSize
-      }
-    })
-  } catch {
-    return null
-  }
-  // A lost device (GPU reset, memory pressure) must not be reused on reload.
-  void gpuDevice.lost.then(() => {
-    gpuDevice = null
-  })
-  ;(env.backends.onnx as unknown as { webgpu: { device: GPUDevice } }).webgpu.device = gpuDevice
-  return gpuDevice
+// Only probes for an adapter. Handing ORT our own GPUDevice (as
+// src/sapiens2.ts does) does not work with this ORT build: it ignores
+// env.webgpu.device and creates its own (microsoft/onnxruntime#26107), so a
+// device made here would just sit beside ORT's, holding phone GPU memory.
+async function hasWebGpu(): Promise<boolean> {
+  return !!(await navigator.gpu?.requestAdapter().catch(() => null))
 }
 
 function post(message: VlmResponse, transfer: Transferable[] = []): void {
@@ -140,8 +119,7 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
   await dispose()
 
   // Checked before any download: without WebGPU this tier cannot run at all.
-  const gpu = tier.family === 'embeddinggemma2' ? await createGpuDevice() : null
-  if (tier.family === 'embeddinggemma2' && !gpu) {
+  if (tier.family === 'embeddinggemma2' && !(await hasWebGpu())) {
     throw new Error(
       `${tier.id} needs WebGPU, which this browser or device does not offer. ` +
         'Pick SmolVLM2 or nomic in Settings.'
@@ -184,25 +162,18 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     // (q4, q8) use GatherBlockQuantized, which onnxruntime-web implements only
     // on WebGPU ("Could not find an implementation", verified in Chromium), and
     // fp32 is ~1.75 GB.
-    try {
-      model = (await AutoModel.from_pretrained(tier.repo, {
-        config,
-        dtype: tier.dtype,
-        progress_callback,
-        device: 'webgpu',
-        session_options: {
-          // The default 'bucket' cache keeps every freed GPU buffer for reuse.
-          // Photos vary in shape, so it grew until a Pixel 7a had no device
-          // memory left for the first search (VK_ERROR_OUT_OF_DEVICE_MEMORY).
-          executionProviders: [{ name: 'webgpu', storageBufferCacheMode: 'lazyRelease' }]
-        }
-      })) as unknown as typeof model
-    } catch (err) {
-      // Release whatever the half-built sessions allocated before reporting.
-      gpu!.destroy()
-      gpuDevice = null
-      throw err
-    }
+    model = (await AutoModel.from_pretrained(tier.repo, {
+      config,
+      dtype: tier.dtype,
+      progress_callback,
+      device: 'webgpu',
+      session_options: {
+        // The default 'bucket' cache keeps every freed GPU buffer for reuse.
+        // Photos vary in shape, so it grew until a Pixel 7a had no device
+        // memory left for the first search (VK_ERROR_OUT_OF_DEVICE_MEMORY).
+        executionProviders: [{ name: 'webgpu', storageBufferCacheMode: 'lazyRelease' }]
+      }
+    })) as unknown as typeof model
     device = 'webgpu'
     loadedTier = tier
     // Build the text path's GPU pipelines now, while memory is free, instead
