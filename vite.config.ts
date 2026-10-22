@@ -42,6 +42,10 @@ export default defineConfig({
   plugins: [excludeOrtWasm],
   build: {
     sourcemap: true,
+    rollupOptions: {
+      // device-test.html: headless EmbeddingGemma 2 smoke test for Firebase Test Lab.
+      input: { main: 'index.html', deviceTest: 'device-test.html' },
+    },
   },
   test: {
     globals: true,
