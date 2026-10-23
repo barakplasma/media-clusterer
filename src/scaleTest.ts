@@ -359,20 +359,14 @@ async function run(): Promise<void> {
     }).observe(toastEl, { childList: true, characterData: true, subtree: true, attributes: true })
 
   const debug = await waitFor('window.__debug', () => (window as Window & { __debug?: Debug }).__debug, 60_000)
-  const btn = await waitFor(
-    'Load model button',
-    () => {
-      const b = document.getElementById('load-model-btn') as HTMLButtonElement | null
-      return b && !b.hidden && !b.disabled ? b : null
-    },
-    60_000
-  )
-
-  // ── Load, as a user would ──
+  // ── Load, as the app does: it starts loading on page open. The button is
+  // only clickable when that failed (its retry state), so click it then.
   let t = now()
   let beatLabel = 'load'
   const beat = setInterval(() => log(`wait ${beatLabel} ${secs(t)} ${memory()}`), 30_000)
-  btn.click()
+  const btn = document.getElementById('load-model-btn') as HTMLButtonElement
+  log(`load-button hidden=${btn.hidden} disabled=${btn.disabled} phase=${debug.state.phase} status="${text('status')}"`)
+  if (!btn.hidden && !btn.disabled) btn.click()
   try {
     await waitFor('model_ready', () => debug.state.phase === 'model_ready' || /fail|error/i.test(lastStatus), 30 * 60_000)
   } finally {
