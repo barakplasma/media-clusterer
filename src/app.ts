@@ -9,6 +9,8 @@ import * as druid from '@saehrimnir/druidjs'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
 import { loadVlm, embedWithVlm, embedTextWithVlm, disposeVlm, vlmDevice } from './vlm'
+import { rankModels, rankProjections, strike, type DeviceCaps } from './modelRanking'
+import { PROJECTION_RANK } from './benchmarkRanks'
 import {
   getVlmTier,
   isVlmVariant,
@@ -271,7 +273,8 @@ const DEFAULT_SETTINGS: Settings = {
   drawBudget: IS_MOBILE ? 150 : 400,
   slideshowSeconds: 3,
   enableTextSearch: true, // the default model embeds text itself, so search costs no extra download
-  projectionMethod: 'TSNE',
+  // The benchmark's best projection; a saved choice still wins.
+  projectionMethod: PROJECTION_RANK[0],
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
@@ -3470,7 +3473,6 @@ function updateTextSearchAvailability() {
   if (!ok) dom.enableSearchToggle.checked = false
 }
 updateTextSearchAvailability()
-if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod
 dom.batchSizeInput.value = state.settings.batchSize.toString()
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString()
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly
@@ -3500,24 +3502,64 @@ dom.customModelHostInput.value = state.settings.customModelHost
   }
 }
 
-dom.modelSelect.value = state.settings.modelVariant
-
-// Disable the Chrome AI option on unsupported browsers/platforms at startup
-getChromeAIAvailability().then((avail) => {
-  chromeAIAvailability = avail
-  const chromeAIOption = dom.modelSelect.querySelector<HTMLOptionElement>(
-    'option[value="chrome-ai"]'
+// Order both lists by the benchmark (src/modelRanking.ts): the best model this
+// device can run on top as the recommendation, the rest best to worst, and
+// models it cannot run struck through. Labels are captured once, so a
+// re-render never stacks markers.
+const optionLabels = (select: HTMLSelectElement) =>
+  new Map([...select.querySelectorAll('option')].map((o) => [o.value, { text: o.textContent ?? o.value, title: o.title }]))
+const modelLabels = optionLabels(dom.modelSelect)
+const renderModelOptions = (caps: DeviceCaps) => {
+  const ranked = rankModels([...modelLabels.keys()] as ModelVariant[], caps)
+  dom.modelSelect.replaceChildren(
+    ...ranked.map(({ value, blocked, recommended }) => {
+      const { text, title } = modelLabels.get(value)!
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.title = title
+      if (blocked) {
+        opt.textContent = `${strike(text)} — ${blocked}`
+        opt.disabled = true
+        opt.title = `Can't run on this device: ${blocked}.`
+      } else {
+        opt.textContent = recommended ? `★ ${text} — recommended for this device` : text
+      }
+      return opt
+    })
   )
-  if (!chromeAIOption) return
-  if (avail === 'unavailable') {
-    chromeAIOption.disabled = true
-    chromeAIOption.textContent += ' — not available on this browser'
-    // If the saved setting was chrome-ai but it's unavailable, fall back to sapiens2-fp16
-    if (state.settings.modelVariant === 'chrome-ai') {
-      state.settings.modelVariant = 'sapiens2-fp16'
-      dom.modelSelect.value = 'sapiens2-fp16'
-      saveSettings()
-    }
+  dom.modelSelect.value = state.settings.modelVariant
+  return ranked
+}
+// Until the checks below resolve, assume what navigator exposes.
+renderModelOptions({ webgpu: 'gpu' in navigator, chromeAI: true })
+
+if (dom.projectionSelect) {
+  const projectionLabels = optionLabels(dom.projectionSelect)
+  dom.projectionSelect.replaceChildren(
+    ...rankProjections([...projectionLabels.keys()] as ProjectionMethod[]).map(({ value, recommended }) => {
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.textContent = `${recommended ? '★ ' : ''}${projectionLabels.get(value)!.text}${recommended ? ' — best on benchmark' : ''}`
+      return opt
+    })
+  )
+  dom.projectionSelect.value = state.settings.projectionMethod
+}
+
+// The real capabilities: an adapter behind navigator.gpu, and Gemini Nano.
+Promise.all([
+  navigator.gpu?.requestAdapter().catch(() => null) ?? Promise.resolve(null),
+  getChromeAIAvailability()
+]).then(([adapter, avail]) => {
+  chromeAIAvailability = avail
+  const ranked = renderModelOptions({ webgpu: !!adapter, chromeAI: avail !== 'unavailable' })
+  // A saved Chrome AI choice that cannot run falls back to the recommendation.
+  // (EmbeddingGemma 2 without WebGPU is handled at load, for the session only.)
+  const recommended = ranked.find((o) => o.recommended)
+  if (state.settings.modelVariant === 'chrome-ai' && avail === 'unavailable' && recommended) {
+    state.settings.modelVariant = recommended.value
+    dom.modelSelect.value = recommended.value
+    saveSettings()
   }
 })
 
