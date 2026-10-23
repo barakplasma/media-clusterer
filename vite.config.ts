@@ -51,7 +51,7 @@ export default defineConfig({
     // ran alongside the real ones — doubling the suite and failing
     // intermittently against stale code. The build script no longer emits
     // them; this makes a stray dist/ harmless regardless.
-    exclude: ['**/node_modules/**', 'dist/**'],
+    exclude: ['**/node_modules/**', 'dist/**', 'e2e/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html']

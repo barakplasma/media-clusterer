@@ -1,0 +1,36 @@
+name: E2E (WebGPU)
+
+# EmbeddingGemma 2 end to end on a real GPU: GitHub's macOS arm64 runners give
+# Chrome the Apple GPU through WebGPU (Linux/Windows runners only get SwiftShader).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: e2e (${{ matrix.profile }})
+    runs-on: macos-14
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [phone, desktop]
+    # Only the phone profile is required; desktop is informational.
+    continue-on-error: ${{ matrix.profile == 'desktop' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright test --project=${{ matrix.profile }}
