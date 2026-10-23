@@ -53,10 +53,19 @@ public class Eg2DeviceTest {
         UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
         Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
 
-        Log.i(TAG, "harness opening " + url + " in " + browser);
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url))
                 .setPackage(browser)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        // Some GPUs (Pixel 10's PowerVR) are on Chrome's WebGPU blocklist;
+        // -e flag enable-unsafe-webgpu switches it on in chrome://flags first.
+        String flag = args.getString("flag", "");
+        if (!flag.isEmpty()) {
+            ctx.startActivity(intent);
+            device.wait(Until.hasObject(By.pkg(browser).depth(0)), 30_000);
+            enableFlag(device, browser, flag);
+        }
+
+        Log.i(TAG, "harness opening " + url + " in " + browser);
         ctx.startActivity(intent);
         device.wait(Until.hasObject(By.pkg(browser).depth(0)), 30_000);
 
@@ -143,6 +152,83 @@ public class Eg2DeviceTest {
             }
         }
         return done;
+    }
+
+    private static final Pattern NODE = Pattern.compile(
+            "text=\"([^\"]*)\" resource-id=\"([^\"]*)\" class=\"([^\"]*)\" package=\"([^\"]*)\" content-desc=\"([^\"]*)\".*?bounds=\"([^\"]*)\"");
+
+    /** One compact line per non-empty node of the browser window. */
+    private static void logNodes(UiDevice device, String pkg) {
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            device.dumpWindowHierarchy(out);
+            Matcher m = NODE.matcher(out.toString("UTF-8"));
+            int n = 0;
+            while (m.find() && n < 150) {
+                if (!m.group(4).equals(pkg) || (m.group(1).isEmpty() && m.group(5).isEmpty() && m.group(2).isEmpty())) continue;
+                Log.i(TAG, "harness node " + m.group(3).replace("android.widget.", "") + " id=" + m.group(2).replace(pkg + ":id/", "")
+                        + " text='" + m.group(1) + "' desc='" + m.group(5) + "' " + m.group(6));
+                n++;
+            }
+        } catch (Exception e) {
+            Log.i(TAG, "harness node dump failed " + e);
+        }
+    }
+
+    /** Set chrome://flags/#<flag> to Enabled and relaunch the browser. */
+    private static void enableFlag(UiDevice device, String browser, String flag) {
+        for (int i = 0; i < 4; i++) {
+            dismissDialogs(device);
+            SystemClock.sleep(2_000);
+        }
+        UiObject2 bar = device.wait(Until.findObject(By.res(browser, "url_bar")), 20_000);
+        if (bar == null) bar = device.findObject(By.res(browser, "search_box_text"));
+        if (bar == null) {
+            Log.i(TAG, "harness flag: no url bar");
+            scanHierarchy(device, new LinkedHashSet<>(), true);
+            return;
+        }
+        bar.click();
+        SystemClock.sleep(1_000);
+        UiObject2 edit = device.wait(Until.findObject(By.res(browser, "url_bar")), 10_000);
+        // The #anchor scrolls the page to this flag and highlights it.
+        String flagsUrl = "chrome://flags/#" + flag;
+        edit.setText(flagsUrl);
+        // On the Pixel 10 the Enter key only opened the suggestion list; tap
+        // the navigation suggestion when there is one.
+        UiObject2 suggestion = device.wait(Until.findObject(By.res(browser, "line_1").text(flagsUrl)), 3_000);
+        if (suggestion != null) suggestion.click();
+        else device.pressEnter();
+        SystemClock.sleep(6_000);
+        // The flag's <select> is a plain View whose text is its current value,
+        // just below the "<flag>_name" title.
+        UiObject2 name = device.wait(Until.findObject(By.res(flag + "_name")), 15_000);
+        UiObject2 dropdown = null;
+        if (name != null) {
+            int top = name.getVisibleBounds().top;
+            for (UiObject2 v : device.findObjects(By.pkg(browser).text(Pattern.compile("Default|Enabled|Disabled")))) {
+                int t = v.getVisibleBounds().top;
+                if (t > top && (dropdown == null || t < dropdown.getVisibleBounds().top)) dropdown = v;
+            }
+        }
+        Log.i(TAG, "harness flag: name=" + (name != null) + " value=" + (dropdown == null ? "none" : dropdown.getText()));
+        if (dropdown == null) {
+            Log.i(TAG, "harness flag: no dropdown");
+            logNodes(device, browser);
+            return;
+        }
+        dropdown.click();
+        UiObject2 enabled = device.wait(Until.findObject(By.text("Enabled")), 10_000);
+        if (enabled == null) {
+            Log.i(TAG, "harness flag: no Enabled option");
+            return;
+        }
+        enabled.click();
+        UiObject2 relaunch = device.wait(Until.findObject(By.text(Pattern.compile("(?i)relaunch"))), 10_000);
+        Log.i(TAG, "harness flag " + flag + " enabled, relaunch=" + (relaunch != null));
+        if (relaunch != null) relaunch.click();
+        else logNodes(device, browser);
+        SystemClock.sleep(10_000);
     }
 
     // First-run buttons by id, whatever this Chrome/Chromium build labels them.

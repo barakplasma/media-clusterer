@@ -32,8 +32,12 @@ on:
       browser:
         description: chrome = the device's own Chrome; chromium = sideload a Chromium snapshot (for old Chrome images)
         type: choice
-        default: chrome
+        default: chromium
         options: [chrome, chromium]
+      unsafe_webgpu:
+        description: Turn on chrome://flags/#enable-unsafe-webgpu first (Pixel 10's PowerVR GPU is on Chrome's WebGPU blocklist)
+        type: boolean
+        default: true
       url:
         description: Page to open (default this branch's Cloudflare preview /device-test.html)
         required: false
@@ -98,6 +102,7 @@ jobs:
           DEVICE: ${{ inputs.device }}
           BROWSER: ${{ inputs.browser }}
           URL: ${{ inputs.url }}
+          FLAG: ${{ inputs.unsafe_webgpu && 'enable-unsafe-webgpu' || '' }}
           BRANCH: ${{ github.ref_name }}
           BUCKET: ${{ vars.GCP_RESULTS_BUCKET }}
         run: |
@@ -122,7 +127,7 @@ jobs:
             "${extra[@]}" \
             --device "model=$model,version=$version,locale=en,orientation=portrait" \
             --timeout 45m --no-record-video \
-            --environment-variables "^;^url=$URL;browser=$pkg" \
+            --environment-variables "^;^url=$URL;browser=$pkg;flag=$FLAG" \
             --results-bucket="$BUCKET" --results-dir="$dir"
           status=$?
           set -e
