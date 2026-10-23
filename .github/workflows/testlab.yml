@@ -27,17 +27,15 @@ on:
       device:
         description: Test Lab model:API
         type: choice
-        default: frankel:36 (Pixel 10)
-        options: ['frankel:36 (Pixel 10)', 'lynx:33 (Pixel 7a)']
+        default: lynx:33 (Pixel 7a)
+        # Pixel 10 is left out: its PowerVR driver is on Chrome's WebGPU
+        # blocklist ("PowerVR*25.1*"), so real Pixel 10s get no adapter either.
+        options: ['lynx:33 (Pixel 7a)']
       browser:
         description: chrome = the device's own Chrome; chromium = sideload a Chromium snapshot (for old Chrome images)
         type: choice
         default: chromium
         options: [chrome, chromium]
-      unsafe_webgpu:
-        description: Turn on chrome://flags/#enable-unsafe-webgpu first (Pixel 10's PowerVR GPU is on Chrome's WebGPU blocklist)
-        type: boolean
-        default: true
       url:
         description: Page to open (default this branch's Cloudflare preview /device-test.html)
         required: false
@@ -102,7 +100,6 @@ jobs:
           DEVICE: ${{ inputs.device }}
           BROWSER: ${{ inputs.browser }}
           URL: ${{ inputs.url }}
-          FLAG: ${{ inputs.unsafe_webgpu && 'enable-unsafe-webgpu' || '' }}
           BRANCH: ${{ github.ref_name }}
           BUCKET: ${{ vars.GCP_RESULTS_BUCKET }}
         run: |
@@ -127,7 +124,7 @@ jobs:
             "${extra[@]}" \
             --device "model=$model,version=$version,locale=en,orientation=portrait" \
             --timeout 45m --no-record-video \
-            --environment-variables "^;^url=$URL;browser=$pkg;flag=$FLAG" \
+            --environment-variables "^;^url=$URL;browser=$pkg" \
             --results-bucket="$BUCKET" --results-dir="$dir"
           status=$?
           set -e
