@@ -18,7 +18,7 @@ const { values: args } = parseArgs({
   options: {
     coco: { type: 'string' },
     out: { type: 'string', default: 'data/coco' },
-    per: { type: 'string', default: '20' },
+    per: { type: 'string', default: '6' },
     minArea: { type: 'string', default: '0.15' },
     minPer: { type: 'string', default: '5' }
   }

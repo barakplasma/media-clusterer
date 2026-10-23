@@ -18,17 +18,20 @@ files the browser downloads), which is far faster than SwiftShader WebGPU.
 curl -L -o holidays.zip https://www.kaggle.com/api/v1/datasets/download/vadimshabashov/inria-holidays
 unzip holidays.zip -d data/holidays     # images/ + groundtruth.json
 
-node bench/embed.mjs --data data/holidays --out bench/out
-node bench/metrics.mjs --data data/holidays --emb bench/out --json bench/out/results.json
+# The scored set is the first 100 scenes (274 photos): enough to separate
+# the models, a few hours on a laptop CPU. metrics.mjs scores only the images
+# in --data, so a folder with just those (symlinks + their groundtruth) works.
+node bench/embed.mjs --data data/holidays-300 --out bench/out
+node bench/metrics.mjs --data data/holidays-300 --emb bench/out --json bench/out/holidays.json
 ```
 
 ## COCO: what is in the photo, and text search
 
-`bench/data/coco-subset.json` lists 870 COCO val2017 images with one clear
-subject (54 categories, up to 20 each) and one caption each.
+`bench/data/coco-subset.json` lists 322 COCO val2017 images with one clear
+subject (54 categories, up to 6 each) and one caption each.
 
 ```bash
-node bench/fetch-coco-subset.mjs --out data/coco      # ~140 MB of images, no full COCO download
+node bench/fetch-coco-subset.mjs --out data/coco      # ~50 MB of images, no full COCO download
 node bench/embed.mjs --data data/coco --out bench/out-coco
 node bench/metrics.mjs --data data/coco --emb bench/out-coco --json bench/out-coco/results.json
 ```

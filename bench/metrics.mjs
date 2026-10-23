@@ -50,12 +50,18 @@ try {
   // Not captioned.
 }
 
+// Score only the images in --data, so vectors cached for a larger set of the
+// same images can be reused on a subset.
+const present = new Set(await readdir(join(args.data, 'images')))
+
 async function loadEmbeddings(id) {
   const meta = JSON.parse(await readFile(join(args.emb, `${id}.json`), 'utf8'))
   const buf = await readFile(join(args.emb, `${id}.f32`))
   const flat = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4)
-  const rows = meta.names.map((_, i) => flat.subarray(i * meta.dim, (i + 1) * meta.dim))
-  return { ...meta, rows }
+  const keep = meta.names.map((n, i) => [n, i]).filter(([n]) => present.has(n))
+  if (keep.length < present.size - (present.has('list.json') ? 1 : 0)) throw new Error(`${id}: vectors cover ${keep.length} of the ${present.size} images in --data`)
+  const rows = keep.map(([, i]) => flat.subarray(i * meta.dim, (i + 1) * meta.dim))
+  return { ...meta, names: keep.map(([n]) => n), rows }
 }
 
 // ── Ranking metrics over any similarity ─────────────────────────────────────
