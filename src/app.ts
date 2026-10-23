@@ -29,6 +29,7 @@ import {
 } from './modelFallback'
 import {
   getChromeAIAvailability,
+  downloadChromeAI,
   ChromeAISessionManager,
   DEFAULT_DESCRIBE_PROMPT
 } from './chromeAI'
@@ -387,6 +388,7 @@ let modelFallbackReason: Sapiens2FallbackReason | undefined
 let pendingSapiens2Buffer: ArrayBuffer | null = null
 let sapiens2Session: Sapiens2Session | null = null // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null // Chrome built-in AI session manager
+let chromeAIDownload: Promise<void> | null = null // Gemini Nano download started by a Load Model click
 let remoteConfig: OpenAICompatConfig | null = null // Remote OpenAI-compatible endpoint
 let vlmTier: VlmTier | null = null // Loaded SmolVLM2 tier (worker-backed), see ADR-0001
 
@@ -1629,10 +1631,31 @@ async function loadModelOnce(signal?: AbortSignal) {
       return
     }
 
-    if (availability === 'downloadable' || availability === 'downloading') {
+    // Chrome starts the download only from a user gesture (the Load Model
+    // click, see downloadChromeAI); the auto-load at startup has none.
+    if (availability === 'downloadable' && !chromeAIDownload) {
+      setStatus('Gemini Nano needs a one-time download, managed by Chrome. Tap "Load Model" to start it.')
+      dom.loadModelBtn.hidden = false
+      dom.loadModelBtn.disabled = false
+      state.phase = 'idle'
+      return
+    }
+
+    if (chromeAIDownload && availability !== 'available') {
+      try {
+        await chromeAIDownload
+      } catch (err) {
+        chromeAIDownload = null
+        setStatus(`Gemini Nano download failed: ${(err as Error).message}. Tap "Load Model" to retry.`)
+        dom.loadModelBtn.hidden = false
+        dom.loadModelBtn.disabled = false
+        state.phase = 'idle'
+        return
+      }
+    } else if (availability === 'downloadable' || availability === 'downloading') {
       setStatus('Chrome AI model downloading (managed by Chrome, this happens once)…')
       let polls = 0
-      while (polls < 60) {
+      while (polls < 300) {
         signal?.throwIfAborted()
         await new Promise((r) => setTimeout(r, 2000))
         signal?.throwIfAborted()
@@ -4027,6 +4050,10 @@ if (_savedKeys) {
 dom.loadModelBtn.addEventListener('click', async () => {
   if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) return
   dom.loadModelBtn.disabled = true
+  // Must run before any await: create() needs this click's user activation.
+  if (state.settings.modelVariant === 'chrome-ai' && !chromeAIDownload && 'LanguageModel' in self) {
+    chromeAIDownload = downloadChromeAI((f) => setStatus(`Downloading Gemini Nano… ${(f * 100).toFixed(0)}%`))
+  }
   await loadModel()
 })
 
