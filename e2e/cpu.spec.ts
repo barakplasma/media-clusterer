@@ -31,7 +31,9 @@ test('viewer mode lays out photos without loading a model', async ({ page }) => 
 test('a saved WebGPU-only model falls back when there is no adapter', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('mc_settings', JSON.stringify({ modelVariant: 'embeddinggemma2' })))
   await page.goto('/')
-  await expect(page.locator('#toast')).toContainText('needs WebGPU')
+  // Chrome hides blocklisted GPUs; the modal says how to turn WebGPU on.
+  await expect(page.locator('#webgpu-help-modal')).toBeVisible()
+  await expect(page.locator('#webgpu-help-url')).toHaveText('chrome://flags/#enable-unsafe-webgpu')
   expect(await page.evaluate(() => window.__debug.state.settings.modelVariant)).toBe('smolvlm2-vision')
   // The saved choice survives a settings write.
   await page.locator('#density-slider').dispatchEvent('input')
