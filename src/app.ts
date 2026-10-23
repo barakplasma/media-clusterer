@@ -337,7 +337,7 @@ const WEBGPU_HELP_KEY = 'mc_hideWebGpuHelp'
  */
 function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
   const ua = navigator.userAgent
-  if (!('gpu' in navigator) || !/\bChrome\//.test(ua)) return false
+  if (!('gpu' in navigator) || !/Chrome\//.test(ua)) return false
   try {
     if (localStorage.getItem(WEBGPU_HELP_KEY)) return false
   } catch (_) {}
