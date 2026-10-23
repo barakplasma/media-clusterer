@@ -40,7 +40,7 @@ public class Eg2DeviceTest {
     private static final long TIMEOUT_MS = 40 * 60 * 1000;
     // Chrome first-run and promo buttons, across versions.
     private static final Pattern DISMISS = Pattern.compile(
-            "(?i)(accept & continue|accept and continue|use without an account|continue as guest|"
+            "(?i)(accept & continue|accept and continue|use without an account|continue as guest|stay signed out|"
                     + "no thanks|no, thanks|not now|skip|got it|ok|dismiss|allow)");
 
     @Test
@@ -145,7 +145,20 @@ public class Eg2DeviceTest {
         return done;
     }
 
+    // First-run buttons by id, whatever this Chrome/Chromium build labels them.
+    private static final Pattern FRE_IDS = Pattern.compile(
+            ".*:id/(signin_fre_dismiss_button|terms_accept|negative_button|button_secondary|ack_button)");
+
     private static void dismissDialogs(UiDevice device) {
+        for (UiObject2 b : device.findObjects(By.res(FRE_IDS))) {
+            try {
+                Log.i(TAG, "harness tapping id " + b.getResourceName() + " '" + b.getText() + "'");
+                b.click();
+                SystemClock.sleep(1_000);
+            } catch (RuntimeException stale) {
+                // Gone between find and click.
+            }
+        }
         for (UiObject2 b : device.findObjects(By.clickable(true).text(DISMISS))) {
             try {
                 Log.i(TAG, "harness tapping '" + b.getText() + "'");
