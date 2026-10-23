@@ -10,7 +10,14 @@ const QUERIES: [string, string][] = [
 ]
 
 type Debug = {
-  state: { phase: string; files: { name: string }[]; vectors: Float32Array[]; searchResults: number[] | null }
+  state: {
+    phase: string
+    files: { name: string }[]
+    vectors: Float32Array[]
+    points: unknown[]
+    searchResults: Int32Array | null
+    settings: { modelVariant: string }
+  }
   embedFailed: Set<number>
   processFiles: (files: unknown[]) => Promise<void>
   searchImages: (q: string) => Promise<void>

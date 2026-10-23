@@ -9,7 +9,6 @@ const PIXEL_UA =
 
 export default defineConfig({
   testDir: 'e2e',
-  testMatch: '*.spec.ts', // e2e/safari runs under node:test with safaridriver
   timeout: 40 * 60_000,
   workers: 1,
   reporter: [['list']],
@@ -29,9 +28,12 @@ export default defineConfig({
     url: 'http://127.0.0.1:5173',
     reuseExistingServer: !process.env.CI,
   },
+  // e2e/safari runs under node:test with safaridriver, not here.
   projects: [
     // The app picks its phone profile (fewer image tokens, fixed sequence length) from the UA.
-    { name: 'phone', use: { userAgent: PIXEL_UA } },
-    { name: 'desktop' },
+    { name: 'phone', testMatch: 'embeddinggemma2.spec.ts', use: { userAgent: PIXEL_UA } },
+    { name: 'desktop', testMatch: 'embeddinggemma2.spec.ts' },
+    // No GPU needed: `npm test`, the pre-commit hook and the Linux deploy job.
+    { name: 'cpu', testMatch: 'cpu.spec.ts', timeout: 60_000 },
   ],
 })

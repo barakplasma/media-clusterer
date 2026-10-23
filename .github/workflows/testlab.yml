@@ -1,0 +1,140 @@
+name: Android device test (Firebase Test Lab)
+
+# On demand only (Actions → this workflow → Run workflow): every run spends
+# physical Test Lab minutes. Opens device-test.html from this branch's
+# Cloudflare preview in Chrome on a real phone and waits for "DONE pass".
+#
+# One-time setup (Workload Identity Federation, no key file):
+#   1. gcloud iam workload-identity-pools create github --location=global
+#      gcloud iam workload-identity-pools providers create-oidc github \
+#        --location=global --workload-identity-pool=github \
+#        --issuer-uri=https://token.actions.githubusercontent.com \
+#        --attribute-mapping=google.subject=assertion.sub,attribute.repository=assertion.repository \
+#        --attribute-condition="assertion.repository=='barakplasma/media-clusterer'"
+#   2. Let the pool impersonate a service account that has roles/cloudtestservice.testAdmin,
+#      roles/firebase.analyticsViewer and write access to the results bucket:
+#      gcloud iam service-accounts add-iam-policy-binding SA_EMAIL \
+#        --role=roles/iam.workloadIdentityUser \
+#        --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/barakplasma/media-clusterer"
+#   3. Repo → Settings → Secrets and variables → Actions → Variables:
+#      GCP_WIF_PROVIDER = projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github
+#      GCP_SA_EMAIL     = the service account above
+#      GCP_PROJECT_ID   = the Firebase project id
+#      GCP_RESULTS_BUCKET = a bucket the service account can write
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: Test Lab model:API
+        type: choice
+        default: frankel:36 (Pixel 10)
+        options: ['frankel:36 (Pixel 10)', 'lynx:33 (Pixel 7a)']
+      browser:
+        description: chrome = the device's own Chrome; chromium = sideload a Chromium snapshot (for old Chrome images)
+        type: choice
+        default: chrome
+        options: [chrome, chromium]
+      url:
+        description: Page to open (default this branch's Cloudflare preview /device-test.html)
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  testlab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check Google Cloud configuration
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_SA_EMAIL: ${{ vars.GCP_SA_EMAIL }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_RESULTS_BUCKET: ${{ vars.GCP_RESULTS_BUCKET }}
+        run: |
+          missing=""
+          for v in GCP_WIF_PROVIDER GCP_SA_EMAIL GCP_PROJECT_ID GCP_RESULTS_BUCKET; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error title=Test Lab not configured::Missing repository variable(s):$missing. Set them under Settings → Secrets and variables → Actions → Variables; the steps are at the top of .github/workflows/testlab.yml. No key file is needed: this workflow signs in with Workload Identity Federation."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+      - name: Build the harness
+        working-directory: android-device-test
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          gradle --no-daemon assembleDebug assembleDebugAndroidTest
+
+      - name: Sideload Chromium
+        if: inputs.browser == 'chromium'
+        run: |
+          # Stock Chrome on older Test Lab images (Pixel 7a: Chrome 103) has no WebGPU.
+          REV=1725074 # Chromium 158.0.8119.0, the build the Pixel 7a passed with
+          curl -sSfL -o chrome-android.zip "https://commondatastorage.googleapis.com/chromium-browser-snapshots/Android_Arm64/$REV/chrome-android.zip"
+          unzip -q -j chrome-android.zip chrome-android/apks/ChromePublic.apk
+
+      - name: Run on Test Lab
+        env:
+          DEVICE: ${{ inputs.device }}
+          BROWSER: ${{ inputs.browser }}
+          URL: ${{ inputs.url }}
+          BRANCH: ${{ github.ref_name }}
+          BUCKET: ${{ vars.GCP_RESULTS_BUCKET }}
+        run: |
+          if [ -z "$URL" ]; then
+            if [ "$BRANCH" = main ]; then host=media-clusterer.pages.dev
+            else
+              # Cloudflare Pages branch alias: lowercase, non-alphanumerics to '-', 28 chars.
+              slug=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | cut -c1-28 | sed 's/-*$//')
+              host="$slug.media-clusterer.pages.dev"
+            fi
+            URL="https://$host/device-test.html"
+          fi
+          model=${DEVICE%%:*}; rest=${DEVICE#*:}; version=${rest%% *}
+          pkg=com.android.chrome; extra=()
+          if [ "$BROWSER" = chromium ]; then pkg=org.chromium.chrome; extra=(--additional-apks ChromePublic.apk); fi
+          dir="gha-${{ github.run_id }}"
+          echo "Opening $URL in $pkg on $model API $version"
+          set +e
+          gcloud firebase test android run --type instrumentation \
+            --app android-device-test/app/build/outputs/apk/debug/app-debug.apk \
+            --test android-device-test/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            "${extra[@]}" \
+            --device "model=$model,version=$version,locale=en,orientation=portrait" \
+            --timeout 45m --no-record-video \
+            --environment-variables "^;^url=$URL;browser=$pkg" \
+            --results-bucket="$BUCKET" --results-dir="$dir"
+          status=$?
+          set -e
+          gcloud storage cp -r "gs://$BUCKET/$dir/" results/ || true
+          echo "## Page log" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -rh "EG2TEST" results --include=logcat | sed 's/.*EG2TEST *: //' | tail -80 >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlab-results
+          path: results/
+          if-no-files-found: ignore
