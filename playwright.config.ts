@@ -9,6 +9,7 @@ const PIXEL_UA =
 
 export default defineConfig({
   testDir: 'e2e',
+  testMatch: '*.spec.ts', // e2e/safari runs under node:test with safaridriver
   timeout: 40 * 60_000,
   workers: 1,
   reporter: [['list']],

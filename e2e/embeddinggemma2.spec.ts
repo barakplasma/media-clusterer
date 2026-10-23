@@ -73,7 +73,7 @@ test('EmbeddingGemma 2 embeds photos and videos and finds them by text', async (
     const top = await page.evaluate(async (q) => {
       const d = window.__debug
       await d.searchImages(q)
-      return d.state.searchResults!.slice(0, 2).map((i) => d.state.files[i].name)
+      return Array.from(d.state.searchResults!.slice(0, 2), (i) => d.state.files[i].name)
     }, q)
     console.log(`search "${q}" ->`, top)
     expect(top[0], `top hit for "${q}"`).toContain(`e2e/${want}`)

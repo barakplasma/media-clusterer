@@ -103,7 +103,7 @@ test('text search ranks the right file first', async () => {
       async (q) => {
         const d = window.__debug
         await d.searchImages(q)
-        return d.state.searchResults.slice(0, 2).map((i) => d.state.files[i].name)
+        return Array.from(d.state.searchResults.slice(0, 2), (i) => d.state.files[i].name)
       },
       q,
       5 * 60_000
