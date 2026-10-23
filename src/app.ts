@@ -258,6 +258,13 @@ if (versionEl) {
 // ── Constants ────────────────────────────────────────────────────────────────
 // ── Auto batch size ───────────────────────────────────────────────────────────
 
+// Default where WebGPU is missing. A single constant so it is easy to flip
+// once the embedding benchmark picks a winner.
+const NO_WEBGPU_MODEL = 'smolvlm2-vision'
+// Set when a WebGPU-only model was swapped out for this session; saveSettings
+// writes the saved choice back instead of the stand-in.
+let modelStandIn: { saved: string; used: string } | null = null
+
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
@@ -268,9 +275,9 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  // EmbeddingGemma 2 runs only on WebGPU (src/vlmWorker.ts), so it is the
-  // default only where the browser has it.
-  modelVariant: 'gpu' in navigator ? 'embeddinggemma2' : 'smolvlm2-vision',
+  // EmbeddingGemma 2 runs only on WebGPU (src/vlmWorker.ts); loadModelOnce
+  // swaps in NO_WEBGPU_MODEL when there is no adapter behind navigator.gpu.
+  modelVariant: 'gpu' in navigator ? 'embeddinggemma2' : NO_WEBGPU_MODEL,
   enableLazyCaption: false,
   doNotTrack: false,
   customModelHost: '',
@@ -1506,6 +1513,20 @@ async function loadModelOnce(signal?: AbortSignal) {
       setStatus(`Connected to ${where} — open a folder to start.`)
     }
     return
+  }
+
+  // navigator.gpu can exist with no usable adapter (emulators, blocklisted GPUs).
+  if (
+    getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2' &&
+    !(await navigator.gpu?.requestAdapter().catch(() => null))
+  ) {
+    const saved = state.settings.modelVariant
+    if (savedSettings) {
+      modelStandIn = { saved, used: NO_WEBGPU_MODEL }
+      showToast(`${saved} needs WebGPU, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`, 'warn', 8000)
+    }
+    state.settings.modelVariant = NO_WEBGPU_MODEL
+    dom.modelSelect.value = NO_WEBGPU_MODEL
   }
 
   if (isVlmVariant(state.settings.modelVariant)) {
@@ -3376,7 +3397,11 @@ exifDialog.addEventListener('click', (e) => {
 
 // ── Settings ────────────────────────────────────────────────────────────────
 const saveSettings = () => {
-  localStorage.setItem('mc_settings', JSON.stringify(state.settings))
+  const s =
+    modelStandIn?.used === state.settings.modelVariant
+      ? { ...state.settings, modelVariant: modelStandIn.saved }
+      : state.settings
+  localStorage.setItem('mc_settings', JSON.stringify(s))
 }
 
 // Sync UI with initial settings
