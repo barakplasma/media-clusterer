@@ -17,17 +17,11 @@ export const THUMB_FRAME_PX = 224
 export const VLM_FRAME_PX = 512
 
 /**
- * `vision_config.hidden_size` for both SmolVLM2 checkpoints, and — not by
- * coincidence — the width every other embedder in this app already produces,
- * which is what lets pooled vision features drop straight into the existing
- * IndexedDB cache, DruidJS projection and k-means.
- *
- * Treated as a per-tier field rather than a global constant because it is
- * pending confirmation against the ONNX graph: if `vision_encoder.onnx` turns
- * out to export the post-connector tensor it is 576, and only this number
- * changes. `assertVisionDim()` below is what catches that at runtime.
+ * Width of `image_features`, the only output of SmolVLM2's `vision_encoder.onnx`:
+ * the post-connector tensor (64 tokens × 576), not SigLIP's 768-d hidden state.
+ * Measured on the q4f16 export; `assertVisionDim()` catches a future change.
  */
-const SIGLIP_HIDDEN_SIZE = 768
+const SMOLVLM_IMAGE_FEATURES = 576
 
 const TIERS: Record<string, VlmTier> = {
   'smolvlm2-vision': {
@@ -36,10 +30,10 @@ const TIERS: Record<string, VlmTier> = {
     repo: 'HuggingFaceTB/SmolVLM2-256M-Video-Instruct',
     dtype: 'q4f16',
     visionOnly: true,
-    visionDim: SIGLIP_HIDDEN_SIZE,
+    visionDim: SMOLVLM_IMAGE_FEATURES,
     framesPerVideo: 4,
-    cachePrefix: '@smolvlm2-vision/',
-    downloadMB: 55,
+    cachePrefix: '@smolvlm2-vision-576/', // 768-d era vectors never existed (the call failed)
+    downloadMB: 190, // vision encoder + embed_tokens + decoder, see vlmWorker load()
     // The only tier the worker can actually honour today.
     selectable: true,
     queryPrefix: null
@@ -50,7 +44,7 @@ const TIERS: Record<string, VlmTier> = {
     repo: 'HuggingFaceTB/SmolVLM2-256M-Video-Instruct',
     dtype: 'q4f16',
     visionOnly: false,
-    visionDim: SIGLIP_HIDDEN_SIZE,
+    visionDim: SMOLVLM_IMAGE_FEATURES,
     framesPerVideo: 4,
     cachePrefix: '@smolvlm2-256m/',
     downloadMB: 189,
@@ -66,7 +60,7 @@ const TIERS: Record<string, VlmTier> = {
     repo: 'HuggingFaceTB/SmolVLM2-500M-Video-Instruct',
     dtype: 'q4f16',
     visionOnly: false,
-    visionDim: SIGLIP_HIDDEN_SIZE,
+    visionDim: SMOLVLM_IMAGE_FEATURES,
     framesPerVideo: 4,
     cachePrefix: '@smolvlm2-500m/',
     downloadMB: 358,
@@ -256,8 +250,8 @@ export function frameTimestamps(duration: number, n: number): number[] {
 }
 
 /**
- * Guard the assumption recorded in ADR-0001: that `vision_encoder.onnx` exports
- * the pre-connector SigLIP tensor and is therefore `visionDim` wide.
+ * Guard that `vision_encoder.onnx` still exports `visionDim`-wide features
+ * (ADR-0001 assumed 768-d SigLIP; the export is the 576-d post-connector tensor).
  *
  * A mismatch is not fatal to correctness — vectors of any width cluster fine,
  * and each tier writes under its own cache prefix — but it must not pass

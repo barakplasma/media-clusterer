@@ -258,6 +258,13 @@ if (versionEl) {
 // ── Constants ────────────────────────────────────────────────────────────────
 // ── Auto batch size ───────────────────────────────────────────────────────────
 
+// Default where WebGPU is missing. A single constant so it is easy to flip
+// once the embedding benchmark picks a winner.
+const NO_WEBGPU_MODEL = 'smolvlm2-vision'
+// Set when a WebGPU-only model was swapped out for this session; saveSettings
+// writes the saved choice back instead of the stand-in.
+let modelStandIn: { saved: string; used: string } | null = null
+
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
@@ -268,9 +275,9 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  // EmbeddingGemma 2 runs only on WebGPU (src/vlmWorker.ts), so it is the
-  // default only where the browser has it.
-  modelVariant: 'gpu' in navigator ? 'embeddinggemma2' : 'smolvlm2-vision',
+  // EmbeddingGemma 2 runs only on WebGPU (src/vlmWorker.ts); loadModelOnce
+  // swaps in NO_WEBGPU_MODEL when there is no adapter behind navigator.gpu.
+  modelVariant: 'gpu' in navigator ? 'embeddinggemma2' : NO_WEBGPU_MODEL,
   enableLazyCaption: false,
   doNotTrack: false,
   customModelHost: '',
@@ -319,6 +326,47 @@ const state: AppState = {
 
 // ── Camera (infinite canvas) ─────────────────────────────────────────────────
 const camera: Camera = { x: 0, y: 0, scale: 1 }
+
+const WEBGPU_HELP_KEY = 'mc_hideWebGpuHelp'
+
+/**
+ * Tell a Chromium user how to turn WebGPU on when the browser has it but
+ * hides the GPU (blocklisted driver, e.g. Pixel 10's PowerVR) or only offers
+ * a software adapter. Stays up until dismissed. Returns false when not shown
+ * (other browsers, or "Don't show again").
+ */
+function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
+  const ua = navigator.userAgent
+  if (!('gpu' in navigator) || !/\bChrome\//.test(ua)) return false
+  try {
+    if (localStorage.getItem(WEBGPU_HELP_KEY)) return false
+  } catch (_) {}
+  const scheme = /\bEdgA?\//.test(ua) ? 'edge' : /\bOPR\//.test(ua) ? 'opera' : 'chrome'
+  const url = `${scheme}://flags/#enable-unsafe-webgpu`
+  const el = (id: string) => document.getElementById(id)!
+  el('webgpu-help-title').textContent =
+    kind === 'blocked' ? '⚠️ WebGPU is turned off for this GPU' : '⚠️ WebGPU is running in software'
+  el('webgpu-help-why').textContent =
+    kind === 'blocked'
+      ? `This browser supports WebGPU but hides your GPU from web pages, so ${model} can't run and the app is using ${NO_WEBGPU_MODEL} instead (no text search). To use ${model}:`
+      : `This browser only offers a software (CPU) WebGPU adapter, so ${model} will be very slow. To use your GPU:`
+  el('webgpu-help-url').textContent = url
+  el('webgpu-help-accel').hidden = kind !== 'software'
+  const modal = el('webgpu-help-modal') as HTMLDialogElement
+  el('webgpu-help-copy').onclick = () => {
+    void navigator.clipboard?.writeText(url).then(() => (el('webgpu-help-copy').textContent = 'Copied'))
+  }
+  el('webgpu-help-ok').onclick = () => modal.close()
+  el('webgpu-help-close').onclick = () => modal.close()
+  el('webgpu-help-never').onclick = () => {
+    try {
+      localStorage.setItem(WEBGPU_HELP_KEY, '1')
+    } catch (_) {}
+    modal.close()
+  }
+  modal.showModal()
+  return true
+}
 
 // ── Model singleton ──────────────────────────────────────────────────────────
 let extractor: PipelineInstance | null = null // Vision model (for images)
@@ -1443,6 +1491,7 @@ function showRemoteConsentModal(baseUrl: string): Promise<boolean> {
 // ── Model singleton ──────────────────────────────────────────────────────────
 async function loadModelOnce(signal?: AbortSignal) {
   applyModelEnv()
+  activeEmbeddingDim = 768
   state.phase = 'loading_model'
   setStatus('Loading model…')
   setProgress(0)
@@ -1508,10 +1557,28 @@ async function loadModelOnce(signal?: AbortSignal) {
     return
   }
 
+  // navigator.gpu can exist with no usable adapter (emulators, blocklisted GPUs).
+  if (getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2') {
+    const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
+    const saved = state.settings.modelVariant
+    if (!adapter) {
+      if (savedSettings) modelStandIn = { saved, used: NO_WEBGPU_MODEL }
+      state.settings.modelVariant = NO_WEBGPU_MODEL
+      dom.modelSelect.value = NO_WEBGPU_MODEL
+    }
+    if (!adapter || adapter.info?.isFallbackAdapter) {
+      const shown = showWebGpuHelp(!adapter ? 'blocked' : 'software', saved)
+      if (!shown && !adapter && savedSettings) {
+        showToast(`${saved} needs WebGPU, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`, 'warn', 8000)
+      }
+    }
+  }
+
   if (isVlmVariant(state.settings.modelVariant)) {
     const tier = getVlmTier(state.settings.modelVariant)!
     setStatus(`Loading ${tier.id} (${tier.downloadMB} MB)…`)
     try {
+      activeEmbeddingDim = tier.visionDim
       await loadVlm(state.settings.modelVariant, normalizeHost(state.settings.customModelHost), (pct) => {
         setProgress(pct)
         setStatus(`Downloading ${tier.id}… ${pct.toFixed(0)}%`)
@@ -3376,7 +3443,11 @@ exifDialog.addEventListener('click', (e) => {
 
 // ── Settings ────────────────────────────────────────────────────────────────
 const saveSettings = () => {
-  localStorage.setItem('mc_settings', JSON.stringify(state.settings))
+  const s =
+    modelStandIn?.used === state.settings.modelVariant
+      ? { ...state.settings, modelVariant: modelStandIn.saved }
+      : state.settings
+  localStorage.setItem('mc_settings', JSON.stringify(s))
 }
 
 // Sync UI with initial settings
