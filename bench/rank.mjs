@@ -66,6 +66,10 @@ for (const id of modelOrder) {
   modelLines.push(`  '${VARIANT[id]}', // avg rank ${avgRank(id).toFixed(2)}: ${notes.get(id).join(', ')}`)
   if (VARIANT[id] === 'sapiens2-fp16') modelLines.push(`  'sapiens2-fp32', // not run: same model as fp16`)
 }
+// Known app models with no results yet keep a place ahead of the never-run tail.
+const ranked = new Set(modelLines.map((l) => l.match(/'([^']+)'/)[1]))
+for (const v of [...new Set([...Object.values(VARIANT).filter(Boolean), 'sapiens2-fp32'])])
+  if (!ranked.has(v)) modelLines.push(`  '${v}', // not benchmarked yet`)
 for (const v of UNRANKED_TAIL) modelLines.push(`  '${v}', // not benchmarked`)
 
 // ── Projections ─────────────────────────────────────────────────────────────
