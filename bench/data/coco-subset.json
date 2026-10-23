@@ -1,0 +1,1615 @@
+{
+"source": "COCO val2017 (CC BY 4.0 annotations; images under their Flickr licenses), built by bench/prep-coco.mjs: largest object >= 15% of the frame, <= 6 per category, categories with >= 5",
+"items": [
+{
+"name": "000000001296.jpg",
+"category": "person",
+"caption": "A woman holding a Hello Kitty phone on her hands."
+},
+{
+"name": "000000003156.jpg",
+"category": "person",
+"caption": "A young man bending next to a toilet."
+},
+{
+"name": "000000003553.jpg",
+"category": "person",
+"caption": "a person skating on some pieces of wood"
+},
+{
+"name": "000000004134.jpg",
+"category": "person",
+"caption": "A man is shaking hands with another man."
+},
+{
+"name": "000000004395.jpg",
+"category": "person",
+"caption": "A man in a shirt and tie motioning with his hand."
+},
+{
+"name": "000000005193.jpg",
+"category": "person",
+"caption": "Man and boys holding two surfboards getting picture taken."
+},
+{
+"name": "000000055022.jpg",
+"category": "bicycle",
+"caption": "A bunch of different bikes on a wooden floor."
+},
+{
+"name": "000000061108.jpg",
+"category": "bicycle",
+"caption": "A dog sits in the basket of a bicycle leaning against bleachers."
+},
+{
+"name": "000000101762.jpg",
+"category": "bicycle",
+"caption": "A cat standing next to a bike parked against a wall."
+},
+{
+"name": "000000109055.jpg",
+"category": "bicycle",
+"caption": "A cat sitting between two bikes  sitting next to each other."
+},
+{
+"name": "000000144333.jpg",
+"category": "bicycle",
+"caption": "A woman riding a bike with a basket on it."
+},
+{
+"name": "000000174482.jpg",
+"category": "bicycle",
+"caption": "a blue bike parked on a side walk"
+},
+{
+"name": "000000009891.jpg",
+"category": "car",
+"caption": "The man is loading luggage suitcases onto the cart in the parking lot."
+},
+{
+"name": "000000010363.jpg",
+"category": "car",
+"caption": "A gray cat standing on top of a black car."
+},
+{
+"name": "000000017178.jpg",
+"category": "car",
+"caption": "Horses communing with each other on a shady street."
+},
+{
+"name": "000000023272.jpg",
+"category": "car",
+"caption": "A Calico cat laying on the hood of a Mercedes."
+},
+{
+"name": "000000033854.jpg",
+"category": "car",
+"caption": "A bus, old cabin cars, and motor cycles with people"
+},
+{
+"name": "000000055150.jpg",
+"category": "car",
+"caption": "Two children smiling on top of luggage in parking lot"
+},
+{
+"name": "000000007386.jpg",
+"category": "motorcycle",
+"caption": "a small motor bike outside of the garage"
+},
+{
+"name": "000000013177.jpg",
+"category": "motorcycle",
+"caption": "a man is working on a hub cap on the ground"
+},
+{
+"name": "000000018737.jpg",
+"category": "motorcycle",
+"caption": "A motorcycle parked near a fence by a beach."
+},
+{
+"name": "000000068093.jpg",
+"category": "motorcycle",
+"caption": "A  pair of people sitting on a motorcycle, in the grass."
+},
+{
+"name": "000000070774.jpg",
+"category": "motorcycle",
+"caption": "Small motorcycle with several bicycles tied to the back of it."
+},
+{
+"name": "000000102356.jpg",
+"category": "motorcycle",
+"caption": "Woman on a motorcycle with a sidecar in front of scenic backdrop in a showroom."
+},
+{
+"name": "000000005477.jpg",
+"category": "airplane",
+"caption": "large mustard yellow commercial airplane parked in the airport"
+},
+{
+"name": "000000084752.jpg",
+"category": "airplane",
+"caption": "a jet on three pillars in front of a building"
+},
+{
+"name": "000000096549.jpg",
+"category": "airplane",
+"caption": "An airplane on the runway either just landed or ready to take off."
+},
+{
+"name": "000000099054.jpg",
+"category": "airplane",
+"caption": "some planes on an air port run way"
+},
+{
+"name": "000000110721.jpg",
+"category": "airplane",
+"caption": "a large plane is docked at the airport and connected"
+},
+{
+"name": "000000139871.jpg",
+"category": "airplane",
+"caption": "Someone has crawled under the plane to check that everything is operational."
+},
+{
+"name": "000000001584.jpg",
+"category": "bus",
+"caption": "The red, double decker bus is driving past other buses."
+},
+{
+"name": "000000002006.jpg",
+"category": "bus",
+"caption": "a big purple bus parked in a parking spot"
+},
+{
+"name": "000000005037.jpg",
+"category": "bus",
+"caption": "A passenger bus pulling up to the side of a street."
+},
+{
+"name": "000000017207.jpg",
+"category": "bus",
+"caption": "A bus stuck in traffic on a busy highway."
+},
+{
+"name": "000000027768.jpg",
+"category": "bus",
+"caption": "A bus which is part of the Metropolitan Transit System."
+},
+{
+"name": "000000042070.jpg",
+"category": "bus",
+"caption": "A very big city bus on a big street."
+},
+{
+"name": "000000006040.jpg",
+"category": "train",
+"caption": "A blue and white train is moving on the rails."
+},
+{
+"name": "000000014473.jpg",
+"category": "train",
+"caption": "a red and black train is coming down the tracks"
+},
+{
+"name": "000000030675.jpg",
+"category": "train",
+"caption": "The train engine number 6309 is operated by BNSF."
+},
+{
+"name": "000000039670.jpg",
+"category": "train",
+"caption": "A train traveling through rural countryside lined with trees."
+},
+{
+"name": "000000049060.jpg",
+"category": "train",
+"caption": "A train sitting next to a loading platform with people standing on it."
+},
+{
+"name": "000000057244.jpg",
+"category": "train",
+"caption": "A rusted out train engine sitting next to a green forest."
+},
+{
+"name": "000000009769.jpg",
+"category": "truck",
+"caption": "The pick up truck is plowing the snow."
+},
+{
+"name": "000000018837.jpg",
+"category": "truck",
+"caption": "A green utility truck is parked on a street while a man climbs inside."
+},
+{
+"name": "000000041633.jpg",
+"category": "truck",
+"caption": "A burgundy low-rider show-quality, hot rod Chevy truck."
+},
+{
+"name": "000000046872.jpg",
+"category": "truck",
+"caption": "A man standing along side of a truck trailer."
+},
+{
+"name": "000000053529.jpg",
+"category": "truck",
+"caption": "A dog with a hat and a person in a truck."
+},
+{
+"name": "000000076417.jpg",
+"category": "truck",
+"caption": "A dog is sticking it head outside of a car window"
+},
+{
+"name": "000000020571.jpg",
+"category": "boat",
+"caption": "a group of boats parked next to a dock in the water"
+},
+{
+"name": "000000046497.jpg",
+"category": "boat",
+"caption": "Two little girls sitting on the side of a white boat."
+},
+{
+"name": "000000111086.jpg",
+"category": "boat",
+"caption": "Two rows of cars parked next to a boat."
+},
+{
+"name": "000000113051.jpg",
+"category": "boat",
+"caption": "A boat traveling into a water filled tunnel."
+},
+{
+"name": "000000156372.jpg",
+"category": "boat",
+"caption": "A chair in the corner on a boat."
+},
+{
+"name": "000000190140.jpg",
+"category": "boat",
+"caption": "A man driving a small boat with a dog sitting on it's front end."
+},
+{
+"name": "000000015746.jpg",
+"category": "fire hydrant",
+"caption": "A fire hydrant is standing amid some grass."
+},
+{
+"name": "000000020107.jpg",
+"category": "fire hydrant",
+"caption": "The fire hydrant has some writing on its side."
+},
+{
+"name": "000000026926.jpg",
+"category": "fire hydrant",
+"caption": "An orange fire hydrant with a face and bow tie drawn on it."
+},
+{
+"name": "000000147338.jpg",
+"category": "fire hydrant",
+"caption": "A yellow fire hydrant with a cartoon face drawn on it."
+},
+{
+"name": "000000165713.jpg",
+"category": "fire hydrant",
+"caption": "A rusted silver fire hydrant next to two poles."
+},
+{
+"name": "000000171050.jpg",
+"category": "fire hydrant",
+"caption": "A brown and gold fire hydrant in front of a brick building."
+},
+{
+"name": "000000079408.jpg",
+"category": "stop sign",
+"caption": "A red stop sign sitting next to a forest."
+},
+{
+"name": "000000095899.jpg",
+"category": "stop sign",
+"caption": "A red stop sign next to a blue street sign."
+},
+{
+"name": "000000100283.jpg",
+"category": "stop sign",
+"caption": "A stop sign on the corner in front of a row of stores."
+},
+{
+"name": "000000104198.jpg",
+"category": "stop sign",
+"caption": "A sign is next to an ornate white gazebo."
+},
+{
+"name": "000000153568.jpg",
+"category": "stop sign",
+"caption": "A close up of a stop sign with two hand written notes taped to it."
+},
+{
+"name": "000000191471.jpg",
+"category": "stop sign",
+"caption": "The stop sign is visible for everyone to see."
+},
+{
+"name": "000000029397.jpg",
+"category": "bench",
+"caption": "A person wearing orange pants standing on a bench"
+},
+{
+"name": "000000048153.jpg",
+"category": "bench",
+"caption": "A foot wearing a pointy pink flat shoe rested upon a bench."
+},
+{
+"name": "000000049810.jpg",
+"category": "bench",
+"caption": "A little cat looking at itself in a mirror."
+},
+{
+"name": "000000058393.jpg",
+"category": "bench",
+"caption": "Two people sitting on a bench silhouetted against the sea."
+},
+{
+"name": "000000078404.jpg",
+"category": "bench",
+"caption": "Three women sitting on a park bench next to each other."
+},
+{
+"name": "000000080666.jpg",
+"category": "bench",
+"caption": "A cat sitting on top of a bench in a field."
+},
+{
+"name": "000000056545.jpg",
+"category": "bird",
+"caption": "A gray bird is standing on small brown branch."
+},
+{
+"name": "000000104119.jpg",
+"category": "bird",
+"caption": "A large chicken walking through a grass covered landscape."
+},
+{
+"name": "000000186938.jpg",
+"category": "bird",
+"caption": "A small bird standing on a rocky ground."
+},
+{
+"name": "000000264335.jpg",
+"category": "bird",
+"caption": "A bird flying through a blue sky with wide wings."
+},
+{
+"name": "000000270705.jpg",
+"category": "bird",
+"caption": "A large bird perched on top of a stick near a window."
+},
+{
+"name": "000000315257.jpg",
+"category": "bird",
+"caption": "A bird with outstretched blue wings is sitting on some bird feeder."
+},
+{
+"name": "000000001675.jpg",
+"category": "cat",
+"caption": "A cat resting on an open laptop computer."
+},
+{
+"name": "000000014831.jpg",
+"category": "cat",
+"caption": "A brown and white animal laying on top of a bed."
+},
+{
+"name": "000000018833.jpg",
+"category": "cat",
+"caption": "A cat sleeping with its head resting on a sneaker."
+},
+{
+"name": "000000022892.jpg",
+"category": "cat",
+"caption": "A cats sits on the table with a dog outside."
+},
+{
+"name": "000000046378.jpg",
+"category": "cat",
+"caption": "A cat eating a bird it has caught."
+},
+{
+"name": "000000058111.jpg",
+"category": "cat",
+"caption": "An orange and white cat laying on top of a sink."
+},
+{
+"name": "000000052891.jpg",
+"category": "dog",
+"caption": "There is a dog holding a Frisbee in its mouth."
+},
+{
+"name": "000000060835.jpg",
+"category": "dog",
+"caption": "A dog in a a cage with a bed and bowl"
+},
+{
+"name": "000000081766.jpg",
+"category": "dog",
+"caption": "A large black dog with long hair standing on steps."
+},
+{
+"name": "000000082807.jpg",
+"category": "dog",
+"caption": "A very cute looking small dog by some food."
+},
+{
+"name": "000000131273.jpg",
+"category": "dog",
+"caption": "A grey and white dog sitting in the passenger side of a car."
+},
+{
+"name": "000000138492.jpg",
+"category": "dog",
+"caption": "A dog is reaching up to grab a Frisbee in his mouth."
+},
+{
+"name": "000000012748.jpg",
+"category": "horse",
+"caption": "A man and child next to a horse."
+},
+{
+"name": "000000023126.jpg",
+"category": "horse",
+"caption": "A man is standing on top of two horses and holding the reigns."
+},
+{
+"name": "000000040036.jpg",
+"category": "horse",
+"caption": "A person jumping a horse over a box."
+},
+{
+"name": "000000045070.jpg",
+"category": "horse",
+"caption": "A girl in white and pink shirt riding on a horse."
+},
+{
+"name": "000000049269.jpg",
+"category": "horse",
+"caption": "A horse in a pasture of tall grass observing an energetic dog."
+},
+{
+"name": "000000118209.jpg",
+"category": "horse",
+"caption": "a couple of horse that are next to a fence"
+},
+{
+"name": "000000005992.jpg",
+"category": "sheep",
+"caption": "A small group of sheep standing together next to a building."
+},
+{
+"name": "000000012062.jpg",
+"category": "sheep",
+"caption": "A large white sheep standing next to other sheep."
+},
+{
+"name": "000000022589.jpg",
+"category": "sheep",
+"caption": "A couple of sheep standing next to each other on a field."
+},
+{
+"name": "000000046804.jpg",
+"category": "sheep",
+"caption": "A sheep standing in grass next to a rock wall."
+},
+{
+"name": "000000066561.jpg",
+"category": "sheep",
+"caption": "Couple of sheep relaxing in a fielder brown"
+},
+{
+"name": "000000094871.jpg",
+"category": "sheep",
+"caption": "A group of people standing around sheep on a field."
+},
+{
+"name": "000000014888.jpg",
+"category": "cow",
+"caption": "A cow getting relief as it is being milked."
+},
+{
+"name": "000000090062.jpg",
+"category": "cow",
+"caption": "A black and white cow stands in a paddock with firewood in the background."
+},
+{
+"name": "000000114907.jpg",
+"category": "cow",
+"caption": "A lady explains the process of milking a cow."
+},
+{
+"name": "000000118594.jpg",
+"category": "cow",
+"caption": "A Texas Longhorn bull grazing on grass."
+},
+{
+"name": "000000124636.jpg",
+"category": "cow",
+"caption": "A baby cow standing in a pen next to another cow."
+},
+{
+"name": "000000125806.jpg",
+"category": "cow",
+"caption": "Two black cows facing each other with woods behind them."
+},
+{
+"name": "000000006894.jpg",
+"category": "elephant",
+"caption": "A man getting a kiss on the neck from an elephant's trunk"
+},
+{
+"name": "000000007108.jpg",
+"category": "elephant",
+"caption": "A herd of elephants walking away from a watering hole."
+},
+{
+"name": "000000028449.jpg",
+"category": "elephant",
+"caption": "A group of elephants are standing in the trees."
+},
+{
+"name": "000000057027.jpg",
+"category": "elephant",
+"caption": "An adult elephant is pictured walking with a baby elephant."
+},
+{
+"name": "000000088250.jpg",
+"category": "elephant",
+"caption": "Two elephants with their trunks attached to each other"
+},
+{
+"name": "000000103723.jpg",
+"category": "elephant",
+"caption": "a person standing close to an elephant"
+},
+{
+"name": "000000000285.jpg",
+"category": "bear",
+"caption": "A big burly grizzly bear is show with grass in the background."
+},
+{
+"name": "000000042296.jpg",
+"category": "bear",
+"caption": "a polar bear partially submerged in a body of water"
+},
+{
+"name": "000000092839.jpg",
+"category": "bear",
+"caption": "A polar bear with his chin raised lies on a rock."
+},
+{
+"name": "000000096960.jpg",
+"category": "bear",
+"caption": "A large white polar bear swimming in a pool of blue water."
+},
+{
+"name": "000000110972.jpg",
+"category": "bear",
+"caption": "A large black bear walking across a field."
+},
+{
+"name": "000000127955.jpg",
+"category": "bear",
+"caption": "there are two brown bears that are playing together in the water"
+},
+{
+"name": "000000001818.jpg",
+"category": "zebra",
+"caption": "A zebra in the grass who is cleaning himself."
+},
+{
+"name": "000000017115.jpg",
+"category": "zebra",
+"caption": "Two zebras are standing together next to the fence."
+},
+{
+"name": "000000025139.jpg",
+"category": "zebra",
+"caption": "A zebra grazing on food behind a metal fence."
+},
+{
+"name": "000000038825.jpg",
+"category": "zebra",
+"caption": "Two Zebras grazing together in a grassy area."
+},
+{
+"name": "000000054123.jpg",
+"category": "zebra",
+"caption": "The zebras are standing around and grazing in the pasture."
+},
+{
+"name": "000000064499.jpg",
+"category": "zebra",
+"caption": "Thin-striped zebras huddle near the wall of their zoo enclosure"
+},
+{
+"name": "000000017031.jpg",
+"category": "giraffe",
+"caption": "A very cute giraffe making a funny face."
+},
+{
+"name": "000000055072.jpg",
+"category": "giraffe",
+"caption": "A single giraffe looks over the green brush."
+},
+{
+"name": "000000079188.jpg",
+"category": "giraffe",
+"caption": "There are two giraffes sitting together in the wild"
+},
+{
+"name": "000000112634.jpg",
+"category": "giraffe",
+"caption": "A giraffe walking around in a fenced area in a zoo."
+},
+{
+"name": "000000134689.jpg",
+"category": "giraffe",
+"caption": "there is a very tall giraffe standing in the wild"
+},
+{
+"name": "000000153299.jpg",
+"category": "giraffe",
+"caption": "two giraffes are standing together outside a barn"
+},
+{
+"name": "000000009448.jpg",
+"category": "umbrella",
+"caption": "A little girl holds up a big blue umbrella."
+},
+{
+"name": "000000040083.jpg",
+"category": "umbrella",
+"caption": "A couple of people sitting under an umbrella."
+},
+{
+"name": "000000060052.jpg",
+"category": "umbrella",
+"caption": "A woman twirling a floral print parasol umbrella."
+},
+{
+"name": "000000136633.jpg",
+"category": "umbrella",
+"caption": "An umbrella is opened over a table at an outdoor market."
+},
+{
+"name": "000000143961.jpg",
+"category": "umbrella",
+"caption": "A group of people standing and sitting on top of a field."
+},
+{
+"name": "000000198489.jpg",
+"category": "umbrella",
+"caption": "Small girl reaching for her umbrella on a driveway."
+},
+{
+"name": "000000011699.jpg",
+"category": "suitcase",
+"caption": "Two women are imposing together as one holds her luggage."
+},
+{
+"name": "000000034139.jpg",
+"category": "suitcase",
+"caption": "Two people posing next to a giant suitcase in front of a building."
+},
+{
+"name": "000000084650.jpg",
+"category": "suitcase",
+"caption": "a cat laying on a luggage bag on the ground"
+},
+{
+"name": "000000112626.jpg",
+"category": "suitcase",
+"caption": "a metallic suit case in front of a couch"
+},
+{
+"name": "000000115245.jpg",
+"category": "suitcase",
+"caption": "A table topped with bags of luggage and purses."
+},
+{
+"name": "000000125952.jpg",
+"category": "suitcase",
+"caption": "A piece of luggage is ready to go with cold wear on top for quick usage."
+},
+{
+"name": "000000074200.jpg",
+"category": "surfboard",
+"caption": "Surf boards adorn the windows of a dessert shop."
+},
+{
+"name": "000000127517.jpg",
+"category": "surfboard",
+"caption": "A row of surfboards sticking out of the sand sitting next to each other."
+},
+{
+"name": "000000177539.jpg",
+"category": "surfboard",
+"caption": "A man in striped shorts leaning against a board on a beach."
+},
+{
+"name": "000000416343.jpg",
+"category": "surfboard",
+"caption": "A man and woman that are standing with a surfboard."
+},
+{
+"name": "000000489339.jpg",
+"category": "surfboard",
+"caption": "A woman is wearing a wetsuit while holding a surfboard."
+},
+{
+"name": "000000002149.jpg",
+"category": "bowl",
+"caption": "A large white bowl of many green apples."
+},
+{
+"name": "000000003501.jpg",
+"category": "bowl",
+"caption": "A bowl with rice, broccoli and a purple relish."
+},
+{
+"name": "000000005600.jpg",
+"category": "bowl",
+"caption": "A pan filled with onions sitting next to a pan of stew."
+},
+{
+"name": "000000008277.jpg",
+"category": "bowl",
+"caption": "The meal consists of chopped chicken with cheese and brocolli."
+},
+{
+"name": "000000015254.jpg",
+"category": "bowl",
+"caption": "These platters display healthy food choices of two entrees with a side  vegetable and fruit"
+},
+{
+"name": "000000050896.jpg",
+"category": "bowl",
+"caption": "A bowl filled with lots of oranges on a counter."
+},
+{
+"name": "000000003661.jpg",
+"category": "banana",
+"caption": "A bunch of bananas sitting on top of a wooden table."
+},
+{
+"name": "000000006012.jpg",
+"category": "banana",
+"caption": "There are bananas around another piece of fruit."
+},
+{
+"name": "000000008844.jpg",
+"category": "banana",
+"caption": "Smiling lady standing by two bunches of bananas on a table."
+},
+{
+"name": "000000028809.jpg",
+"category": "banana",
+"caption": "A picture of a bunch of bananas sitting on a table."
+},
+{
+"name": "000000119452.jpg",
+"category": "banana",
+"caption": "a spotty banana sitting on top of an orange and some other fruit"
+},
+{
+"name": "000000161820.jpg",
+"category": "banana",
+"caption": "A large bunch of ripening banana type fruit."
+},
+{
+"name": "000000006614.jpg",
+"category": "apple",
+"caption": "A black and white image of a lot of round objects."
+},
+{
+"name": "000000128598.jpg",
+"category": "apple",
+"caption": "A group of red, yellow and orange fruit  mixed together."
+},
+{
+"name": "000000213935.jpg",
+"category": "apple",
+"caption": "A pile of oranges, apples and pears next to each other."
+},
+{
+"name": "000000216277.jpg",
+"category": "apple",
+"caption": "A table topped with a half eaten apple next to a smart phone."
+},
+{
+"name": "000000406570.jpg",
+"category": "apple",
+"caption": "A pile of apples sitting next to a pile of green apples."
+},
+{
+"name": "000000407825.jpg",
+"category": "apple",
+"caption": "A red apple with a clock inside of it."
+},
+{
+"name": "000000001425.jpg",
+"category": "sandwich",
+"caption": "A meal is lying on a plate on a table."
+},
+{
+"name": "000000009914.jpg",
+"category": "sandwich",
+"caption": "A plate of food which includes onions, tomato, lettuce, sauce, fries, and a sandwich."
+},
+{
+"name": "000000015079.jpg",
+"category": "sandwich",
+"caption": "Two peanut butter and jelly sandwiches sliced in half"
+},
+{
+"name": "000000021503.jpg",
+"category": "sandwich",
+"caption": "Crackers with spread on table with remote in background"
+},
+{
+"name": "000000046463.jpg",
+"category": "sandwich",
+"caption": "A hand holding a sandwich above a plate."
+},
+{
+"name": "000000056288.jpg",
+"category": "sandwich",
+"caption": "A tall sandwich with pickle on a white plate."
+},
+{
+"name": "000000185599.jpg",
+"category": "orange",
+"caption": "Many apples and oranges are stacked near to each other."
+},
+{
+"name": "000000186929.jpg",
+"category": "orange",
+"caption": "A plate topped with sliced up oranges full of juice."
+},
+{
+"name": "000000290081.jpg",
+"category": "orange",
+"caption": "A bunch of oranges are sitting in a clear fruit bowl."
+},
+{
+"name": "000000347370.jpg",
+"category": "orange",
+"caption": "A person that is holding a lime in their hand."
+},
+{
+"name": "000000386277.jpg",
+"category": "orange",
+"caption": "A lemon hangs from a small tree limb near several leaves."
+},
+{
+"name": "000000402783.jpg",
+"category": "orange",
+"caption": "A white plate topped with orange peel slices."
+},
+{
+"name": "000000015278.jpg",
+"category": "broccoli",
+"caption": "A white plate topped with broccoli and a dumpling."
+},
+{
+"name": "000000019221.jpg",
+"category": "broccoli",
+"caption": "A raw piece of broccoli with something growing from it."
+},
+{
+"name": "000000029640.jpg",
+"category": "broccoli",
+"caption": "A skillet contains diced meat and mixed vegetables."
+},
+{
+"name": "000000386134.jpg",
+"category": "broccoli",
+"caption": "a close up of a foam box of food"
+},
+{
+"name": "000000407524.jpg",
+"category": "broccoli",
+"caption": "A plate holds a good size portion of a cooked, mixed dish that includes broccoli and pasta."
+},
+{
+"name": "000000452784.jpg",
+"category": "broccoli",
+"caption": "A plate of food that includes lentils and leafy greens."
+},
+{
+"name": "000000091779.jpg",
+"category": "hot dog",
+"caption": "A display of various hot dogs in serving platters."
+},
+{
+"name": "000000093353.jpg",
+"category": "hot dog",
+"caption": "A piece of bread with a hot dog in the middle is shown."
+},
+{
+"name": "000000251119.jpg",
+"category": "hot dog",
+"caption": "The lunchbox has a cold sandwich, strawberry yogurt and orange juice."
+},
+{
+"name": "000000283113.jpg",
+"category": "hot dog",
+"caption": "A couple of hot dogs on a paper plate."
+},
+{
+"name": "000000322574.jpg",
+"category": "hot dog",
+"caption": "A sandwich sitting on top of a pile of fries."
+},
+{
+"name": "000000464786.jpg",
+"category": "hot dog",
+"caption": "A hot dog and a bun with some mustard."
+},
+{
+"name": "000000008629.jpg",
+"category": "pizza",
+"caption": "many different slices of pizza with a white sauce."
+},
+{
+"name": "000000024144.jpg",
+"category": "pizza",
+"caption": "A pizza sitting on top of a pizza box covered in cheese."
+},
+{
+"name": "000000027696.jpg",
+"category": "pizza",
+"caption": "A person is eating pizza with a knife and fork."
+},
+{
+"name": "000000032038.jpg",
+"category": "pizza",
+"caption": "A large cheese pizza being served to customers."
+},
+{
+"name": "000000047112.jpg",
+"category": "pizza",
+"caption": "A dining table has a large pizza and wine glasses."
+},
+{
+"name": "000000075456.jpg",
+"category": "pizza",
+"caption": "A pizza with Canadian bacon and pineapple in a fluted pan."
+},
+{
+"name": "000000002587.jpg",
+"category": "donut",
+"caption": "a close up of a banana and a doughnut in a plastic bag"
+},
+{
+"name": "000000066926.jpg",
+"category": "donut",
+"caption": "Several rows of donuts sitting on a table."
+},
+{
+"name": "000000109798.jpg",
+"category": "donut",
+"caption": "three different donuts one is pink one is brown and one has white sprinkles"
+},
+{
+"name": "000000297427.jpg",
+"category": "donut",
+"caption": "A man holding a cheeseburger made out of donuts."
+},
+{
+"name": "000000310200.jpg",
+"category": "donut",
+"caption": "The dessert has been split into two halves on the plate."
+},
+{
+"name": "000000326462.jpg",
+"category": "donut",
+"caption": "Pink donut with white sprinkles on the top of it."
+},
+{
+"name": "000000013597.jpg",
+"category": "cake",
+"caption": "A piece of chocolate cake on a plate."
+},
+{
+"name": "000000089670.jpg",
+"category": "cake",
+"caption": "A waffle with cream and strawberries sits on a plate."
+},
+{
+"name": "000000092177.jpg",
+"category": "cake",
+"caption": "Advertising photograph of a surf-themed birthday cake from a bakery"
+},
+{
+"name": "000000098633.jpg",
+"category": "cake",
+"caption": "A white piece of cake sitting on top of a plate."
+},
+{
+"name": "000000131379.jpg",
+"category": "cake",
+"caption": "The browned cracked crust of a baked berry pie."
+},
+{
+"name": "000000155179.jpg",
+"category": "cake",
+"caption": "an upclose photo of a cake with chocolate pieces"
+},
+{
+"name": "000000027620.jpg",
+"category": "chair",
+"caption": "A laptop sitting on a desk next to a chair and another computer."
+},
+{
+"name": "000000044068.jpg",
+"category": "chair",
+"caption": "A brown teddy bear sitting in a red chair."
+},
+{
+"name": "000000057232.jpg",
+"category": "chair",
+"caption": "Old baseball bats are turned into a seat."
+},
+{
+"name": "000000065288.jpg",
+"category": "chair",
+"caption": "A yellow and green object with a brown bird perched on top of it."
+},
+{
+"name": "000000082180.jpg",
+"category": "chair",
+"caption": "A teddy bear and a stuffed raccoon sitting on a faded wooden outdoor chair."
+},
+{
+"name": "000000084362.jpg",
+"category": "chair",
+"caption": "A young child and cat in a living room."
+},
+{
+"name": "000000004495.jpg",
+"category": "couch",
+"caption": "A living room with a couch and chair."
+},
+{
+"name": "000000015497.jpg",
+"category": "couch",
+"caption": "A cat laying on top of a couch next to a computer mouse."
+},
+{
+"name": "000000031735.jpg",
+"category": "couch",
+"caption": "A red living room filled with furniture and two windows."
+},
+{
+"name": "000000081061.jpg",
+"category": "couch",
+"caption": "A couch sitting on top of a field of grass."
+},
+{
+"name": "000000096493.jpg",
+"category": "couch",
+"caption": "A boy draped in a blanket holds a remote control on a couch"
+},
+{
+"name": "000000101420.jpg",
+"category": "couch",
+"caption": "A cat sitting on the back of a sofa looking out a window."
+},
+{
+"name": "000000050331.jpg",
+"category": "potted plant",
+"caption": "The fresh vegetables are growing in the garden."
+},
+{
+"name": "000000069795.jpg",
+"category": "potted plant",
+"caption": "A purple flower is in a watering can on the window sill."
+},
+{
+"name": "000000159282.jpg",
+"category": "potted plant",
+"caption": "A vase filled  with yellow flowers next to a window."
+},
+{
+"name": "000000231237.jpg",
+"category": "potted plant",
+"caption": "A vase with various flowers in it sitting on a tiled counter."
+},
+{
+"name": "000000354072.jpg",
+"category": "potted plant",
+"caption": "A bathroom sink under a mirror next to a plant."
+},
+{
+"name": "000000376365.jpg",
+"category": "potted plant",
+"caption": "A glass of milk next to a round purple vase."
+},
+{
+"name": "000000000632.jpg",
+"category": "bed",
+"caption": "Bedroom scene with a bookcase, blue comforter and window."
+},
+{
+"name": "000000001993.jpg",
+"category": "bed",
+"caption": "A bedroom with a bed and small table near by."
+},
+{
+"name": "000000007795.jpg",
+"category": "bed",
+"caption": "A narrow hotel room with two made up beds."
+},
+{
+"name": "000000010092.jpg",
+"category": "bed",
+"caption": "A green netted bed in a light filled bedroom."
+},
+{
+"name": "000000010995.jpg",
+"category": "bed",
+"caption": "A small room with a bed and window letting in light."
+},
+{
+"name": "000000022192.jpg",
+"category": "bed",
+"caption": "A dog is sitting on an unmade bed with pillows."
+},
+{
+"name": "000000002157.jpg",
+"category": "dining table",
+"caption": "A plate of finger foods next to a blue and raspberry topped cake."
+},
+{
+"name": "000000002431.jpg",
+"category": "dining table",
+"caption": "A plate on a wooden table full of bread."
+},
+{
+"name": "000000002592.jpg",
+"category": "dining table",
+"caption": "Decorated coffee cup and knife sitting on a patterned surface."
+},
+{
+"name": "000000003845.jpg",
+"category": "dining table",
+"caption": "a chicken meal with carrots broccoli and rice"
+},
+{
+"name": "000000007818.jpg",
+"category": "dining table",
+"caption": "An illuminated floral display forms the centerpiece of the arrangement in this close up of a dining room table setting."
+},
+{
+"name": "000000010583.jpg",
+"category": "dining table",
+"caption": "a plate of meat topped with potatoes veggies and gravy"
+},
+{
+"name": "000000005503.jpg",
+"category": "toilet",
+"caption": "a man standing in front of a toilet taking a piss"
+},
+{
+"name": "000000037670.jpg",
+"category": "toilet",
+"caption": "A man holding holding a giant remote control."
+},
+{
+"name": "000000038070.jpg",
+"category": "toilet",
+"caption": "A white toilet sitting next to a trash can in a restroom."
+},
+{
+"name": "000000055002.jpg",
+"category": "toilet",
+"caption": "A metallic toilet sitting in a small bathroom."
+},
+{
+"name": "000000089761.jpg",
+"category": "toilet",
+"caption": "A toilet seat behind a tree in the open outdoor."
+},
+{
+"name": "000000104803.jpg",
+"category": "toilet",
+"caption": "a toilet with glitter paint on it"
+},
+{
+"name": "000000004795.jpg",
+"category": "tv",
+"caption": "A cat observing a computer screen next to a laptop and a cordless phone."
+},
+{
+"name": "000000025560.jpg",
+"category": "tv",
+"caption": "An orange and white cat standing in front of a flat screen TV"
+},
+{
+"name": "000000038576.jpg",
+"category": "tv",
+"caption": "A desktop computer with it's monitor sitting on it's side."
+},
+{
+"name": "000000066635.jpg",
+"category": "tv",
+"caption": "A desk area with a computer monitor, keyboard and mouse."
+},
+{
+"name": "000000098839.jpg",
+"category": "tv",
+"caption": "A cat curiously looking sideways at a television."
+},
+{
+"name": "000000127987.jpg",
+"category": "tv",
+"caption": "A baseball player bobble head next to two computer monitors on a desk."
+},
+{
+"name": "000000026465.jpg",
+"category": "laptop",
+"caption": "A laptop computer sitting on a desk next to a smart phone."
+},
+{
+"name": "000000035279.jpg",
+"category": "laptop",
+"caption": "there is a tennis racket and a laptop on the floor"
+},
+{
+"name": "000000046031.jpg",
+"category": "laptop",
+"caption": "A laptop and a desktop computer sitting on a table."
+},
+{
+"name": "000000051008.jpg",
+"category": "laptop",
+"caption": "A cat looking like it is using a laptop"
+},
+{
+"name": "000000059598.jpg",
+"category": "laptop",
+"caption": "A table topped with a laptop computer next to a plate of food."
+},
+{
+"name": "000000076731.jpg",
+"category": "laptop",
+"caption": "A pen is sitting on top of a laptop."
+},
+{
+"name": "000000068765.jpg",
+"category": "keyboard",
+"caption": "A keyboard, mouse, and wires on a desk."
+},
+{
+"name": "000000335658.jpg",
+"category": "keyboard",
+"caption": "A keyboard and mouse sitting on a desk."
+},
+{
+"name": "000000378099.jpg",
+"category": "keyboard",
+"caption": "A computer keyboard sitting next to a mouse on a wooden table."
+},
+{
+"name": "000000409630.jpg",
+"category": "keyboard",
+"caption": "A computer keyboard sitting next to a mouse."
+},
+{
+"name": "000000560011.jpg",
+"category": "keyboard",
+"caption": "A mouse is next to a keyboard on a desk"
+},
+{
+"name": "000000022623.jpg",
+"category": "cell phone",
+"caption": "Closeup of a cellphone device with various buttons."
+},
+{
+"name": "000000053909.jpg",
+"category": "cell phone",
+"caption": "a picture of a cellphone on a cellphone"
+},
+{
+"name": "000000112997.jpg",
+"category": "cell phone",
+"caption": "a person is holding up an old cellphone"
+},
+{
+"name": "000000300039.jpg",
+"category": "cell phone",
+"caption": "A person looking at their cell phone at another person taking a picture."
+},
+{
+"name": "000000332570.jpg",
+"category": "cell phone",
+"caption": "the portable device is displaying a very important message."
+},
+{
+"name": "000000334977.jpg",
+"category": "cell phone",
+"caption": "A smart phone at different angles with windows."
+},
+{
+"name": "000000160556.jpg",
+"category": "microwave",
+"caption": "A young girl sits in front of a computer holding a phone."
+},
+{
+"name": "000000199681.jpg",
+"category": "microwave",
+"caption": "A microwave with a stuffed animal inside reads 2:46."
+},
+{
+"name": "000000207538.jpg",
+"category": "microwave",
+"caption": "A white Samsung microwave oven installed into a natural wood kitchen cabinet."
+},
+{
+"name": "000000269866.jpg",
+"category": "microwave",
+"caption": "A microwave oven with a tray on the bottom"
+},
+{
+"name": "000000319696.jpg",
+"category": "microwave",
+"caption": "A red microwave on a tile kitchen counter."
+},
+{
+"name": "000000426253.jpg",
+"category": "microwave",
+"caption": "A plate of food being heated in a microwave."
+},
+{
+"name": "000000035326.jpg",
+"category": "oven",
+"caption": "A stove back splash with a granite design."
+},
+{
+"name": "000000111036.jpg",
+"category": "oven",
+"caption": "A stove top oven sitting on a pile of junk outdoors."
+},
+{
+"name": "000000136466.jpg",
+"category": "oven",
+"caption": "a stove with a tea kettle and cooking pot on top"
+},
+{
+"name": "000000138856.jpg",
+"category": "oven",
+"caption": "A large round piece of bread on a metal pan."
+},
+{
+"name": "000000172396.jpg",
+"category": "oven",
+"caption": "A pizza being made within the oven"
+},
+{
+"name": "000000177935.jpg",
+"category": "oven",
+"caption": "A large white kitchen range with gold towels on the front."
+},
+{
+"name": "000000035770.jpg",
+"category": "sink",
+"caption": "a couple of pans you would use to pee in"
+},
+{
+"name": "000000047121.jpg",
+"category": "sink",
+"caption": "A cat standing on the edge of a sink drink water."
+},
+{
+"name": "000000094336.jpg",
+"category": "sink",
+"caption": "A large cat sitting in a bathroom sink under a mirror."
+},
+{
+"name": "000000138819.jpg",
+"category": "sink",
+"caption": "The view of a bathroom with a wall mounted sink."
+},
+{
+"name": "000000209747.jpg",
+"category": "sink",
+"caption": "A gray and white kitten sitting in a bathroom sink."
+},
+{
+"name": "000000223789.jpg",
+"category": "sink",
+"caption": "a rome with rose flowers and a sink"
+},
+{
+"name": "000000000802.jpg",
+"category": "refrigerator",
+"caption": "A kitchen with a refrigerator, stove and oven with cabinets."
+},
+{
+"name": "000000022705.jpg",
+"category": "refrigerator",
+"caption": "The woman in the dress is holding her drink."
+},
+{
+"name": "000000024243.jpg",
+"category": "refrigerator",
+"caption": "The girl is sitting inside the broken fridge on the side of the road."
+},
+{
+"name": "000000028452.jpg",
+"category": "refrigerator",
+"caption": "An open refrigerator door on a kitchen floor."
+},
+{
+"name": "000000057238.jpg",
+"category": "refrigerator",
+"caption": "A white refrigerator freezer sitting inside of a kitchen."
+},
+{
+"name": "000000073326.jpg",
+"category": "refrigerator",
+"caption": "An open refrigerator including bottles of various food."
+},
+{
+"name": "000000099182.jpg",
+"category": "book",
+"caption": "A man looking through a book on top of a table."
+},
+{
+"name": "000000176446.jpg",
+"category": "book",
+"caption": "A yellow not book sitting on top of a desk next to a laptop."
+},
+{
+"name": "000000183049.jpg",
+"category": "book",
+"caption": "A book shelf filled with lots of colorful books."
+},
+{
+"name": "000000251140.jpg",
+"category": "book",
+"caption": "A book about understanding and maintaining a ten-speed bicycle."
+},
+{
+"name": "000000255483.jpg",
+"category": "book",
+"caption": "Man looking over paperwork while holding pen on desk."
+},
+{
+"name": "000000262938.jpg",
+"category": "book",
+"caption": "Two stuffed animal dogs reading a picture book about dogs."
+},
+{
+"name": "000000067896.jpg",
+"category": "clock",
+"caption": "A clock displays a time for the public to see."
+},
+{
+"name": "000000140929.jpg",
+"category": "clock",
+"caption": "The clock is on display on the side of the building outside."
+},
+{
+"name": "000000145591.jpg",
+"category": "clock",
+"caption": "THERE IS A CLOCK THAT IS ON DISPLAY IN THE CITY"
+},
+{
+"name": "000000154339.jpg",
+"category": "clock",
+"caption": "Gauges attached to pipes displayed in dimly lit area."
+},
+{
+"name": "000000155051.jpg",
+"category": "clock",
+"caption": "a close of up a clock that makes the moon look small next to it"
+},
+{
+"name": "000000164363.jpg",
+"category": "clock",
+"caption": "A large wooden block with roman numeral numbers."
+},
+{
+"name": "000000019742.jpg",
+"category": "vase",
+"caption": "A brown glass on the table for display art"
+},
+{
+"name": "000000051326.jpg",
+"category": "vase",
+"caption": "Three decorated, carved jack-o-lanterns, one with pink flowers and a vase inside it"
+},
+{
+"name": "000000095786.jpg",
+"category": "vase",
+"caption": "there are three vases made of clay on a table"
+},
+{
+"name": "000000167240.jpg",
+"category": "vase",
+"caption": "A vase siting on top of a wooden shelf near a map."
+},
+{
+"name": "000000249025.jpg",
+"category": "vase",
+"caption": "An orange reddish rose in a vase filled with water on top of a table."
+},
+{
+"name": "000000262631.jpg",
+"category": "vase",
+"caption": "A large glass vase with leaves painted on it's sides."
+},
+{
+"name": "000000161008.jpg",
+"category": "scissors",
+"caption": "A pair of scissors sitting on top of a wooden box."
+},
+{
+"name": "000000340930.jpg",
+"category": "scissors",
+"caption": "Closeup of a cup holding scissors and other pens and pencils."
+},
+{
+"name": "000000348012.jpg",
+"category": "scissors",
+"caption": "Scissors are resting on a roll of clear tape."
+},
+{
+"name": "000000351096.jpg",
+"category": "scissors",
+"caption": "A hand holding a pair of giant scissors above boxes."
+},
+{
+"name": "000000357501.jpg",
+"category": "scissors",
+"caption": "A gold colored pair of scissors cutting into a piece of bejeweled fabric with other bejeweled items in the background."
+},
+{
+"name": "000000368982.jpg",
+"category": "scissors",
+"caption": "A pair of scissors sitting on top of a table."
+},
+{
+"name": "000000000776.jpg",
+"category": "teddy bear",
+"caption": "Three teddy bears, each a different color, snuggling together."
+},
+{
+"name": "000000042889.jpg",
+"category": "teddy bear",
+"caption": "A teddy bear sits by a keyboards and microphone."
+},
+{
+"name": "000000050844.jpg",
+"category": "teddy bear",
+"caption": "A bed filled with different types of stuffed animals."
+},
+{
+"name": "000000057150.jpg",
+"category": "teddy bear",
+"caption": "Little girl holding up a big stuffed animal with other children in background."
+},
+{
+"name": "000000070229.jpg",
+"category": "teddy bear",
+"caption": "a park bench that has a teddy bear on it"
+},
+{
+"name": "000000073118.jpg",
+"category": "teddy bear",
+"caption": "Two brown teddy bears sitting side by side."
+}
+]
+}

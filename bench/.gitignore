@@ -1,2 +1,5 @@
 out/
 models/
+# The root .gitignore drops *.json; these are inputs and results, not build output.
+!data/*.json
+!results/*.json
