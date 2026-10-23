@@ -1,0 +1,50 @@
+name: Chrome AI benchmark (throwaway)
+
+# One-off: run PR #34's Chrome AI harness on the Linux runner, where Gemini
+# Nano is known to work, then score the descriptions with the benchmark.
+on:
+  push:
+    branches: [claude/serene-shannon-0wz4bw]
+    paths: [.github/workflows/chrome-ai-bench.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: claude/embedding-benchmark
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Fetch the COCO subset
+        run: node bench/fetch-coco-subset.mjs --out data/coco
+      - name: Serve the harness page with the images
+        run: |
+          npm run build
+          cp -R data/coco/images dist/bench-images
+          nohup npx vite preview --host 127.0.0.1 --port 4173 --strictPort > preview.log 2>&1 &
+          npx -y wait-on@8 -t 60000 http://127.0.0.1:4173/chrome-ai-bench.html
+      - name: Describe every image with Gemini Nano
+        run: xvfb-run -a node bench/run-chrome-ai.mjs --chrome /usr/bin/google-chrome --url http://127.0.0.1:4173/chrome-ai-bench.html --out chrome-ai.json --timeout-min 200
+      - name: Score (nomic-embed-text over the descriptions)
+        run: |
+          node bench/embed.mjs --data data/coco --out bench/out-coco --models chrome-ai --descriptions chrome-ai.json
+          node bench/metrics.mjs --data data/coco --emb bench/out-coco --json chrome-ai-metrics.json
+          cat chrome-ai-metrics.json
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: chrome-ai-bench
+          path: |
+            chrome-ai.json
+            chrome-ai-metrics.json
+            preview.log
+          if-no-files-found: warn
