@@ -277,3 +277,18 @@ describe('poolVectors', () => {
     ).toThrow(/mixed widths/)
   })
 })
+
+describe('downloadPercent', () => {
+  it('uses the declared size while only small files have started', async () => {
+    const { downloadPercent } = await import('./vlm')
+    // 30 KB of configs done out of 30 KB seen, model declared at 316 MB.
+    expect(downloadPercent(30e3, 30e3, 316 * 1024 * 1024)).toBeLessThan(1)
+  })
+
+  it('trusts the real total once it exceeds the declared size, and caps at 99', async () => {
+    const { downloadPercent } = await import('./vlm')
+    expect(downloadPercent(50, 200, 100)).toBe(25)
+    expect(downloadPercent(200, 200, 100)).toBe(99)
+    expect(downloadPercent(0, 0, 0)).toBe(0)
+  })
+})

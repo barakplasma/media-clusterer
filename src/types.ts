@@ -94,7 +94,9 @@ export type VlmRequest =
 export type VlmResponse =
   | { type: 'progress'; id: number; loaded: number; total: number; file: string }
   | { type: 'loaded'; id: number; device: VlmDevice; visionDim: number }
-  | { type: 'embedded'; id: number; vectors: Float32Array[] }
+  // A zero-length vector marks an item that failed alone; `errors` holds
+  // those items' messages in order.
+  | { type: 'embedded'; id: number; vectors: Float32Array[]; errors?: string[] }
   | { type: 'error'; id: number; message: string; name: string }
 
 /** Backend the worker actually got, after the webgpu→wasm fallback. */

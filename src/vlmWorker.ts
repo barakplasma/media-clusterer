@@ -248,23 +248,46 @@ async function embedGemma2(inputs: Record<string, unknown>): Promise<Float32Arra
  * per forward pass: batches risk the WebGPU dispatch limit and the memory
  * budget alike.
  */
-async function embedGroupsGemma2(id: number, groups: ImageBitmap[][]): Promise<void> {
+async function embedGroupGemma2(group: ImageBitmap[]): Promise<Float32Array> {
   const run = processor as unknown as Gemma2Processor
+  const frames = group.map(bitmapToRaw)
+  for (const b of group) b.close()
+  // Frames arrive without timestamps; space them one second apart, the
+  // model's default sampling rate.
+  const opts = seqOptions(loadedTier!)
+  const inputs =
+    frames.length === 1
+      ? await run(null, [frames], null, null, opts)
+      : await run(null, null, null, [new RawVideo(frames, frames.length)], opts)
+  return embedGemma2(inputs)
+}
+
+/**
+ * Embed each group on its own, so one bad item (a broken video, an odd
+ * frame) costs its own vector — sent back empty, with its error — instead
+ * of failing every item in the batch. A lost GPU device still aborts the
+ * batch: nothing after it can succeed, and the app stops the run on it.
+ */
+async function embedEach(
+  id: number,
+  groups: ImageBitmap[][],
+  embedOne: (group: ImageBitmap[]) => Promise<Float32Array>
+): Promise<void> {
   const vectors: Float32Array[] = []
+  const errors: string[] = []
   for (const group of groups) {
-    const frames = group.map(bitmapToRaw)
-    for (const b of group) b.close()
-    // Frames arrive without timestamps; space them one second apart, the
-    // model's default sampling rate.
-    const opts = seqOptions(loadedTier!)
-    const inputs =
-      frames.length === 1
-        ? await run(null, [frames], null, null, opts)
-        : await run(null, null, null, [new RawVideo(frames, frames.length)], opts)
-    vectors.push(await embedGemma2(inputs))
+    try {
+      vectors.push(await embedOne(group))
+    } catch (err) {
+      const { message } = toError(err)
+      if (/device[^.]*\blost|DEVICE_LOST/i.test(message)) throw err
+      for (const b of group) b.close()
+      vectors.push(new Float32Array(0))
+      errors.push(message)
+    }
   }
   post(
-    { type: 'embedded', id, vectors },
+    { type: 'embedded', id, vectors, errors },
     vectors.map((v) => v.buffer)
   )
 }
@@ -285,50 +308,46 @@ async function embedText(id: number, texts: string[]): Promise<void> {
 
 async function embed(id: number, groups: ImageBitmap[][]): Promise<void> {
   if (loadedTier?.family === 'embeddinggemma2' && model && processor) {
-    return embedGroupsGemma2(id, groups)
+    return embedEach(id, groups, embedGroupGemma2)
   }
   if (!runVision || !processor || !loadedTier) {
     throw new Error('VLM worker: embed before load')
   }
-  const tier = loadedTier
-  const vectors: Float32Array[] = []
+  return embedEach(id, groups, embedGroupSmolVlm)
+}
 
-  for (const group of groups) {
-    const frameVectors: Float32Array[] = []
-    for (const bitmap of group) {
-      const raw = bitmapToRaw(bitmap)
+async function embedGroupSmolVlm(group: ImageBitmap[]): Promise<Float32Array> {
+  const tier = loadedTier!
+  const vision = runVision!
+  const frameVectors: Float32Array[] = []
+  for (const bitmap of group) {
+    const raw = bitmapToRaw(bitmap)
 
-      // do_image_splitting: false is load-bearing — the default tiles each
-      // frame against size.longest_edge 2048, which is the easiest way to blow
-      // the memory budget on the device this exists to support.
-      const inputs = (await (processor as unknown as CallableFunction)(raw, {
-        do_image_splitting: false
-      })) as { pixel_values: unknown }
+    // do_image_splitting: false is load-bearing — the default tiles each
+    // frame against size.longest_edge 2048, which is the easiest way to blow
+    // the memory budget on the device this exists to support.
+    const inputs = (await (processor as unknown as CallableFunction)(raw, {
+      do_image_splitting: false
+    })) as { pixel_values: unknown }
 
-      const out = await runVision({ pixel_values: inputs.pixel_values })
-      const features = out.last_hidden_state ?? out.image_features ?? Object.values(out)[0]
-      if (!features?.dims) {
-        throw new Error('VLM worker: vision encoder returned no recognisable tensor')
-      }
-
-      assertVisionDim(tier, features.dims[features.dims.length - 1])
-      frameVectors.push(poolVision(features.data, features.dims))
-
-      // AGENT.md: bitmaps are closed as soon as they are done with. The worker
-      // owns these because they were transferred to it.
-      bitmap.close()
+    const out = await vision({ pixel_values: inputs.pixel_values })
+    const features = out.last_hidden_state ?? out.image_features ?? Object.values(out)[0]
+    if (!features?.dims) {
+      throw new Error('VLM worker: vision encoder returned no recognisable tensor')
     }
 
-    if (frameVectors.length === 0) {
-      throw new Error('VLM worker: every frame in a group failed to embed')
-    }
-    vectors.push(poolVectors(frameVectors))
+    assertVisionDim(tier, features.dims[features.dims.length - 1])
+    frameVectors.push(poolVision(features.data, features.dims))
+
+    // AGENT.md: bitmaps are closed as soon as they are done with. The worker
+    // owns these because they were transferred to it.
+    bitmap.close()
   }
 
-  post(
-    { type: 'embedded', id, vectors },
-    vectors.map((v) => v.buffer)
-  )
+  if (frameVectors.length === 0) {
+    throw new Error('VLM worker: every frame in a group failed to embed')
+  }
+  return poolVectors(frameVectors)
 }
 
 async function dispose(): Promise<void> {
