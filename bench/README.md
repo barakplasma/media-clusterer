@@ -38,9 +38,10 @@ Higher is better everywhere. Node CPU, the app's settings. Holidays: 274 photos 
 | nomic, mean pooling (app) | 0.911 | 0.560 | 0.797 | 0.54 | 0.33 |
 | nomic, CLS pooling | 0.882 | – | – | – | 0.32 |
 | SmolVLM2 (576-d vision encoder) | 0.895 | 0.505 | 0.758 | – | 1.73 |
+| Chrome AI (Gemini Nano descriptions → nomic-embed-text) | – | 0.649 | 0.833 | 0.66 | ~14.5 (Gemini, CI runner) |
 | Sapiens2-0.1B int8 | 0.739 | 0.149 | 0.643 | – | 3.97 |
 
-nomic CLS was not run on COCO (comparison only). Caption search needs a text side: SmolVLM2 and Sapiens2 have none.
+nomic CLS was not run on COCO (comparison only). Chrome AI ran on COCO only (GitHub ubuntu-latest, Chrome with Gemini Nano via bench/run-chrome-ai.mjs), so it is not in the model ranking yet. Caption search needs a text side: SmolVLM2 and Sapiens2 have none.
 
 ### Projections (mean over models)
 
