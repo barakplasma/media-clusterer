@@ -288,10 +288,16 @@ for (const id of ids) {
   if (captions && (await readFile(textFile).catch(() => null))) {
     const tb = await readFile(textFile)
     const tflat = new Float32Array(tb.buffer, tb.byteOffset, tb.byteLength / 4)
+    // Rows follow the caption order embed.mjs saw (<id>.text.json), which may
+    // be a superset of this dataset's captions.
+    const rowNames = JSON.parse(await readFile(join(args.emb, `${id}.text.json`), 'utf8').catch(() => 'null')) ?? captions.map((c) => c.name)
+    const rowOf = new Map(rowNames.map((n, i) => [n, i]))
     const index = new Map(e.names.map((n, i) => [n, i]))
     const hits = { 1: 0, 5: 0, 10: 0 }
     let catHit = 0
-    captions.forEach((c, qi) => {
+    captions.forEach((c) => {
+      const qi = rowOf.get(c.name)
+      if (qi === undefined) throw new Error(`${id}: no caption vector for ${c.name}`)
       const q = tflat.subarray(qi * e.dim, (qi + 1) * e.dim)
       const target = index.get(c.name)
       const scores = e.rows.map((r, j) => {

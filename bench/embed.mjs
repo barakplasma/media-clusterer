@@ -256,6 +256,8 @@ for (const id of args.models.split(',')) {
     const tbuf = new Float32Array(captions.length * dim)
     for (const [i, c] of captions.entries()) tbuf.set(await m.embedText(c.caption), i * dim)
     await writeFile(join(args.out, `${id}.text.f32`), Buffer.from(tbuf.buffer))
+    // Which image each caption row belongs to, so a subset can be scored.
+    await writeFile(join(args.out, `${id}.text.json`), JSON.stringify(captions.map((c) => c.name)))
     console.log(`${id} text done: ${captions.length} captions, ${((performance.now() - t2) / 1000 / captions.length).toFixed(2)}s/query`)
   }
 }

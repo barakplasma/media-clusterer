@@ -25,6 +25,38 @@ node bench/embed.mjs --data data/holidays-300 --out bench/out
 node bench/metrics.mjs --data data/holidays-300 --emb bench/out --json bench/out/holidays.json
 ```
 
+## Results (2026-10-23)
+
+Higher is better everywhere. Node CPU, the app's settings. Holidays: 274 photos (first 100 scenes). COCO: 216 photos (4 per category, 54 categories).
+
+### Models
+
+| Model | Holidays mAP | COCO category mAP | COCO k-means NMI | Caption search R@1 | CPU s/image |
+|---|---|---|---|---|---|
+| EmbeddingGemma 2, desktop (280 tokens) | 0.941 | 0.547 | 0.766 | 0.91 | 5.73 |
+| EmbeddingGemma 2, phone (70 tokens) | 0.933 | 0.564 | 0.790 | 0.88 | 1.71 |
+| nomic, mean pooling (app) | 0.911 | 0.560 | 0.797 | 0.54 | 0.33 |
+| nomic, CLS pooling | 0.882 | – | – | – | 0.32 |
+| SmolVLM2 (576-d vision encoder) | 0.895 | 0.505 | 0.758 | – | 1.73 |
+| Sapiens2-0.1B int8 | 0.739 | 0.149 | 0.643 | – | 3.97 |
+
+nomic CLS was not run on COCO (comparison only). Caption search needs a text side: SmolVLM2 and Sapiens2 have none.
+
+### Projections (mean over models)
+
+| Projection | Holidays 2D mAP | COCO 2D mAP | Holidays trust@10 | COCO 2D NMI |
+|---|---|---|---|---|
+| TSNE | 0.887 | 0.486 | 0.951 | 0.808 |
+| TriMap | 0.559 | 0.341 | 0.957 | 0.753 |
+| UMAP | 0.395 | 0.197 | 0.915 | 0.702 |
+| ISOMAP | 0.364 | 0.150 | 0.846 | 0.676 |
+| PCA | 0.354 | 0.138 | 0.842 | 0.676 |
+| MDS | 0.355 | 0.138 | 0.842 | 0.677 |
+| SAMMON | 0.313 | 0.098 | 0.817 | 0.663 |
+| LLE | 0.036 | 0.049 | 0.567 | 0.601 |
+
+Raw numbers: `bench/results/`.
+
 ## COCO: what is in the photo, and text search
 
 `bench/data/coco-subset.json` lists 322 COCO val2017 images with one clear
