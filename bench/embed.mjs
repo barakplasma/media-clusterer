@@ -19,7 +19,7 @@ const { values: args } = parseArgs({
   options: {
     data: { type: 'string' },
     out: { type: 'string', default: 'bench/out' },
-    models: { type: 'string', default: 'eg2-phone,eg2-desktop,smolvlm2,nomic-mean,nomic-cls' },
+    models: { type: 'string', default: 'eg2-phone,eg2-desktop,smolvlm2,nomic-mean,nomic-cls,sapiens2-int8,sapiens2-fp16,sapiens2-fp32' },
     limit: { type: 'string' },
     models_dir: { type: 'string', default: 'bench/models' }
   }
@@ -62,6 +62,11 @@ async function eg2(imageTokens, fixedSeqLen) {
       const inputs = await processor(null, [[await vlmFrame(path)]], null, null, opts)
       const out = await model(inputs)
       return l2(out.sentence_embedding.data)
+    },
+    // src/vlmTiers.ts queryPrefix; the query is padded like any phone input.
+    async embedText(text) {
+      const inputs = await processor(['task: search result | query: ' + text], null, null, null, opts)
+      return l2((await model(inputs)).sentence_embedding.data)
     }
   }
 }
@@ -113,7 +118,14 @@ async function nomic(pooling) {
     device: 'cpu',
     dtype: 'fp32'
   })
+  let textExtractor
   return {
+    // src/app.ts embedText: nomic-embed-text-v1.5, 'search_query: ' prefix, mean + L2.
+    async embedText(text) {
+      textExtractor ??= await pipeline('feature-extraction', 'nomic-ai/nomic-embed-text-v1.5', { device: 'cpu', dtype: 'fp32' })
+      const out = await textExtractor(`search_query: ${text}`, { pooling: 'mean', normalize: true })
+      return l2(out.data)
+    },
     async embed(path) {
       const image = await RawImage.read(path)
       // The pipeline ignores { pooling, normalize } for image features and
@@ -132,12 +144,47 @@ async function nomic(pooling) {
   }
 }
 
+/**
+ * Sapiens2-0.1B (src/sapiens2.ts): stretched to 768x1024, ImageNet-normalised,
+ * the 'embedding' output, L2.
+ */
+async function sapiens2(variant) {
+  const fileName = `sapiens2_0.1b_${variant}.onnx`
+  const file = join(args.models_dir, fileName)
+  try {
+    await readFile(file)
+  } catch {
+    const res = await fetch(`https://huggingface.co/barakplasma/sapiens2-onnx/resolve/main/${fileName}`)
+    await mkdir(args.models_dir, { recursive: true })
+    await writeFile(file, Buffer.from(await res.arrayBuffer()))
+  }
+  const session = await ort.InferenceSession.create(file)
+  const W = 768
+  const H = 1024
+  const mean = [0.485, 0.456, 0.406]
+  const std = [0.229, 0.224, 0.225]
+  return {
+    async embed(path) {
+      // createImageBitmap(file, { resizeWidth: 768, resizeHeight: 1024 }) stretches.
+      const { data } = await sharp(path).rotate().resize(W, H, { fit: 'fill' }).removeAlpha().raw().toBuffer({ resolveWithObject: true })
+      const px = W * H
+      const t = new Float32Array(3 * px)
+      for (let i = 0; i < px; i++) for (let c = 0; c < 3; c++) t[c * px + i] = (data[i * 3 + c] / 255 - mean[c]) / std[c]
+      const out = await session.run({ pixel_values: new ort.Tensor('float32', t, [1, 3, H, W]) })
+      return l2(out.embedding.data)
+    }
+  }
+}
+
 const MODELS = {
   'eg2-phone': () => eg2(70, 296), // PHONE_OVERRIDES in src/vlmTiers.ts
   'eg2-desktop': () => eg2(280, 0),
   smolvlm2: () => smolvlm2(),
   'nomic-mean': () => nomic('mean'),
-  'nomic-cls': () => nomic('cls')
+  'nomic-cls': () => nomic('cls'),
+  'sapiens2-int8': () => sapiens2('int8'),
+  'sapiens2-fp16': () => sapiens2('fp16'),
+  'sapiens2-fp32': () => sapiens2('fp32')
 }
 
 // ── Run ─────────────────────────────────────────────────────────────────────
@@ -146,6 +193,12 @@ const imgDir = join(args.data, 'images')
 let names = (await readdir(imgDir)).filter((n) => /\.(jpe?g|png|webp)$/i.test(n)).sort()
 if (args.limit) names = names.slice(0, Number(args.limit))
 await mkdir(args.out, { recursive: true })
+let captions = null
+try {
+  captions = JSON.parse(await readFile(join(args.data, 'captions.json'), 'utf8'))
+} catch {
+  // Not a captioned dataset.
+}
 
 for (const id of args.models.split(',')) {
   if (!MODELS[id]) throw new Error(`unknown model ${id}; known: ${Object.keys(MODELS).join(', ')}`)
@@ -170,4 +223,14 @@ for (const id of args.models.split(',')) {
   await writeFile(join(args.out, `${id}.f32`), Buffer.from(buf.buffer))
   await writeFile(join(args.out, `${id}.json`), JSON.stringify({ names, dim, loadS, seconds }))
   console.log(`${id} done: ${names.length} images, dim ${dim}, load ${loadS.toFixed(1)}s, ${(seconds / names.length).toFixed(2)}s/img`)
+
+  // Captioned datasets: embed each caption as a search query, if this model
+  // has a text side (SmolVLM2 and Sapiens2 do not).
+  if (captions && m.embedText) {
+    const t2 = performance.now()
+    const tbuf = new Float32Array(captions.length * dim)
+    for (const [i, c] of captions.entries()) tbuf.set(await m.embedText(c.caption), i * dim)
+    await writeFile(join(args.out, `${id}.text.f32`), Buffer.from(tbuf.buffer))
+    console.log(`${id} text done: ${captions.length} captions, ${((performance.now() - t2) / 1000 / captions.length).toFixed(2)}s/query`)
+  }
 }
