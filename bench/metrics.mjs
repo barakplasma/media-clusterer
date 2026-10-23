@@ -61,7 +61,7 @@ async function loadEmbeddings(id) {
   const keep = meta.names.map((n, i) => [n, i]).filter(([n]) => present.has(n))
   if (keep.length < present.size - (present.has('list.json') ? 1 : 0)) throw new Error(`${id}: vectors cover ${keep.length} of the ${present.size} images in --data`)
   const rows = keep.map(([, i]) => flat.subarray(i * meta.dim, (i + 1) * meta.dim))
-  return { ...meta, names: keep.map(([n]) => n), rows }
+  return { ...meta, embedded: meta.names.length, names: keep.map(([n]) => n), rows }
 }
 
 // ── Ranking metrics over any similarity ─────────────────────────────────────
@@ -269,7 +269,7 @@ for (const id of ids) {
   const row = {
     model: id,
     images: e.names.length,
-    sPerImage: +(e.seconds / e.names.length).toFixed(2),
+    sPerImage: +(e.seconds / e.embedded).toFixed(2),
     mAP: +emb.mAP.toFixed(4),
     R1: +emb.R1.toFixed(4),
     mAPall: +emb.mAPall.toFixed(4),
