@@ -21,7 +21,8 @@ const { values: args } = parseArgs({
     out: { type: 'string', default: 'bench/out' },
     models: { type: 'string', default: 'eg2-phone,eg2-desktop,smolvlm2,nomic-mean,nomic-cls,sapiens2-int8,sapiens2-fp16,sapiens2-fp32' },
     limit: { type: 'string' },
-    models_dir: { type: 'string', default: 'bench/models' }
+    models_dir: { type: 'string', default: 'bench/models' },
+    descriptions: { type: 'string' }
   }
 })
 
@@ -176,6 +177,29 @@ async function sapiens2(variant) {
   }
 }
 
+/**
+ * Chrome AI (src/app.ts, chrome-ai): Gemini Nano describes each image (run in
+ * real Chrome by bench/run-chrome-ai.mjs; its JSON is --descriptions), then
+ * nomic-embed-text embeds 'search_document: <description>'. Queries use
+ * 'search_query: ', as for nomic. An image Gemini Nano failed on gets a zero
+ * vector, as the app's failed-file stand-in does.
+ */
+async function chromeAI() {
+  if (!args.descriptions) throw new Error('chrome-ai needs --descriptions <run-chrome-ai.mjs output>')
+  const result = JSON.parse(await readFile(args.descriptions, 'utf8'))
+  if (result?.availability === 'unavailable') throw new Error('Gemini Nano was unavailable on the machine that ran it')
+  const desc = new Map(result.items.filter((i) => i.description).map((i) => [i.name, i.description]))
+  const text = await pipeline('feature-extraction', 'nomic-ai/nomic-embed-text-v1.5', { device: 'cpu', dtype: 'fp32' })
+  const embed = async (s) => l2((await text(s, { pooling: 'mean', normalize: true })).data)
+  return {
+    async embed(path) {
+      const d = desc.get(path.split('/').pop())
+      return d ? embed(`search_document: ${d}`) : new Float32Array(768)
+    },
+    embedText: (q) => embed(`search_query: ${q}`)
+  }
+}
+
 const MODELS = {
   'eg2-phone': () => eg2(70, 296), // PHONE_OVERRIDES in src/vlmTiers.ts
   'eg2-desktop': () => eg2(280, 0),
@@ -184,7 +208,8 @@ const MODELS = {
   'nomic-cls': () => nomic('cls'),
   'sapiens2-int8': () => sapiens2('int8'),
   'sapiens2-fp16': () => sapiens2('fp16'),
-  'sapiens2-fp32': () => sapiens2('fp32')
+  'sapiens2-fp32': () => sapiens2('fp32'),
+  'chrome-ai': () => chromeAI()
 }
 
 // ── Run ─────────────────────────────────────────────────────────────────────

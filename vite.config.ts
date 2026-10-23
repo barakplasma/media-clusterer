@@ -42,6 +42,10 @@ export default defineConfig({
   plugins: [excludeOrtWasm],
   build: {
     sourcemap: true,
+    rollupOptions: {
+      // chrome-ai-bench.html: the Chrome AI half of the embedding benchmark (bench/).
+      input: { main: 'index.html', chromeAiBench: 'chrome-ai-bench.html' },
+    },
   },
   test: {
     globals: true,
