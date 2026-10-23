@@ -72,12 +72,12 @@ describe('assertVisionDim', () => {
   })
 
   it('names the observed width and the fix when the ONNX export disagrees', () => {
-    // ADR-0001 flags 576 as the plausible alternative (post-connector tensor).
+    // 768 is SigLIP's pre-connector width, what ADR-0001 first assumed.
     // The message has to carry the real number, since acting on it means
     // editing the tier table.
-    expect(() => assertVisionDim(tier, 576)).toThrow(/576/)
-    expect(() => assertVisionDim(tier, 576)).toThrow(/visionDim: 576/)
-    expect(() => assertVisionDim(tier, 576)).toThrow(/cachePrefix/)
+    expect(() => assertVisionDim(tier, 768)).toThrow(/768/)
+    expect(() => assertVisionDim(tier, 768)).toThrow(/visionDim: 768/)
+    expect(() => assertVisionDim(tier, 768)).toThrow(/cachePrefix/)
   })
 })
 
