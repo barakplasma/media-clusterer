@@ -254,7 +254,7 @@ function project(rows, method) {
 
 const ids =
   args.models?.split(',') ??
-  (await readdir(args.emb)).filter((f) => f.endsWith('.json') && f !== 'results.json').map((f) => f.slice(0, -5)).sort()
+  (await readdir(args.emb)).filter((f) => f.endsWith('.json') && !f.endsWith('.text.json') && f !== 'results.json').map((f) => f.slice(0, -5)).sort()
 const results = []
 for (const id of ids) {
   const e = await loadEmbeddings(id)

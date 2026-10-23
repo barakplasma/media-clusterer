@@ -45,17 +45,22 @@ async function run(): Promise<void> {
   if (availability === 'unavailable') return
   if (availability !== 'available') {
     // Download Gemini Nano first; create() only starts it inside a user gesture.
-    await new Promise<void>((resolve) => {
+    // A failed create() (no user gesture, download error) ends the run instead of waiting forever.
+    await new Promise<void>((resolve, reject) => {
       w.__benchStart = async () => {
         const t0 = performance.now()
-        const session = await LanguageModel.create({
-          expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
-          monitor: (m) =>
-            m.addEventListener('downloadprogress', (e) => log(`download ${Math.round((e as ProgressEvent).loaded * 100)}%`))
-        })
-        session.destroy()
-        log(`model ready in ${((performance.now() - t0) / 1000).toFixed(0)}s`)
-        resolve()
+        try {
+          const session = await LanguageModel.create({
+            expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
+            monitor: (m) =>
+              m.addEventListener('downloadprogress', (e) => log(`download ${Math.round((e as ProgressEvent).loaded * 100)}%`))
+          })
+          session.destroy()
+          log(`model ready in ${((performance.now() - t0) / 1000).toFixed(0)}s`)
+          resolve()
+        } catch (err) {
+          reject(err)
+        }
       }
       log('waiting for __benchStart() (needs a user gesture)')
     })

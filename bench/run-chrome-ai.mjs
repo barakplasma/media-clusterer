@@ -87,7 +87,8 @@ while (Date.now() < deadline) {
   if (!started && (await evaluate('typeof window.__benchStart === "function"'))) {
     started = true
     // A real user gesture as far as Chrome is concerned: starts the download.
-    await evaluate('window.__benchStart()', { userGesture: true })
+    // Don't await it: a stalled download must not hold the loop past its deadline.
+    await evaluate('window.__benchStart()', { userGesture: true, awaitPromise: false })
   }
 }
 const result = (await evaluate('JSON.stringify(window.__benchResult ?? null)')) ?? 'null'
