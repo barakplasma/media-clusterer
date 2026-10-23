@@ -260,9 +260,10 @@ if (versionEl) {
 // ── Constants ────────────────────────────────────────────────────────────────
 // ── Auto batch size ───────────────────────────────────────────────────────────
 
-// Default where WebGPU is missing. A single constant so it is easy to flip
-// once the embedding benchmark picks a winner.
-const NO_WEBGPU_MODEL = 'smolvlm2-vision'
+// Default where WebGPU is missing: nomic, the best model with a WASM path in
+// the embedding benchmark (bench/, #34). It beats SmolVLM2 on same-scene
+// photos and on grouping by content, and it has text search.
+const NO_WEBGPU_MODEL = 'nomic'
 // Set when a WebGPU-only model was swapped out for this session; saveSettings
 // writes the saved choice back instead of the stand-in.
 let modelStandIn: { saved: string; used: string } | null = null
@@ -351,7 +352,7 @@ function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
     kind === 'blocked' ? '⚠️ WebGPU is turned off for this GPU' : '⚠️ WebGPU is running in software'
   el('webgpu-help-why').textContent =
     kind === 'blocked'
-      ? `This browser supports WebGPU but hides your GPU from web pages, so ${model} can't run and the app is using ${NO_WEBGPU_MODEL} instead (no text search). To use ${model}:`
+      ? `This browser supports WebGPU but hides your GPU from web pages, so ${model} can't run and the app is using ${NO_WEBGPU_MODEL} instead. To use ${model}:`
       : `This browser only offers a software (CPU) WebGPU adapter, so ${model} will be very slow. To use your GPU:`
   el('webgpu-help-url').textContent = url
   el('webgpu-help-accel').hidden = kind !== 'software'
