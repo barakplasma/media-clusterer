@@ -66,12 +66,15 @@ test('Chrome AI (Gemini Nano) describes photos and finds them by text', async ()
   // Log the app's status while it loads, so a stall says where it stalled.
   const loadEnd = Date.now() + 8 * 60_000
   let phase = ''
+  let loading = false
   while (Date.now() < loadEnd) {
     const st = await page.evaluate(() => ({ phase: window.__debug?.state.phase ?? '', status: document.getElementById('status')?.textContent ?? '' }))
     console.log(`app: ${st.phase} · ${st.status}`)
     phase = st.phase
-    if (phase === 'model_ready' || phase === 'idle') break
-    await page.waitForTimeout(15_000)
+    loading ||= phase === 'loading_model'
+    // 'idle' is also the phase before loading starts; after it, it means the load gave up.
+    if (phase === 'model_ready' || (loading && phase === 'idle')) break
+    await page.waitForTimeout(phase === 'loading_model' ? 15_000 : 1_000)
   }
   expect(phase, 'Chrome AI model did not load (see app status above)').toBe('model_ready')
 
