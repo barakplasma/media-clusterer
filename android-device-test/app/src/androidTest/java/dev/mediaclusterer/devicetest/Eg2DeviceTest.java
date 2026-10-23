@@ -19,6 +19,10 @@ import androidx.test.uiautomator.Until;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.io.ByteArrayOutputStream;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -60,6 +64,8 @@ public class Eg2DeviceTest {
         int logged = 0;
         boolean done = false;
         boolean reopened = false;
+        Set<String> seenTexts = new LinkedHashSet<>();
+        boolean sampled = false;
         while (SystemClock.uptimeMillis() < deadline && !done) {
             dismissDialogs(device);
             // Chrome's first run can swallow the intent; send it again once.
@@ -79,10 +85,16 @@ public class Eg2DeviceTest {
                 for (int i = logged; i < lines.length; i++) Log.i(TAG, "page " + lines[i]);
                 logged = Math.max(logged, lines.length);
                 done = text.contains("DONE ");
+            } else {
+                // The selector found nothing (the full app page): read every
+                // text and content-desc in the window dump instead.
+                done = scanHierarchy(device, seenTexts, !sampled);
+                sampled = true;
             }
             if (!done) SystemClock.sleep(5_000);
         }
         String finalText = pageLog(device);
+        if (finalText == null) finalText = String.join("\n", seenTexts);
         Log.i(TAG, "harness finished done=" + done);
         assertTrue("page never reported DONE", done);
         assertTrue("page reported failures: " + finalText,
@@ -98,6 +110,39 @@ public class Eg2DeviceTest {
         } catch (RuntimeException stale) {
             return null;
         }
+    }
+
+    private static final Pattern ATTR = Pattern.compile("(?:text|content-desc)=\"([^\"]*)\"");
+
+    /** Log new strings from the window dump; true once one contains "DONE ". */
+    private static boolean scanHierarchy(UiDevice device, Set<String> seen, boolean sample) {
+        String xml;
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            device.dumpWindowHierarchy(out);
+            xml = out.toString("UTF-8");
+        } catch (Exception e) {
+            Log.i(TAG, "harness dump failed " + e);
+            return false;
+        }
+        if (sample) {
+            Log.i(TAG, "harness dump " + xml.length() + " chars");
+            for (int i = 0; i < Math.min(xml.length(), 12_000); i += 3_000)
+                Log.i(TAG, "harness dump[" + i + "] " + xml.substring(i, Math.min(xml.length(), i + 3_000)));
+        }
+        boolean done = false;
+        Matcher m = ATTR.matcher(xml);
+        while (m.find()) {
+            String v = m.group(1).replace("&#10;", "\n").replace("&quot;", "\"").replace("&lt;", "<")
+                    .replace("&gt;", ">").replace("&apos;", "'").replace("&amp;", "&");
+            if (v.isEmpty()) continue;
+            for (String line : v.split("\n")) {
+                if (line.isEmpty() || !seen.add(line)) continue;
+                Log.i(TAG, "page " + line);
+                if (line.startsWith("DONE ")) done = true;
+            }
+        }
+        return done;
     }
 
     private static void dismissDialogs(UiDevice device) {
