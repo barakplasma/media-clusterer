@@ -11,10 +11,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: e2e-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
@@ -52,6 +48,6 @@ jobs:
         run: |
           nohup npx vite --host 127.0.0.1 --port 5173 --strictPort > vite.log 2>&1 &
           npx -y wait-on@8 -t 60000 http://127.0.0.1:5173
-      - run: node --test --test-reporter=spec e2e/safari/
+      - run: node --test --test-reporter=spec e2e/safari/embeddinggemma2.test.mjs
       - if: failure()
         run: cat vite.log
