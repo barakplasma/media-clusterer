@@ -23,8 +23,10 @@ jobs:
     # Only the phone profile is required; desktop is informational.
     continue-on-error: ${{ matrix.profile == 'desktop' }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: npm
@@ -38,11 +40,13 @@ jobs:
     # adapter (Chrome on the same runners gets the Apple GPU). Re-enable when
     # the runner's Safari exposes WebGPU.
     if: false
-    runs-on: macos-26
+    runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: npm

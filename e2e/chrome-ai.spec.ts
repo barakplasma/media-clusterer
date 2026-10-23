@@ -1,4 +1,7 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, chromium, type Page } from '@playwright/test'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // The Chrome AI model: Gemini Nano describes each photo, nomic-embed-text
 // embeds the description, and text search runs against those vectors.
@@ -8,7 +11,23 @@ const QUERIES: [string, string][] = [
   ['people playing soccer', 'football'],
 ]
 
-test('Chrome AI (Gemini Nano) describes photos and finds them by text', async ({ page }) => {
+let page: Page
+test.beforeAll(async ({}, info) => {
+  const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'nano-')), {
+    channel: 'chrome',
+    headless: false,
+    baseURL: info.project.use.baseURL,
+    // Playwright's defaults block the component download that fetches the model.
+    ignoreDefaultArgs: ['--disable-component-update', '--disable-background-networking'],
+    args: [
+      '--enable-features=PromptAPIForGeminiNano,PromptAPIForGeminiNanoMultimodalInput,OptimizationGuideOnDeviceModel:BypassPerfRequirement/true',
+    ],
+  })
+  page = ctx.pages()[0] ?? (await ctx.newPage())
+})
+test.afterAll(() => page?.context().close())
+
+test('Chrome AI (Gemini Nano) describes photos and finds them by text', async () => {
   page.on('console', (m) => {
     if (!m.text().includes('[vite]')) console.log(`[${m.type()}] ${m.text().slice(0, 300)}`)
   })
@@ -35,14 +54,14 @@ test('Chrome AI (Gemini Nano) describes photos and finds them by text', async ({
       document.body.append(b)
     }, opts)
     await page.click('#e2e-nano')
-    await expect.poll(availability, { timeout: 15 * 60_000, intervals: [5_000] }).toBe('available')
+    await expect.poll(availability, { timeout: 10 * 60_000, intervals: [5_000] }).toBe('available')
     console.log(`Gemini Nano downloaded in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
     avail = 'available'
   }
 
   await page.evaluate(() => localStorage.setItem('mc_settings', JSON.stringify({ modelVariant: 'chrome-ai', enableTextSearch: true })))
   await page.reload()
-  await page.waitForFunction(() => window.__debug?.state.phase === 'model_ready', null, { timeout: 10 * 60_000, polling: 2000 })
+  await page.waitForFunction(() => window.__debug?.state.phase === 'model_ready', null, { timeout: 5 * 60_000, polling: 2000 })
 
   const run = await page.evaluate(async (names) => {
     const d = window.__debug

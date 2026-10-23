@@ -23,22 +23,6 @@ name: Android device test (Firebase Test Lab)
 #      GCP_RESULTS_BUCKET = a bucket the service account can write
 on:
   workflow_dispatch:
-    inputs:
-      device:
-        description: Test Lab model:API
-        type: choice
-        default: lynx:33 (Pixel 7a)
-        # Pixel 10 is left out: its PowerVR driver is on Chrome's WebGPU
-        # blocklist ("PowerVR*25.1*"), so real Pixel 10s get no adapter either.
-        options: ['lynx:33 (Pixel 7a)']
-      browser:
-        description: chrome = the device's own Chrome; chromium = sideload a Chromium snapshot (for old Chrome images)
-        type: choice
-        default: chromium
-        options: [chrome, chromium]
-      url:
-        description: Page to open (default this branch's Cloudflare preview /device-test.html)
-        required: false
 
 permissions:
   contents: read
@@ -65,20 +49,24 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v5
-      - uses: google-github-actions/auth@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+        with:
+
+          persist-credentials: false
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SA_EMAIL }}
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: 17
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
         with:
           gradle-version: '8.14'
       - name: Build the harness
@@ -88,7 +76,6 @@ jobs:
           gradle --no-daemon assembleDebug assembleDebugAndroidTest
 
       - name: Sideload Chromium
-        if: inputs.browser == 'chromium'
         run: |
           # Stock Chrome on older Test Lab images (Pixel 7a: Chrome 103) has no WebGPU.
           REV=1725074 # Chromium 158.0.8119.0, the build the Pixel 7a passed with
@@ -97,24 +84,22 @@ jobs:
 
       - name: Run on Test Lab
         env:
-          DEVICE: ${{ inputs.device }}
-          BROWSER: ${{ inputs.browser }}
-          URL: ${{ inputs.url }}
+          # Pixel 7a only: Pixel 10's PowerVR driver is on Chrome's WebGPU
+          # blocklist ("PowerVR*25.1*"), so real Pixel 10s get no adapter either.
+          DEVICE: lynx:33
           BRANCH: ${{ github.ref_name }}
           BUCKET: ${{ vars.GCP_RESULTS_BUCKET }}
         run: |
-          if [ -z "$URL" ]; then
-            if [ "$BRANCH" = main ]; then host=media-clusterer.pages.dev
-            else
-              # Cloudflare Pages branch alias: lowercase, non-alphanumerics to '-', 28 chars.
-              slug=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | cut -c1-28 | sed 's/-*$//')
-              host="$slug.media-clusterer.pages.dev"
-            fi
-            URL="https://$host/device-test.html"
+          if [ "$BRANCH" = main ]; then host=media-clusterer.pages.dev
+          else
+            # Cloudflare Pages branch alias: lowercase, non-alphanumerics to '-', 28 chars.
+            slug=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | cut -c1-28 | sed 's/-*$//')
+            host="$slug.media-clusterer.pages.dev"
           fi
-          model=${DEVICE%%:*}; rest=${DEVICE#*:}; version=${rest%% *}
-          pkg=com.android.chrome; extra=()
-          if [ "$BROWSER" = chromium ]; then pkg=org.chromium.chrome; extra=(--additional-apks ChromePublic.apk); fi
+          URL="https://$host/device-test.html"
+          model=${DEVICE%%:*}; version=${DEVICE#*:}
+          # Stock Chrome on the Pixel 7a image is 103 (no WebGPU), so use the sideloaded Chromium.
+          pkg=org.chromium.chrome; extra=(--additional-apks ChromePublic.apk)
           dir="gha-${{ github.run_id }}"
           echo "Opening $URL in $pkg on $model API $version"
           set +e
@@ -135,7 +120,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           exit $status
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: testlab-results
           path: results/
