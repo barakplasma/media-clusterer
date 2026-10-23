@@ -34,3 +34,24 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright test --project=${{ matrix.profile }}
+
+  # One real-Safari run (Safari 26 ships WebGPU); Chrome carries the rest.
+  safari:
+    name: e2e (safari)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: sudo safaridriver --enable
+      - name: Serve the app
+        run: |
+          nohup npx vite --host 127.0.0.1 --port 5173 --strictPort > vite.log 2>&1 &
+          npx -y wait-on@8 -t 60000 http://127.0.0.1:5173
+      - run: node --test --test-reporter=spec e2e/safari/
+      - if: failure()
+        run: cat vite.log
