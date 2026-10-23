@@ -14,7 +14,10 @@ It runs in Node on CPU (transformers.js + onnxruntime-node, the same model
 files the browser downloads), which is far faster than SwiftShader WebGPU.
 
 ```bash
-# INRIA Holidays (1,491 photos, 500 scenes): the Kaggle mirror needs no login
+# Just the scored Holidays subset (first 100 scenes, 274 photos):
+node bench/fetch-holidays-subset.mjs --out data/holidays-300
+
+# Or all of INRIA Holidays (1,491 photos, 500 scenes): the Kaggle mirror needs no login
 curl -L -o holidays.zip https://www.kaggle.com/api/v1/datasets/download/vadimshabashov/inria-holidays
 unzip holidays.zip -d data/holidays     # images/ + groundtruth.json
 
