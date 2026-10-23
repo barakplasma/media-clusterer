@@ -34,6 +34,10 @@ jobs:
   # One real-Safari run (Safari 26 ships WebGPU); Chrome carries the rest.
   safari:
     name: e2e (safari)
+    # Disabled: Safari 26.6 on GitHub's macos-26 runner returns no WebGPU
+    # adapter (Chrome on the same runners gets the Apple GPU). Re-enable when
+    # the runner's Safari exposes WebGPU.
+    if: false
     runs-on: macos-26
     timeout-minutes: 45
     steps:
