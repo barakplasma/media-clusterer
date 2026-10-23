@@ -31,40 +31,31 @@ test('Chrome AI (Gemini Nano) describes photos and finds them by text', async ()
   page.on('console', (m) => {
     if (!m.text().includes('[vite]')) console.log(`[${m.type()}] ${m.text().slice(0, 300)}`)
   })
-  // First visit in viewer mode, so nothing loads while Gemini Nano downloads.
-  await page.addInitScript(() => {
-    if (!localStorage.getItem('mc_settings')) localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true }))
-  })
+  await page.addInitScript(() =>
+    localStorage.setItem('mc_settings', JSON.stringify({ modelVariant: 'chrome-ai', enableTextSearch: true }))
+  )
   await page.goto('/')
-  const opts = { expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }], expectedOutputs: [{ type: 'text', languages: ['en'] }] }
-  const availability = () => page.evaluate((o) => ('LanguageModel' in self ? LanguageModel.availability(o) : 'no API'), opts)
-  let avail = await availability()
-  console.log('Gemini Nano availability:', avail)
-  expect(avail, 'Prompt API missing or this machine is ineligible').not.toMatch(/no API|unavailable/)
+  const availability = await page.evaluate(() =>
+    'LanguageModel' in self
+      ? LanguageModel.availability({
+          expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
+          expectedOutputs: [{ type: 'text', languages: ['en'] }],
+        })
+      : 'no API'
+  )
+  console.log('Gemini Nano availability:', availability)
+  expect(availability, 'Prompt API missing or this machine is ineligible').not.toMatch(/no API|unavailable/)
 
-  if (avail !== 'available') {
-    // create() starts the download and needs a user gesture.
-    const t0 = Date.now()
-    await page.evaluate((o) => {
-      const b = document.createElement('button')
-      b.id = 'e2e-nano'
-      b.textContent = 'download'
-      b.style.cssText = 'position:fixed;top:0;left:0;z-index:99999'
-      b.onclick = () => void LanguageModel.create(o)
-      document.body.append(b)
-    }, opts)
+  if (availability !== 'available') {
+    // A fresh profile: the app must ask for a tap, and that tap must start the download.
+    await expect(page.locator('#status')).toContainText('Tap "Load Model"', { timeout: 60_000 })
     // The first-visit About dialog would swallow the click.
     await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => (d as HTMLDialogElement).close()))
-    await page.click('#e2e-nano')
-    await expect.poll(availability, { timeout: 10 * 60_000, intervals: [5_000] }).toBe('available')
-    console.log(`Gemini Nano downloaded in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
-    avail = 'available'
+    await page.click('#load-model-btn')
   }
 
-  await page.evaluate(() => localStorage.setItem('mc_settings', JSON.stringify({ modelVariant: 'chrome-ai', enableTextSearch: true })))
-  await page.reload()
   // Log the app's status while it loads, so a stall says where it stalled.
-  const loadEnd = Date.now() + 8 * 60_000
+  const loadEnd = Date.now() + 15 * 60_000
   let phase = ''
   let loading = false
   while (Date.now() < loadEnd) {
