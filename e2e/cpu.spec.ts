@@ -34,7 +34,7 @@ test('a saved WebGPU-only model falls back when there is no adapter', async ({ p
   // Chrome hides blocklisted GPUs; the modal says how to turn WebGPU on.
   await expect(page.locator('#webgpu-help-modal')).toBeVisible()
   await expect(page.locator('#webgpu-help-url')).toHaveText('chrome://flags/#enable-unsafe-webgpu')
-  expect(await page.evaluate(() => window.__debug.state.settings.modelVariant)).toBe('smolvlm2-vision')
+  expect(await page.evaluate(() => window.__debug.state.settings.modelVariant)).toBe('nomic')
   // The saved choice survives a settings write.
   await page.locator('#density-slider').dispatchEvent('input')
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('mc_settings')!).modelVariant)).toBe('embeddinggemma2')
