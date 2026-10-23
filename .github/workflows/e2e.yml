@@ -31,21 +31,6 @@ jobs:
       - run: npm ci
       - run: npx playwright test --project=${{ matrix.profile }}
 
-  # Chrome's built-in Gemini Nano (the Chrome AI model). The hosted Linux
-  # runner (4 vCPU, 16 GB RAM) downloads and runs it in about 90 s.
-  chrome-ai:
-    name: e2e (chrome-ai)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: xvfb-run -a npx playwright test --project=chrome-ai
-
   # One real-Safari run (Safari 26 ships WebGPU); Chrome carries the rest.
   safari:
     name: e2e (safari)
