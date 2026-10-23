@@ -15,7 +15,7 @@ interface Debug {
   state: {
     phase: string
     files: PhotoFile[]
-    searchResults: number[] | null
+    searchResults: ArrayLike<number> | null
     searchScores: Float32Array | number[] | null
   }
   embedFailed: Set<number>
@@ -463,7 +463,8 @@ async function run(): Promise<void> {
     t = now()
     try {
       await debug.searchImages(q)
-      const idx = debug.state.searchResults ?? []
+      // searchResults is a typed array; map() on it would coerce labels to numbers.
+      const idx = Array.from(debug.state.searchResults ?? [])
       const scores = debug.state.searchScores
       const top = idx.slice(0, 3).map((i) => `${names[i]}:${scores ? Number(scores[i]).toFixed(3) : '?'}`)
       const hit = top.some((s) => s.includes(expect)) ? 'hit' : 'miss'
