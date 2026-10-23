@@ -1450,6 +1450,7 @@ function showRemoteConsentModal(baseUrl: string): Promise<boolean> {
 // ── Model singleton ──────────────────────────────────────────────────────────
 async function loadModelOnce(signal?: AbortSignal) {
   applyModelEnv()
+  activeEmbeddingDim = 768
   state.phase = 'loading_model'
   setStatus('Loading model…')
   setProgress(0)
@@ -1533,6 +1534,7 @@ async function loadModelOnce(signal?: AbortSignal) {
     const tier = getVlmTier(state.settings.modelVariant)!
     setStatus(`Loading ${tier.id} (${tier.downloadMB} MB)…`)
     try {
+      activeEmbeddingDim = tier.visionDim
       await loadVlm(state.settings.modelVariant, normalizeHost(state.settings.customModelHost), (pct) => {
         setProgress(pct)
         setStatus(`Downloading ${tier.id}… ${pct.toFixed(0)}%`)

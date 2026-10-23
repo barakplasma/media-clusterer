@@ -58,7 +58,7 @@ interface VisionOutput {
 // (rather than AutoModelForVision2Seq) loads the vision tower alone, which is
 // what keeps tier A to a ~55 MB download instead of ~189 MB.
 let model: { dispose?: () => Promise<void> } | null = null
-let runVision: ((pixelValues: unknown) => Promise<Record<string, VisionOutput>>) | null = null
+let runVision: ((inputs: Record<string, unknown>) => Promise<VisionOutput>) | null = null
 let processor: { (images: RawImage[]): Promise<Record<string, unknown>> } | null = null
 let loadedTier: VlmTier | null = null
 let device: VlmDevice = 'wasm'
@@ -188,11 +188,16 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
   }
 
   const opts = { dtype: tier.dtype, progress_callback }
-  // `model_file_name` pins the load to the vision tower; without it the loader
-  // would also fetch embed_tokens and the decoder, which tier A never runs.
+  // shortcut: transformers.js 4.3 ignores `model_file_name` here and also
+  // fetches embed_tokens + the decoder (~190 MB instead of 55); load
+  // vision_encoder alone through onnxruntime-web if the download matters.
   const visionOpts = { ...opts, model_file_name: 'vision_encoder' }
 
+  // The q4f16 graph casts its input to f16 on WebGPU, so an adapter without
+  // shader-f16 (SwiftShader, some phones) loads fine and then fails every run.
+  const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
   try {
+    if (!adapter?.features.has('shader-f16')) throw new Error('no shader-f16')
     model = (await AutoModel.from_pretrained(tier.repo, {
       ...visionOpts,
       device: 'webgpu'
@@ -206,7 +211,11 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     device = 'wasm'
   }
 
-  runVision = model as unknown as typeof runVision
+  // encode_image runs only the vision_encoder session; calling the model
+  // itself goes through forward(), which wants input_ids. q4f16 on WebGPU
+  // can hand back float16, which poolVision does not read.
+  const smol = model as unknown as { encode_image: (i: Record<string, unknown>) => Promise<{ to: (t: string) => VisionOutput }> }
+  runVision = async (inputs) => (await smol.encode_image(inputs)).to('float32')
   loadedTier = tier
   post({ type: 'loaded', id, device, visionDim: tier.visionDim })
 }
@@ -326,12 +335,13 @@ async function embedGroupSmolVlm(group: ImageBitmap[]): Promise<Float32Array> {
     // do_image_splitting: false is load-bearing — the default tiles each
     // frame against size.longest_edge 2048, which is the easiest way to blow
     // the memory budget on the device this exists to support.
-    const inputs = (await (processor as unknown as CallableFunction)(raw, {
-      do_image_splitting: false
-    })) as { pixel_values: unknown }
+    // The image processor, not the processor: Idefics3Processor's call is
+    // (text, images, options), so passing images first threw on every frame.
+    const inputs = (await (
+      processor as unknown as { image_processor: CallableFunction }
+    ).image_processor([raw], { do_image_splitting: false })) as Record<string, unknown>
 
-    const out = await vision({ pixel_values: inputs.pixel_values })
-    const features = out.last_hidden_state ?? out.image_features ?? Object.values(out)[0]
+    const features = await vision({ pixel_values: inputs.pixel_values, pixel_attention_mask: inputs.pixel_attention_mask })
     if (!features?.dims) {
       throw new Error('VLM worker: vision encoder returned no recognisable tensor')
     }
