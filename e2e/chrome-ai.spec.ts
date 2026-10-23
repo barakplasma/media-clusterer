@@ -63,7 +63,17 @@ test('Chrome AI (Gemini Nano) describes photos and finds them by text', async ()
 
   await page.evaluate(() => localStorage.setItem('mc_settings', JSON.stringify({ modelVariant: 'chrome-ai', enableTextSearch: true })))
   await page.reload()
-  await page.waitForFunction(() => window.__debug?.state.phase === 'model_ready', null, { timeout: 5 * 60_000, polling: 2000 })
+  // Log the app's status while it loads, so a stall says where it stalled.
+  const loadEnd = Date.now() + 8 * 60_000
+  let phase = ''
+  while (Date.now() < loadEnd) {
+    const st = await page.evaluate(() => ({ phase: window.__debug?.state.phase ?? '', status: document.getElementById('status')?.textContent ?? '' }))
+    console.log(`app: ${st.phase} · ${st.status}`)
+    phase = st.phase
+    if (phase === 'model_ready' || phase === 'idle') break
+    await page.waitForTimeout(15_000)
+  }
+  expect(phase, 'Chrome AI model did not load (see app status above)').toBe('model_ready')
 
   const run = await page.evaluate(async (names) => {
     const d = window.__debug
