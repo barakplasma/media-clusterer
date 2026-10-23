@@ -60,11 +60,15 @@ const meanMap = (id) =>
   datasets.reduce((t, d) => t + d.rows.find((r) => r.model === id).mAP, 0) / datasets.length
 const avgRank = (id) => columns.reduce((t, c) => t + c[ids.indexOf(id)], 0) / columns.length
 const modelOrder = [...ids].sort((a, b) => avgRank(a) - avgRank(b) || meanMap(b) - meanMap(a))
-// sapiens2-fp32 sits right after fp16 (same model, wider weights).
+// Sapiens2's other precisions sit right after whichever one was run (same
+// model, same quality within rounding).
+const SAPIENS = ['sapiens2-fp16', 'sapiens2-int8', 'sapiens2-fp32']
 const modelLines = []
 for (const id of modelOrder) {
   modelLines.push(`  '${VARIANT[id]}', // avg rank ${avgRank(id).toFixed(2)}: ${notes.get(id).join(', ')}`)
-  if (VARIANT[id] === 'sapiens2-fp16') modelLines.push(`  'sapiens2-fp32', // not run: same model as fp16`)
+  if (SAPIENS.includes(VARIANT[id])) {
+    for (const v of SAPIENS) if (!modelOrder.some((m) => VARIANT[m] === v)) modelLines.push(`  '${v}', // not run: same model as ${VARIANT[id]}`)
+  }
 }
 // Known app models with no results yet keep a place ahead of the never-run tail.
 const ranked = new Set(modelLines.map((l) => l.match(/'([^']+)'/)[1]))
