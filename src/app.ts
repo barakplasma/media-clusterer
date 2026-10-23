@@ -327,6 +327,47 @@ const state: AppState = {
 // ── Camera (infinite canvas) ─────────────────────────────────────────────────
 const camera: Camera = { x: 0, y: 0, scale: 1 }
 
+const WEBGPU_HELP_KEY = 'mc_hideWebGpuHelp'
+
+/**
+ * Tell a Chromium user how to turn WebGPU on when the browser has it but
+ * hides the GPU (blocklisted driver, e.g. Pixel 10's PowerVR) or only offers
+ * a software adapter. Stays up until dismissed. Returns false when not shown
+ * (other browsers, or "Don't show again").
+ */
+function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
+  const ua = navigator.userAgent
+  if (!('gpu' in navigator) || !/\bChrome\//.test(ua)) return false
+  try {
+    if (localStorage.getItem(WEBGPU_HELP_KEY)) return false
+  } catch (_) {}
+  const scheme = /\bEdgA?\//.test(ua) ? 'edge' : /\bOPR\//.test(ua) ? 'opera' : 'chrome'
+  const url = `${scheme}://flags/#enable-unsafe-webgpu`
+  const el = (id: string) => document.getElementById(id)!
+  el('webgpu-help-title').textContent =
+    kind === 'blocked' ? '⚠️ WebGPU is turned off for this GPU' : '⚠️ WebGPU is running in software'
+  el('webgpu-help-why').textContent =
+    kind === 'blocked'
+      ? `This browser supports WebGPU but hides your GPU from web pages, so ${model} can't run and the app is using ${NO_WEBGPU_MODEL} instead (no text search). To use ${model}:`
+      : `This browser only offers a software (CPU) WebGPU adapter, so ${model} will be very slow. To use your GPU:`
+  el('webgpu-help-url').textContent = url
+  el('webgpu-help-accel').hidden = kind !== 'software'
+  const modal = el('webgpu-help-modal') as HTMLDialogElement
+  el('webgpu-help-copy').onclick = () => {
+    void navigator.clipboard?.writeText(url).then(() => (el('webgpu-help-copy').textContent = 'Copied'))
+  }
+  el('webgpu-help-ok').onclick = () => modal.close()
+  el('webgpu-help-close').onclick = () => modal.close()
+  el('webgpu-help-never').onclick = () => {
+    try {
+      localStorage.setItem(WEBGPU_HELP_KEY, '1')
+    } catch (_) {}
+    modal.close()
+  }
+  modal.showModal()
+  return true
+}
+
 // ── Model singleton ──────────────────────────────────────────────────────────
 let extractor: PipelineInstance | null = null // Vision model (for images)
 let textExtractor: PipelineInstance | null = null // Text model (for search queries)
@@ -1517,17 +1558,20 @@ async function loadModelOnce(signal?: AbortSignal) {
   }
 
   // navigator.gpu can exist with no usable adapter (emulators, blocklisted GPUs).
-  if (
-    getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2' &&
-    !(await navigator.gpu?.requestAdapter().catch(() => null))
-  ) {
+  if (getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2') {
+    const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
     const saved = state.settings.modelVariant
-    if (savedSettings) {
-      modelStandIn = { saved, used: NO_WEBGPU_MODEL }
-      showToast(`${saved} needs WebGPU, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`, 'warn', 8000)
+    if (!adapter) {
+      if (savedSettings) modelStandIn = { saved, used: NO_WEBGPU_MODEL }
+      state.settings.modelVariant = NO_WEBGPU_MODEL
+      dom.modelSelect.value = NO_WEBGPU_MODEL
     }
-    state.settings.modelVariant = NO_WEBGPU_MODEL
-    dom.modelSelect.value = NO_WEBGPU_MODEL
+    if (!adapter || adapter.info?.isFallbackAdapter) {
+      const shown = showWebGpuHelp(!adapter ? 'blocked' : 'software', saved)
+      if (!shown && !adapter && savedSettings) {
+        showToast(`${saved} needs WebGPU, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`, 'warn', 8000)
+      }
+    }
   }
 
   if (isVlmVariant(state.settings.modelVariant)) {
