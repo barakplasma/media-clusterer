@@ -167,7 +167,7 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     // (q4, q8) use GatherBlockQuantized, which onnxruntime-web implements only
     // on WebGPU ("Could not find an implementation", verified in Chromium), and
     // fp32 is ~1.75 GB.
-    phase('sessions start')
+    phase(`sessions start cache=${tier.cacheMode ?? 'lazyRelease'}`)
     model = (await AutoModel.from_pretrained(tier.repo, {
       config,
       dtype: tier.dtype,
@@ -177,7 +177,10 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
         // The default 'bucket' cache keeps every freed GPU buffer for reuse.
         // Photos vary in shape, so it grew until a Pixel 7a had no device
         // memory left for the first search (VK_ERROR_OUT_OF_DEVICE_MEMORY).
-        executionProviders: [{ name: 'webgpu', storageBufferCacheMode: 'lazyRelease' }]
+        executionProviders: [
+          // Device-test branch only: tier.cacheMode comes from ?cache= on the page.
+          { name: 'webgpu', storageBufferCacheMode: tier.cacheMode ?? 'lazyRelease' }
+        ]
       }
     })) as unknown as typeof model
     phase('sessions done')

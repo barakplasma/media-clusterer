@@ -126,7 +126,9 @@ export async function loadVlm(
   totalBytes.clear()
   expectedBytes = tier.downloadMB * 1024 * 1024
   try {
-    await send({ type: 'load', id: nextId++, tier, remoteHost })
+    // Device-test branch only: ?cache=bucket compares ORT's buffer cache modes.
+    const cacheMode = new URLSearchParams(location.search).get('cache') === 'bucket' ? 'bucket' : undefined
+    await send({ type: 'load', id: nextId++, tier: cacheMode ? { ...tier, cacheMode } : tier, remoteHost })
     return tier
   } finally {
     onProgress = null

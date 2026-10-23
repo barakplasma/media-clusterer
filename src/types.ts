@@ -81,6 +81,8 @@ export interface VlmTier {
   // new GPU pipelines per sequence length; a phone ran out of device memory on
   // the second length it saw. One fixed length means one pipeline set.
   fixedSeqLen?: number
+  /** Device-test branch only: ORT WebGPU buffer cache mode (default lazyRelease). */
+  cacheMode?: 'lazyRelease' | 'bucket'
 }
 
 /** Request sent from the main thread to the VLM worker. */

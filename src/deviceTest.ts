@@ -125,7 +125,8 @@ async function run(): Promise<void> {
     step = `photo ${name}`
     t = performance.now()
     try {
-      const [vec] = await embedWithVlm([[await drawImage(w, h, hue, name)]])
+      const { vectors: [vec], errors } = await embedWithVlm([[await drawImage(w, h, hue, name)]])
+      if (vec.length === 0) throw new Error(errors[0] ?? 'empty vector')
       items.push({ name, vec })
       log(`PHOTO ${name} ok ${since(t)} dim=${vec.length} norm=${norm(vec).toFixed(3)}`)
     } catch (err) {
@@ -138,7 +139,8 @@ async function run(): Promise<void> {
   t = performance.now()
   try {
     const frames = await Promise.all([0, 1, 2, 3].map((k) => drawImage(480, 270, k * 60, `frame ${k}`)))
-    const [vec] = await embedWithVlm([frames])
+    const { vectors: [vec], errors } = await embedWithVlm([frames])
+    if (vec.length === 0) throw new Error(errors[0] ?? 'empty vector')
     items.push({ name: 'video-4frames', vec })
     log(`VIDEO 4 frames ok ${since(t)} dim=${vec.length} norm=${norm(vec).toFixed(3)}`)
   } catch (err) {
