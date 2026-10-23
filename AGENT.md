@@ -36,8 +36,13 @@
 
 ### Testing
 
-- Run all tests: `npm test`
-- Coverage: `npm run test:coverage`
+End to end only (no unit tests). Needs Google Chrome installed.
+
+- `npm test`: the two CPU-only checks (viewer mode; WebGPU-only model falling back with no adapter). Pre-commit hook and the deploy job run these.
+- `npm run test:gpu`: EmbeddingGemma 2 in the phone and desktop profiles. Needs a real GPU; CI runs it on GitHub's macOS runner (`.github/workflows/e2e.yml`), where only the phone profile is required. `SWIFTSHADER=<chrome binary>` runs it on SwiftShader for local debugging.
+- Chrome AI: `npx playwright test --project=chrome-ai` (Gemini Nano downloads on first run, about 90 s on the hosted Linux runner; run under `xvfb-run` there). On demand: `.github/workflows/chrome-ai.yml` (Run workflow button; also runs on PRs that change the test).
+- Safari: `e2e/safari/` (node:test + safaridriver), one CI job on macOS 26.
+- Real phone: `.github/workflows/testlab.yml`, Firebase Test Lab, on demand only (Run workflow button). Setup steps are at the top of that file.
 
 ## Coding Standards
 

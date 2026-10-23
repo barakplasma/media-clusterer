@@ -371,6 +371,12 @@ function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
   return true
 }
 
+// Pick the device before loading: after a failed WebGPU load, transformers.js
+// 4.3 fails the wasm retry with the same WebGPU error (seen on a GPU-less
+// Linux runner), so the catch-and-retry below alone never reached wasm.
+const webgpuOrWasm = async (): Promise<'webgpu' | 'wasm'> =>
+  (await navigator.gpu?.requestAdapter().catch(() => null)) ? 'webgpu' : 'wasm'
+
 // ── Model singleton ──────────────────────────────────────────────────────────
 let extractor: PipelineInstance | null = null // Vision model (for images)
 let textExtractor: PipelineInstance | null = null // Text model (for search queries)
@@ -1668,7 +1674,7 @@ async function loadModelOnce(signal?: AbortSignal) {
         }) as Promise<PipelineInstance>
 
       try {
-        textExtractor = await tryLoadText('webgpu')
+        textExtractor = await tryLoadText(await webgpuOrWasm())
       } catch {
         textLoaded.clear()
         textExtractor = await tryLoadText('wasm')
@@ -1764,8 +1770,9 @@ async function loadModelOnce(signal?: AbortSignal) {
     }) as Promise<PipelineInstance>
 
   try {
-    extractor = await tryLoad('webgpu')
-    modelDevice = 'webgpu'
+    const device = await webgpuOrWasm()
+    extractor = await tryLoad(device)
+    modelDevice = device === 'webgpu' ? 'webgpu' : 'cpu'
   } catch (gpuErr) {
     console.warn('WebGPU init failed, falling back to wasm:', gpuErr)
     setStatus('WebGPU unavailable — using CPU (slower)…')
@@ -1799,7 +1806,7 @@ async function loadModelOnce(signal?: AbortSignal) {
       }) as Promise<PipelineInstance>
 
     try {
-      textExtractor = await tryLoadText('webgpu')
+      textExtractor = await tryLoadText(await webgpuOrWasm())
     } catch (gpuErr) {
       console.warn('Text model WebGPU failed, using wasm:', gpuErr)
       textLoaded.clear()
@@ -3773,7 +3780,7 @@ dom.enableSearchToggle.addEventListener('change', async () => {
       }) as Promise<PipelineInstance>
 
     try {
-      textExtractor = await tryLoadText('webgpu')
+      textExtractor = await tryLoadText(await webgpuOrWasm())
     } catch (gpuErr) {
       console.warn('Text model WebGPU failed, using wasm:', gpuErr)
       textLoaded.clear()
