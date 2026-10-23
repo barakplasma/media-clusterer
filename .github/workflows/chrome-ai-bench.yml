@@ -33,7 +33,9 @@ jobs:
           nohup npx vite preview --host 127.0.0.1 --port 4173 --strictPort > preview.log 2>&1 &
           npx -y wait-on@8 -t 60000 http://127.0.0.1:4173/chrome-ai-bench.html
       - name: Describe every image with Gemini Nano
-        run: xvfb-run -a node bench/run-chrome-ai.mjs --chrome /usr/bin/google-chrome --url http://127.0.0.1:4173/chrome-ai-bench.html --out chrome-ai.json --timeout-min 200
+        run: |
+          xvfb-run -a node bench/run-chrome-ai.mjs --chrome /usr/bin/google-chrome --url http://127.0.0.1:4173/chrome-ai-bench.html --out chrome-ai.json --timeout-min 200
+          node -e "const r=require('./chrome-ai.json');const it=r.items??[];console.log('availability',r.availability,'items',it.length,'errors',it.filter(i=>i.error).length);console.log(JSON.stringify(it.slice(0,3),null,1))"
       - name: Score (nomic-embed-text over the descriptions)
         run: |
           node bench/embed.mjs --data data/coco --out bench/out-coco --models chrome-ai --descriptions chrome-ai.json
