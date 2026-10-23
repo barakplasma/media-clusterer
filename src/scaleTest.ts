@@ -500,6 +500,16 @@ if (new URLSearchParams(location.search).has('eg2scale')) {
     origError(...args)
   }
   window.addEventListener('unhandledrejection', (e) => log(`unhandledrejection ${String(e.reason)}`))
+  // A modal <dialog> (the first-visit About box on a fresh device, or the
+  // model-fallback prompt after a failed load) makes this log inert, which
+  // hides it from the Test Lab harness. Close them and log what they said.
+  setInterval(() => {
+    for (const d of document.querySelectorAll<HTMLDialogElement>('dialog[open]')) {
+      const said = (d.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 160)
+      log(`closed dialog #${d.id}: ${said}`)
+      d.close()
+    }
+  }, 1000)
   run().catch((err) => {
     log(`FAIL harness: ${(err as Error).message}`)
     log('DONE fail')
