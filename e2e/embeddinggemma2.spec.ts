@@ -17,6 +17,7 @@ type Debug = {
     points: unknown[]
     searchResults: Int32Array | null
     settings: { modelVariant: string }
+    captions: (string | null)[]
   }
   embedFailed: Set<number>
   processFiles: (files: unknown[]) => Promise<void>

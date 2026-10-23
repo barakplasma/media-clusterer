@@ -35,5 +35,21 @@ export default defineConfig({
     { name: 'desktop', testMatch: 'embeddinggemma2.spec.ts' },
     // No GPU needed: `npm test`, the pre-commit hook and the Linux deploy job.
     { name: 'cpu', testMatch: 'cpu.spec.ts', timeout: 60_000 },
+    // Chrome's built-in Gemini Nano. Runs headed (xvfb on Linux CI). Playwright's
+    // defaults block the component download that fetches the model.
+    {
+      name: 'chrome-ai',
+      testMatch: 'chrome-ai.spec.ts',
+      use: {
+        channel: 'chrome',
+        headless: false,
+        launchOptions: {
+          ignoreDefaultArgs: ['--disable-component-update', '--disable-background-networking'],
+          args: [
+            '--enable-features=PromptAPIForGeminiNano,PromptAPIForGeminiNanoMultimodalInput,OptimizationGuideOnDeviceModel:BypassPerfRequirement/true',
+          ],
+        },
+      },
+    },
   ],
 })
