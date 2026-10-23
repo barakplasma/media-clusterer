@@ -892,7 +892,7 @@
         <option value="openai">Remote endpoint · OpenAI-compatible (uploads thumbnails)</option>
         <!-- SmolVLM2 tiers are appended here at startup from src/vlmTiers.ts so
              the labels and download sizes cannot drift from the tier table. -->
-        <optgroup id="vlm-tier-group" label="SmolVLM2 (video-native, runs in a worker)"></optgroup>
+        <optgroup id="vlm-tier-group" label="Video-native (runs in a worker)"></optgroup>
       </select>
       <div class="setting-hint">Sapiens2 is pretrained on 1B human images — better for photos of people. Chrome AI uses the browser's built-in Gemini Nano to describe images (Chrome 138+ only, requires <code>chrome://flags/#prompt-api-for-gemini-nano</code>). Takes effect on next model load. Switching requires a page reload.</div>
     </div>
@@ -1094,6 +1094,32 @@
     <footer style="display:flex;gap:8px;justify-content:flex-end;align-items:center;">
       <button id="model-fallback-cancel" class="secondary" style="width:auto;margin:0;">Cancel</button>
       <button id="model-fallback-retry" class="primary" style="width:auto;margin:0;">Retry</button>
+    </footer>
+  </article>
+</dialog>
+
+<dialog id="webgpu-help-modal">
+  <article class="pico">
+    <header>
+      <button id="webgpu-help-close" rel="prev" aria-label="Close"></button>
+      <p><strong id="webgpu-help-title">⚠️ WebGPU is turned off for this GPU</strong></p>
+    </header>
+    <div class="about-section">
+      <p id="webgpu-help-why"></p>
+      <ol style="padding-left:20px;line-height:1.7;">
+        <li>Copy this address and paste it into the address bar:<br>
+          <code id="webgpu-help-url" style="user-select:all;word-break:break-all;"></code>
+          <button id="webgpu-help-copy" class="secondary" style="width:auto;margin:4px 0 0;padding:4px 10px;font-size:12px;">Copy</button>
+        </li>
+        <li>Set <strong>Unsafe WebGPU Support</strong> to <strong>Enabled</strong>.</li>
+        <li id="webgpu-help-accel" hidden>Also check <code>chrome://settings/system</code> → <strong>Use graphics acceleration when available</strong> is on.</li>
+        <li>Tap <strong>Relaunch</strong>, then reopen this page.</li>
+      </ol>
+      <p class="setting-hint">Chrome keeps WebGPU off on GPUs or drivers with known bugs, so with the flag on, embedding may be slow or the GPU may reset. Turn the flag back to Default if that happens.</p>
+    </div>
+    <footer style="display:flex;gap:8px;justify-content:flex-end;align-items:center;">
+      <button id="webgpu-help-never" class="secondary" style="width:auto;margin:0;">Don't show again</button>
+      <button id="webgpu-help-ok" class="primary" style="width:auto;margin:0;">OK</button>
     </footer>
   </article>
 </dialog>

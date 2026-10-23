@@ -28,6 +28,20 @@ let onProgress: VlmProgress | null = null
 // percentage rather than flicking back to 0% at each file boundary.
 const loadedBytes = new Map<string, number>()
 const totalBytes = new Map<string, number>()
+let expectedBytes = 0 // the tier's declared download size, set per load
+
+/**
+ * Overall download percentage, capped at 99 until the load resolves.
+ *
+ * File sizes are only known once each file starts, and the first files are
+ * small JSON configs: dividing by the sizes seen so far read 99% seconds into
+ * a multi-minute download (Pixel 7a device test). The tier's declared size is
+ * the floor for the denominator, so the bar tracks the real total.
+ */
+export function downloadPercent(done: number, seenTotal: number, expected: number): number {
+  const all = Math.max(seenTotal, expected)
+  return all > 0 ? Math.min(99, (done / all) * 100) : 0
+}
 
 function ensureWorker(): Worker {
   if (worker) return worker
@@ -42,7 +56,7 @@ function ensureWorker(): Worker {
       let all = 0
       for (const v of loadedBytes.values()) done += v
       for (const v of totalBytes.values()) all += v
-      onProgress?.(all > 0 ? Math.min(99, (done / all) * 100) : 0, msg.file)
+      onProgress?.(downloadPercent(done, all, expectedBytes), msg.file)
       return
     }
 
@@ -110,6 +124,7 @@ export async function loadVlm(
   onProgress = progress ?? null
   loadedBytes.clear()
   totalBytes.clear()
+  expectedBytes = tier.downloadMB * 1024 * 1024
   try {
     await send({ type: 'load', id: nextId++, tier, remoteHost })
     return tier
@@ -122,19 +137,37 @@ export async function loadVlm(
  * Embed groups of frames, returning one pooled 768-d vector per group.
  *
  * Each group is the frames sampled from one item — one for a still, several for
- * a video — so the result is positionally aligned with `groups`.
+ * a video — so the result is positionally aligned with `groups`. An item that
+ * failed on its own comes back as a zero-length vector; `errors` holds those
+ * items' messages in order.
  *
  * The bitmaps are **transferred**, so they are neutered in the caller and must
  * not be touched afterwards. The worker closes them. Pass clones for anything
  * still needed on the main thread, exactly as the chrome-ai path does for
  * `state.thumbnails`.
  */
-export async function embedWithVlm(groups: ImageBitmap[][]): Promise<Float32Array[]> {
-  if (groups.length === 0) return []
+export async function embedWithVlm(
+  groups: ImageBitmap[][]
+): Promise<{ vectors: Float32Array[]; errors: string[] }> {
+  if (groups.length === 0) return { vectors: [], errors: [] }
   const res = await send<Extract<VlmResponse, { type: 'embedded' }>>(
     { type: 'embed', id: nextId++, groups },
     groups.flat()
   )
+  return { vectors: res.vectors, errors: res.errors ?? [] }
+}
+
+/**
+ * Embed text queries with the loaded tier's own text encoder, one vector per
+ * text. Only tiers with a `queryPrefix` have one; the caller adds the prefix.
+ */
+export async function embedTextWithVlm(texts: string[]): Promise<Float32Array[]> {
+  if (texts.length === 0) return []
+  const res = await send<Extract<VlmResponse, { type: 'embedded' }>>({
+    type: 'embedText',
+    id: nextId++,
+    texts
+  })
   return res.vectors
 }
 

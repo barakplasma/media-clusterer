@@ -72,12 +72,12 @@ describe('assertVisionDim', () => {
   })
 
   it('names the observed width and the fix when the ONNX export disagrees', () => {
-    // ADR-0001 flags 576 as the plausible alternative (post-connector tensor).
+    // 768 is SigLIP's pre-connector width, what ADR-0001 first assumed.
     // The message has to carry the real number, since acting on it means
     // editing the tier table.
-    expect(() => assertVisionDim(tier, 576)).toThrow(/576/)
-    expect(() => assertVisionDim(tier, 576)).toThrow(/visionDim: 576/)
-    expect(() => assertVisionDim(tier, 576)).toThrow(/cachePrefix/)
+    expect(() => assertVisionDim(tier, 768)).toThrow(/768/)
+    expect(() => assertVisionDim(tier, 768)).toThrow(/visionDim: 768/)
+    expect(() => assertVisionDim(tier, 768)).toThrow(/cachePrefix/)
   })
 })
 
@@ -101,7 +101,7 @@ describe('tier table', () => {
     // silently mix them in IndexedDB.
     const prefixes = allVlmTiers().map((t) => t.cachePrefix)
     expect(new Set(prefixes).size).toBe(prefixes.length)
-    for (const p of prefixes) expect(p).toMatch(/^@smolvlm2-.+\/$/)
+    for (const t of allVlmTiers()) expect(t.cachePrefix).toMatch(new RegExp(`^@${t.id}(-.+)?/$`))
   })
 
   it('orders tiers by download size', () => {
@@ -179,7 +179,7 @@ describe('selectableVlmTiers', () => {
     // The worker loads vision_encoder only, so the captioning tiers would
     // deliver tier-A behaviour under a label promising captions.
     const ids = selectableVlmTiers().map((t) => t.id)
-    expect(ids).toEqual(['smolvlm2-vision'])
+    expect(ids).toEqual(['smolvlm2-vision', 'embeddinggemma2'])
   })
 
   it('still declares the unreleased tiers', () => {
@@ -194,10 +194,33 @@ describe('selectableVlmTiers', () => {
 })
 
 describe('supportsTextSearch', () => {
-  it('is false for every VLM tier', () => {
+  it('is true only for tiers whose own checkpoint embeds text', () => {
     // Pooled SigLIP vectors and nomic-embed-text live in unrelated spaces;
     // equal width is not compatibility.
-    for (const t of allVlmTiers()) expect(supportsTextSearch(t.id)).toBe(false)
+    for (const t of allVlmTiers()) expect(supportsTextSearch(t.id)).toBe(t.queryPrefix !== null)
+    expect(supportsTextSearch('smolvlm2-vision')).toBe(false)
+    expect(supportsTextSearch('embeddinggemma2')).toBe(true)
+  })
+
+  it('gives phones a lighter EmbeddingGemma 2 with its own cache', () => {
+    const desktop = getVlmTier('embeddinggemma2', false)!
+    const phone = getVlmTier('embeddinggemma2', true)!
+    expect(desktop.imageTokens).toBe(280)
+    expect(phone.imageTokens).toBe(70)
+    expect(phone.framesPerVideo).toBeLessThan(desktop.framesPerVideo)
+    // The fixed length must hold the longest input (a video) untruncated:
+    // per frame boi + soft tokens + eoi, plus bos/eos.
+    expect(phone.fixedSeqLen).toBeGreaterThanOrEqual(phone.framesPerVideo * (phone.imageTokens! + 2) + 2)
+    expect(desktop.fixedSeqLen).toBeUndefined()
+    // A different budget embeds differently: vectors must never share a cache.
+    expect(phone.cachePrefix).not.toBe(desktop.cachePrefix)
+    // Tiers without an override are the same object on every device.
+    expect(getVlmTier('smolvlm2-vision', true)).toBe(getVlmTier('smolvlm2-vision', false))
+  })
+
+  it('uses the EmbeddingGemma 2 retrieval prefix for queries', () => {
+    // Model card: asymmetric retrieval prefixes the query; media get none.
+    expect(getVlmTier('embeddinggemma2')?.queryPrefix).toBe('task: search result | query: ')
   })
 
   it('leaves the existing embedders alone', () => {
@@ -252,5 +275,20 @@ describe('poolVectors', () => {
     expect(() =>
       poolVectors([Float32Array.from([1, 0]), Float32Array.from([1, 0, 0])])
     ).toThrow(/mixed widths/)
+  })
+})
+
+describe('downloadPercent', () => {
+  it('uses the declared size while only small files have started', async () => {
+    const { downloadPercent } = await import('./vlm')
+    // 30 KB of configs done out of 30 KB seen, model declared at 316 MB.
+    expect(downloadPercent(30e3, 30e3, 316 * 1024 * 1024)).toBeLessThan(1)
+  })
+
+  it('trusts the real total once it exceeds the declared size, and caps at 99', async () => {
+    const { downloadPercent } = await import('./vlm')
+    expect(downloadPercent(50, 200, 100)).toBe(25)
+    expect(downloadPercent(200, 200, 100)).toBe(99)
+    expect(downloadPercent(0, 0, 0)).toBe(0)
   })
 })

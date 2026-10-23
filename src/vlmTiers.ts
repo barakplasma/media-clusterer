@@ -17,66 +17,111 @@ export const THUMB_FRAME_PX = 224
 export const VLM_FRAME_PX = 512
 
 /**
- * `vision_config.hidden_size` for both SmolVLM2 checkpoints, and — not by
- * coincidence — the width every other embedder in this app already produces,
- * which is what lets pooled vision features drop straight into the existing
- * IndexedDB cache, DruidJS projection and k-means.
- *
- * Treated as a per-tier field rather than a global constant because it is
- * pending confirmation against the ONNX graph: if `vision_encoder.onnx` turns
- * out to export the post-connector tensor it is 576, and only this number
- * changes. `assertVisionDim()` below is what catches that at runtime.
+ * Width of `image_features`, the only output of SmolVLM2's `vision_encoder.onnx`:
+ * the post-connector tensor (64 tokens × 576), not SigLIP's 768-d hidden state.
+ * Measured on the q4f16 export; `assertVisionDim()` catches a future change.
  */
-const SIGLIP_HIDDEN_SIZE = 768
+const SMOLVLM_IMAGE_FEATURES = 576
 
 const TIERS: Record<string, VlmTier> = {
   'smolvlm2-vision': {
     id: 'smolvlm2-vision',
+    family: 'smolvlm2',
     repo: 'HuggingFaceTB/SmolVLM2-256M-Video-Instruct',
     dtype: 'q4f16',
     visionOnly: true,
-    visionDim: SIGLIP_HIDDEN_SIZE,
+    visionDim: SMOLVLM_IMAGE_FEATURES,
     framesPerVideo: 4,
-    cachePrefix: '@smolvlm2-vision/',
-    downloadMB: 55,
+    cachePrefix: '@smolvlm2-vision-576/', // 768-d era vectors never existed (the call failed)
+    downloadMB: 190, // vision encoder + embed_tokens + decoder, see vlmWorker load()
     // The only tier the worker can actually honour today.
-    selectable: true
+    selectable: true,
+    queryPrefix: null
   },
   'smolvlm2-256m': {
     id: 'smolvlm2-256m',
+    family: 'smolvlm2',
     repo: 'HuggingFaceTB/SmolVLM2-256M-Video-Instruct',
     dtype: 'q4f16',
     visionOnly: false,
-    visionDim: SIGLIP_HIDDEN_SIZE,
+    visionDim: SMOLVLM_IMAGE_FEATURES,
     framesPerVideo: 4,
     cachePrefix: '@smolvlm2-256m/',
     downloadMB: 189,
     // Not offered until M4 builds the decoder path. The worker loads only
     // vision_encoder, so selecting this today would deliver tier A behaviour
     // under a label promising captions.
-    selectable: false
+    selectable: false,
+    queryPrefix: null
   },
   'smolvlm2-500m': {
     id: 'smolvlm2-500m',
+    family: 'smolvlm2',
     repo: 'HuggingFaceTB/SmolVLM2-500M-Video-Instruct',
     dtype: 'q4f16',
     visionOnly: false,
-    visionDim: SIGLIP_HIDDEN_SIZE,
+    visionDim: SMOLVLM_IMAGE_FEATURES,
     framesPerVideo: 4,
     cachePrefix: '@smolvlm2-500m/',
     downloadMB: 358,
-    selectable: false // as above — needs M4
+    selectable: false, // as above — needs M4
+    queryPrefix: null
+  },
+  // Multimodal embedder: images, video frames and text share one 768-d space,
+  // so the same worker answers text search. q4 is the model card's WebGPU
+  // pick; q4f16 is out because the activations overflow fp16 (Google's docs).
+  // Audio encoder is never loaded (worker drops audio_config).
+  embeddinggemma2: {
+    id: 'embeddinggemma2',
+    family: 'embeddinggemma2',
+    repo: 'onnx-community/embeddinggemma-2-ONNX',
+    dtype: 'q4',
+    visionOnly: true,
+    visionDim: 768,
+    // 8 frames × 140 soft tokens stays well under the ~2,700-token WebGPU
+    // dispatch limit the model card warns about.
+    framesPerVideo: 8,
+    cachePrefix: '@embeddinggemma2-q4/',
+    downloadMB: 316, // text 175 + vision 109 + tokenizer 32
+    selectable: true,
+    // Asymmetric retrieval: query prefix on text; media takes no prefix.
+    queryPrefix: 'task: search result | query: ',
+    imageTokens: 280
   }
 }
+
+// A phone locked up running EmbeddingGemma 2 at the default budget: ~2,500
+// vision patches per image, and attention memory grows with their square.
+// 70 tokens (~630 patches) cuts that ~16x. Its own cache prefix, because a
+// different budget embeds the same photo differently (AGENT.md).
+// shortcut: UA sniffing, upgrade to the adapter's limits once pickVlmTier() (M6) exists.
+// fixedSeqLen fits the longest input, a 4-frame video: 4 × (70 soft tokens +
+// boi/eoi) + bos/eos = 292. Queries and photos are padded up to it.
+const PHONE_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
+  embeddinggemma2: {
+    imageTokens: 70,
+    framesPerVideo: 4,
+    fixedSeqLen: 296,
+    cachePrefix: '@embeddinggemma2-q4-t70-s296/'
+  }
+}
+const IS_PHONE =
+  typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 
 /** True when `variant` is one of the SmolVLM2 tiers. */
 export function isVlmVariant(variant: ModelVariant): boolean {
   return variant in TIERS
 }
 
-/** Tier descriptor for a variant, or null when the variant is not a VLM tier. */
-export function getVlmTier(variant: ModelVariant): VlmTier | null {
-  return TIERS[variant] ?? null
+/**
+ * Tier descriptor for a variant, or null when the variant is not a VLM tier.
+ * On phones, tiers with a PHONE_OVERRIDES row come back with its lighter settings.
+ */
+export function getVlmTier(variant: ModelVariant, phone = IS_PHONE): VlmTier | null {
+  const tier = TIERS[variant]
+  if (!tier) return null
+  const phoneRow = phone ? PHONE_OVERRIDES[variant] : undefined
+  return phoneRow ? { ...tier, ...phoneRow } : tier
 }
 
 /** Every declared tier, including ones not yet offered to users. */
@@ -98,14 +143,16 @@ export function selectableVlmTiers(): VlmTier[] {
 /**
  * Whether a variant can answer a typed text query.
  *
- * False for every VLM tier: `state.vectors` hold pooled SigLIP features, and
- * the only text encoder in the app is nomic-embed-text, whose output lives in
- * an unrelated space. Equal width (768) is not compatibility — cosine over the
- * two is well-defined and meaningless, which is worse than an error because it
- * looks like it worked. A compatible path arrives with M6.
+ * A worker tier can only when its own checkpoint embeds text into the same
+ * space (`queryPrefix` set). SmolVLM2 tiers cannot: `state.vectors` hold pooled
+ * SigLIP features, and the app's other text encoder, nomic-embed-text, lives
+ * in an unrelated space. Equal width (768) is not compatibility — cosine over
+ * the two is well-defined and meaningless, which is worse than an error
+ * because it looks like it worked.
  */
 export function supportsTextSearch(variant: ModelVariant): boolean {
-  return !isVlmVariant(variant)
+  const tier = getVlmTier(variant)
+  return tier ? tier.queryPrefix !== null : true
 }
 
 /**
@@ -203,8 +250,8 @@ export function frameTimestamps(duration: number, n: number): number[] {
 }
 
 /**
- * Guard the assumption recorded in ADR-0001: that `vision_encoder.onnx` exports
- * the pre-connector SigLIP tensor and is therefore `visionDim` wide.
+ * Guard that `vision_encoder.onnx` still exports `visionDim`-wide features
+ * (ADR-0001 assumed 768-d SigLIP; the export is the 576-d post-connector tensor).
  *
  * A mismatch is not fatal to correctness — vectors of any width cluster fine,
  * and each tier writes under its own cache prefix — but it must not pass

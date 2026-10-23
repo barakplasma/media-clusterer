@@ -11,7 +11,7 @@
  * B/C add caption generation on the same forward pass in M4.
  */
 
-import { AutoModel, RawImage, env } from '@huggingface/transformers'
+import { AutoConfig, AutoModel, RawImage, RawVideo, env } from '@huggingface/transformers'
 import { assertVisionDim, poolVectors, poolVision } from './vlmTiers'
 import type { VlmDevice, VlmRequest, VlmResponse, VlmTier } from './types'
 
@@ -58,10 +58,38 @@ interface VisionOutput {
 // (rather than AutoModelForVision2Seq) loads the vision tower alone, which is
 // what keeps tier A to a ~55 MB download instead of ~189 MB.
 let model: { dispose?: () => Promise<void> } | null = null
-let runVision: ((pixelValues: unknown) => Promise<Record<string, VisionOutput>>) | null = null
+let runVision: ((inputs: Record<string, unknown>) => Promise<VisionOutput>) | null = null
 let processor: { (images: RawImage[]): Promise<Record<string, unknown>> } | null = null
 let loadedTier: VlmTier | null = null
 let device: VlmDevice = 'wasm'
+
+// EmbeddingGemma 2: the processor turns (text, images, audio, videos) into
+// model inputs and the model returns a pooled, L2-normalized embedding.
+type Gemma2Processor = (
+  text: string[] | null,
+  images?: RawImage[][] | null,
+  audio?: null,
+  videos?: RawVideo[] | null,
+  tokenizerOptions?: Record<string, unknown>
+) => Promise<Record<string, unknown>>
+
+/** Tokenizer options pinning every input to the tier's fixed length, if it has one. */
+function seqOptions(tier: VlmTier): Record<string, unknown> {
+  return tier.fixedSeqLen
+    ? { padding: 'max_length', max_length: tier.fixedSeqLen, truncation: true }
+    : {}
+}
+type Gemma2Model = ((inputs: Record<string, unknown>) => Promise<{ sentence_embedding: VisionOutput }>) & {
+  dispose?: () => Promise<void>
+}
+
+// Only probes for an adapter. Handing ORT our own GPUDevice (as
+// src/sapiens2.ts does) does not work with this ORT build: it ignores
+// env.webgpu.device and creates its own (microsoft/onnxruntime#26107), so a
+// device made here would just sit beside ORT's, holding phone GPU memory.
+async function hasWebGpu(): Promise<boolean> {
+  return !!(await navigator.gpu?.requestAdapter().catch(() => null))
+}
 
 function post(message: VlmResponse, transfer: Transferable[] = []): void {
   ;(self as unknown as Worker).postMessage(message, transfer)
@@ -90,6 +118,14 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
   }
   await dispose()
 
+  // Checked before any download: without WebGPU this tier cannot run at all.
+  if (tier.family === 'embeddinggemma2' && !(await hasWebGpu())) {
+    throw new Error(
+      `${tier.id} needs WebGPU, which this browser or device does not offer. ` +
+        'Pick SmolVLM2 or nomic in Settings.'
+    )
+  }
+
   const { AutoProcessor } = await import('@huggingface/transformers')
 
   const progress_callback = (e: { status?: string; file?: string; loaded?: number; total?: number }) => {
@@ -107,12 +143,61 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     progress_callback
   })) as unknown as typeof processor
 
+  if (tier.family === 'embeddinggemma2') {
+    if (tier.imageTokens) {
+      const p = processor as unknown as {
+        image_processor: { max_soft_tokens: number }
+        video_processor?: { frame_processor?: { max_soft_tokens: number } }
+      }
+      p.image_processor.max_soft_tokens = tier.imageTokens
+      // Video frames default to a smaller budget than stills; only ever lower it.
+      const frames = p.video_processor?.frame_processor
+      if (frames) frames.max_soft_tokens = Math.min(frames.max_soft_tokens, tier.imageTokens)
+    }
+    // Dropping audio_config skips the 189 MB audio encoder: this app embeds
+    // images and video frames only.
+    const config = await AutoConfig.from_pretrained(tier.repo, { progress_callback })
+    ;(config as unknown as { audio_config: unknown }).audio_config = null
+    // No WASM fallback (see the WebGPU check above): both quantized exports
+    // (q4, q8) use GatherBlockQuantized, which onnxruntime-web implements only
+    // on WebGPU ("Could not find an implementation", verified in Chromium), and
+    // fp32 is ~1.75 GB.
+    model = (await AutoModel.from_pretrained(tier.repo, {
+      config,
+      dtype: tier.dtype,
+      progress_callback,
+      device: 'webgpu',
+      session_options: {
+        // The default 'bucket' cache keeps every freed GPU buffer for reuse.
+        // Photos vary in shape, so it grew until a Pixel 7a had no device
+        // memory left for the first search (VK_ERROR_OUT_OF_DEVICE_MEMORY).
+        executionProviders: [{ name: 'webgpu', storageBufferCacheMode: 'lazyRelease' }]
+      }
+    })) as unknown as typeof model
+    device = 'webgpu'
+    loadedTier = tier
+    // Build the text path's GPU pipelines now, while memory is free, instead
+    // of at the first search after a whole folder has been embedded.
+    if (tier.queryPrefix) {
+      await embedGemma2(
+        await (processor as unknown as Gemma2Processor)([tier.queryPrefix + 'warm up'], null, null, null, seqOptions(tier))
+      )
+    }
+    post({ type: 'loaded', id, device, visionDim: tier.visionDim })
+    return
+  }
+
   const opts = { dtype: tier.dtype, progress_callback }
-  // `model_file_name` pins the load to the vision tower; without it the loader
-  // would also fetch embed_tokens and the decoder, which tier A never runs.
+  // shortcut: transformers.js 4.3 ignores `model_file_name` here and also
+  // fetches embed_tokens + the decoder (~190 MB instead of 55); load
+  // vision_encoder alone through onnxruntime-web if the download matters.
   const visionOpts = { ...opts, model_file_name: 'vision_encoder' }
 
+  // The q4f16 graph casts its input to f16 on WebGPU, so an adapter without
+  // shader-f16 (SwiftShader, some phones) loads fine and then fails every run.
+  const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
   try {
+    if (!adapter?.features.has('shader-f16')) throw new Error('no shader-f16')
     model = (await AutoModel.from_pretrained(tier.repo, {
       ...visionOpts,
       device: 'webgpu'
@@ -126,7 +211,11 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
     device = 'wasm'
   }
 
-  runVision = model as unknown as typeof runVision
+  // encode_image runs only the vision_encoder session; calling the model
+  // itself goes through forward(), which wants input_ids. q4f16 on WebGPU
+  // can hand back float16, which poolVision does not read.
+  const smol = model as unknown as { encode_image: (i: Record<string, unknown>) => Promise<{ to: (t: string) => VisionOutput }> }
+  runVision = async (inputs) => (await smol.encode_image(inputs)).to('float32')
   loadedTier = tier
   post({ type: 'loaded', id, device, visionDim: tier.visionDim })
 }
@@ -143,61 +232,132 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
  * discrete GPU, but the target device has neither the VRAM headroom nor a
  * discrete GPU, and a batch that OOMs costs the whole tab.
  */
-async function embed(id: number, groups: ImageBitmap[][]): Promise<void> {
-  if (!runVision || !processor || !loadedTier) {
-    throw new Error('VLM worker: embed before load')
-  }
-  const tier = loadedTier
+/** Decoded pixels of a bitmap, without re-decoding it as RawImage.fromBlob would. */
+function bitmapToRaw(bitmap: ImageBitmap): RawImage {
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('VLM worker: no 2d context for frame conversion')
+  ctx.drawImage(bitmap, 0, 0)
+  const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height)
+  return new RawImage(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height, 4)
+}
+
+/** One EmbeddingGemma 2 forward pass → its sentence embedding as a plain vector. */
+async function embedGemma2(inputs: Record<string, unknown>): Promise<Float32Array> {
+  const out = await (model as unknown as Gemma2Model)(inputs)
+  const emb = out.sentence_embedding
+  assertVisionDim(loadedTier!, emb.dims[emb.dims.length - 1])
+  return Float32Array.from(emb.data)
+}
+
+/**
+ * EmbeddingGemma 2 embeds a still as an image and a multi-frame group as one
+ * video (140 soft tokens per frame, vs 280 for an image), so a clip gets a
+ * single native embedding rather than a centroid of per-frame ones. One item
+ * per forward pass: batches risk the WebGPU dispatch limit and the memory
+ * budget alike.
+ */
+async function embedGroupGemma2(group: ImageBitmap[]): Promise<Float32Array> {
+  const run = processor as unknown as Gemma2Processor
+  const frames = group.map(bitmapToRaw)
+  for (const b of group) b.close()
+  // Frames arrive without timestamps; space them one second apart, the
+  // model's default sampling rate.
+  const opts = seqOptions(loadedTier!)
+  const inputs =
+    frames.length === 1
+      ? await run(null, [frames], null, null, opts)
+      : await run(null, null, null, [new RawVideo(frames, frames.length)], opts)
+  return embedGemma2(inputs)
+}
+
+/**
+ * Embed each group on its own, so one bad item (a broken video, an odd
+ * frame) costs its own vector — sent back empty, with its error — instead
+ * of failing every item in the batch. A lost GPU device still aborts the
+ * batch: nothing after it can succeed, and the app stops the run on it.
+ */
+async function embedEach(
+  id: number,
+  groups: ImageBitmap[][],
+  embedOne: (group: ImageBitmap[]) => Promise<Float32Array>
+): Promise<void> {
   const vectors: Float32Array[] = []
-
+  const errors: string[] = []
   for (const group of groups) {
-    const frameVectors: Float32Array[] = []
-    for (const bitmap of group) {
-      // RawImage.fromBlob would re-decode; the bitmap is already decoded, so
-      // go through a canvas to hand the processor raw pixels directly.
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
-      const ctx = canvas.getContext('2d')
-      if (!ctx) throw new Error('VLM worker: no 2d context for frame conversion')
-      ctx.drawImage(bitmap, 0, 0)
-      const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height)
-      const raw = new RawImage(
-        new Uint8ClampedArray(imageData.data),
-        imageData.width,
-        imageData.height,
-        4
-      )
-
-      // do_image_splitting: false is load-bearing — the default tiles each
-      // frame against size.longest_edge 2048, which is the easiest way to blow
-      // the memory budget on the device this exists to support.
-      const inputs = (await (processor as unknown as CallableFunction)(raw, {
-        do_image_splitting: false
-      })) as { pixel_values: unknown }
-
-      const out = await runVision({ pixel_values: inputs.pixel_values })
-      const features = out.last_hidden_state ?? out.image_features ?? Object.values(out)[0]
-      if (!features?.dims) {
-        throw new Error('VLM worker: vision encoder returned no recognisable tensor')
-      }
-
-      assertVisionDim(tier, features.dims[features.dims.length - 1])
-      frameVectors.push(poolVision(features.data, features.dims))
-
-      // AGENT.md: bitmaps are closed as soon as they are done with. The worker
-      // owns these because they were transferred to it.
-      bitmap.close()
+    try {
+      vectors.push(await embedOne(group))
+    } catch (err) {
+      const { message } = toError(err)
+      if (/device[^.]*\blost|DEVICE_LOST/i.test(message)) throw err
+      for (const b of group) b.close()
+      vectors.push(new Float32Array(0))
+      errors.push(message)
     }
-
-    if (frameVectors.length === 0) {
-      throw new Error('VLM worker: every frame in a group failed to embed')
-    }
-    vectors.push(poolVectors(frameVectors))
   }
+  post(
+    { type: 'embedded', id, vectors, errors },
+    vectors.map((v) => v.buffer)
+  )
+}
 
+async function embedText(id: number, texts: string[]): Promise<void> {
+  if (!processor || !loadedTier || loadedTier.family !== 'embeddinggemma2') {
+    throw new Error('VLM worker: text embedding needs a loaded EmbeddingGemma 2 tier')
+  }
+  const run = processor as unknown as Gemma2Processor
+  const vectors: Float32Array[] = []
+  const opts = seqOptions(loadedTier)
+  for (const text of texts) vectors.push(await embedGemma2(await run([text], null, null, null, opts)))
   post(
     { type: 'embedded', id, vectors },
     vectors.map((v) => v.buffer)
   )
+}
+
+async function embed(id: number, groups: ImageBitmap[][]): Promise<void> {
+  if (loadedTier?.family === 'embeddinggemma2' && model && processor) {
+    return embedEach(id, groups, embedGroupGemma2)
+  }
+  if (!runVision || !processor || !loadedTier) {
+    throw new Error('VLM worker: embed before load')
+  }
+  return embedEach(id, groups, embedGroupSmolVlm)
+}
+
+async function embedGroupSmolVlm(group: ImageBitmap[]): Promise<Float32Array> {
+  const tier = loadedTier!
+  const vision = runVision!
+  const frameVectors: Float32Array[] = []
+  for (const bitmap of group) {
+    const raw = bitmapToRaw(bitmap)
+
+    // do_image_splitting: false is load-bearing — the default tiles each
+    // frame against size.longest_edge 2048, which is the easiest way to blow
+    // the memory budget on the device this exists to support.
+    // The image processor, not the processor: Idefics3Processor's call is
+    // (text, images, options), so passing images first threw on every frame.
+    const inputs = (await (
+      processor as unknown as { image_processor: CallableFunction }
+    ).image_processor([raw], { do_image_splitting: false })) as Record<string, unknown>
+
+    const features = await vision({ pixel_values: inputs.pixel_values, pixel_attention_mask: inputs.pixel_attention_mask })
+    if (!features?.dims) {
+      throw new Error('VLM worker: vision encoder returned no recognisable tensor')
+    }
+
+    assertVisionDim(tier, features.dims[features.dims.length - 1])
+    frameVectors.push(poolVision(features.data, features.dims))
+
+    // AGENT.md: bitmaps are closed as soon as they are done with. The worker
+    // owns these because they were transferred to it.
+    bitmap.close()
+  }
+
+  if (frameVectors.length === 0) {
+    throw new Error('VLM worker: every frame in a group failed to embed')
+  }
+  return poolVectors(frameVectors)
 }
 
 async function dispose(): Promise<void> {
@@ -218,6 +378,7 @@ self.addEventListener('message', (event: MessageEvent<VlmRequest>) => {
     try {
       if (req.type === 'load') await load(req.id, req.tier, req.remoteHost)
       else if (req.type === 'embed') await embed(req.id, req.groups)
+      else if (req.type === 'embedText') await embedText(req.id, req.texts)
       else if (req.type === 'dispose') await dispose()
     } catch (err) {
       // Free any bitmaps the failed request still owns, or the tab leaks one

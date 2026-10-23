@@ -8,7 +8,7 @@ import { pipeline, env, RawImage } from '@huggingface/transformers'
 import * as druid from '@saehrimnir/druidjs'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
-import { loadVlm, embedWithVlm, disposeVlm, vlmDevice } from './vlm'
+import { loadVlm, embedWithVlm, embedTextWithVlm, disposeVlm, vlmDevice } from './vlm'
 import {
   getVlmTier,
   isVlmVariant,
@@ -258,17 +258,26 @@ if (versionEl) {
 // ── Constants ────────────────────────────────────────────────────────────────
 // ── Auto batch size ───────────────────────────────────────────────────────────
 
+// Default where WebGPU is missing. A single constant so it is easy to flip
+// once the embedding benchmark picks a winner.
+const NO_WEBGPU_MODEL = 'smolvlm2-vision'
+// Set when a WebGPU-only model was swapped out for this session; saveSettings
+// writes the saved choice back instead of the stand-in.
+let modelStandIn: { saved: string; used: string } | null = null
+
 const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
   drawBudget: IS_MOBILE ? 150 : 400,
   slideshowSeconds: 3,
-  enableTextSearch: false,
+  enableTextSearch: true, // the default model embeds text itself, so search costs no extra download
   projectionMethod: 'TSNE',
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  modelVariant: 'smolvlm2-vision',
+  // EmbeddingGemma 2 runs only on WebGPU (src/vlmWorker.ts); loadModelOnce
+  // swaps in NO_WEBGPU_MODEL when there is no adapter behind navigator.gpu.
+  modelVariant: 'gpu' in navigator ? 'embeddinggemma2' : NO_WEBGPU_MODEL,
   enableLazyCaption: false,
   doNotTrack: false,
   customModelHost: '',
@@ -317,6 +326,47 @@ const state: AppState = {
 
 // ── Camera (infinite canvas) ─────────────────────────────────────────────────
 const camera: Camera = { x: 0, y: 0, scale: 1 }
+
+const WEBGPU_HELP_KEY = 'mc_hideWebGpuHelp'
+
+/**
+ * Tell a Chromium user how to turn WebGPU on when the browser has it but
+ * hides the GPU (blocklisted driver, e.g. Pixel 10's PowerVR) or only offers
+ * a software adapter. Stays up until dismissed. Returns false when not shown
+ * (other browsers, or "Don't show again").
+ */
+function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
+  const ua = navigator.userAgent
+  if (!('gpu' in navigator) || !/Chrome\//.test(ua)) return false
+  try {
+    if (localStorage.getItem(WEBGPU_HELP_KEY)) return false
+  } catch (_) {}
+  const scheme = /\bEdgA?\//.test(ua) ? 'edge' : /\bOPR\//.test(ua) ? 'opera' : 'chrome'
+  const url = `${scheme}://flags/#enable-unsafe-webgpu`
+  const el = (id: string) => document.getElementById(id)!
+  el('webgpu-help-title').textContent =
+    kind === 'blocked' ? '⚠️ WebGPU is turned off for this GPU' : '⚠️ WebGPU is running in software'
+  el('webgpu-help-why').textContent =
+    kind === 'blocked'
+      ? `This browser supports WebGPU but hides your GPU from web pages, so ${model} can't run and the app is using ${NO_WEBGPU_MODEL} instead (no text search). To use ${model}:`
+      : `This browser only offers a software (CPU) WebGPU adapter, so ${model} will be very slow. To use your GPU:`
+  el('webgpu-help-url').textContent = url
+  el('webgpu-help-accel').hidden = kind !== 'software'
+  const modal = el('webgpu-help-modal') as HTMLDialogElement
+  el('webgpu-help-copy').onclick = () => {
+    void navigator.clipboard?.writeText(url).then(() => (el('webgpu-help-copy').textContent = 'Copied'))
+  }
+  el('webgpu-help-ok').onclick = () => modal.close()
+  el('webgpu-help-close').onclick = () => modal.close()
+  el('webgpu-help-never').onclick = () => {
+    try {
+      localStorage.setItem(WEBGPU_HELP_KEY, '1')
+    } catch (_) {}
+    modal.close()
+  }
+  modal.showModal()
+  return true
+}
 
 // ── Model singleton ──────────────────────────────────────────────────────────
 let extractor: PipelineInstance | null = null // Vision model (for images)
@@ -651,6 +701,7 @@ async function extractVideoFrames(file: File, n: number, px: number): Promise<Im
     let timestamps: number[] = []
     let cursor = 0
     let settled = false
+    let probingDuration = false
 
     // video.remove() is a no-op when the element was never added to the DOM.
     // The only way to release a WebMediaPlayer in Chrome is: pause → clear src → load().
@@ -675,13 +726,30 @@ async function extractVideoFrames(file: File, n: number, px: number): Promise<Im
       resolve(frames)
     }
 
-    video.onloadedmetadata = () => {
+    const startSampling = () => {
       const duration = Number.isFinite(video.duration) ? video.duration : 0
       timestamps = frameTimestamps(duration, n)
       video.currentTime = timestamps[cursor]
     }
 
+    video.onloadedmetadata = () => {
+      // MediaRecorder WebMs (screen recordings, many Android recorders) carry
+      // no duration, which sampled the first frame n times. Seeking far past
+      // the end makes the browser scan to the end and fill in the real one.
+      if (video.duration === Infinity && n > 1) {
+        probingDuration = true
+        video.currentTime = 1e101
+        return
+      }
+      startSampling()
+    }
+
     video.onseeked = async () => {
+      if (probingDuration) {
+        probingDuration = false
+        startSampling()
+        return
+      }
       try {
         frames.push(await createImageBitmap(video, { resizeWidth: px, resizeQuality: 'medium' }))
       } catch (e) {
@@ -785,6 +853,15 @@ async function embedText(text: string): Promise<Float32Array> {
   if (state.settings.modelVariant === 'openai') {
     if (!remoteConfig) throw new Error('Remote endpoint not connected')
     return embedQuery(remoteConfig, text)
+  }
+
+  const tier = getVlmTier(state.settings.modelVariant)
+  if (tier?.queryPrefix != null) {
+    // The worker's own text encoder shares the media vectors' space; its
+    // retrieval scheme prefixes the query only (media take none).
+    if (!vlmTier) throw new Error(`${tier.id} not loaded`)
+    const [vec] = await embedTextWithVlm([tier.queryPrefix + text])
+    return vec
   }
 
   if (!supportsTextSearch(state.settings.modelVariant)) {
@@ -1414,6 +1491,7 @@ function showRemoteConsentModal(baseUrl: string): Promise<boolean> {
 // ── Model singleton ──────────────────────────────────────────────────────────
 async function loadModelOnce(signal?: AbortSignal) {
   applyModelEnv()
+  activeEmbeddingDim = 768
   state.phase = 'loading_model'
   setStatus('Loading model…')
   setProgress(0)
@@ -1479,10 +1557,28 @@ async function loadModelOnce(signal?: AbortSignal) {
     return
   }
 
+  // navigator.gpu can exist with no usable adapter (emulators, blocklisted GPUs).
+  if (getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2') {
+    const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
+    const saved = state.settings.modelVariant
+    if (!adapter) {
+      if (savedSettings) modelStandIn = { saved, used: NO_WEBGPU_MODEL }
+      state.settings.modelVariant = NO_WEBGPU_MODEL
+      dom.modelSelect.value = NO_WEBGPU_MODEL
+    }
+    if (!adapter || adapter.info?.isFallbackAdapter) {
+      const shown = showWebGpuHelp(!adapter ? 'blocked' : 'software', saved)
+      if (!shown && !adapter && savedSettings) {
+        showToast(`${saved} needs WebGPU, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`, 'warn', 8000)
+      }
+    }
+  }
+
   if (isVlmVariant(state.settings.modelVariant)) {
     const tier = getVlmTier(state.settings.modelVariant)!
     setStatus(`Loading ${tier.id} (${tier.downloadMB} MB)…`)
     try {
+      activeEmbeddingDim = tier.visionDim
       await loadVlm(state.settings.modelVariant, normalizeHost(state.settings.customModelHost), (pct) => {
         setProgress(pct)
         setStatus(`Downloading ${tier.id}… ${pct.toFixed(0)}%`)
@@ -1950,6 +2046,7 @@ async function embedAll(files: PhotoFile[]) {
   const isRemote = state.settings.modelVariant === 'openai'
   const isVlm = isVlmVariant(state.settings.modelVariant)
   const reportedRemoteErrors = new Set<string>()
+  let gpuLost = false
   // Sapiens2 runs one image at a time; chrome-ai uses 2 for potential parallel
   // session speedup. The transformers path adapts: the working batch size
   // halves after a GPU failure and creeps back up after sustained successes.
@@ -2044,11 +2141,12 @@ async function embedAll(files: PhotoFile[]) {
                 missInputs.push(f.file)
               }
             }
-          } else if (isRemote) {
+          } else if (isRemote || isVlm) {
             // No frame to send. Falling through to the File below would put a
-            // File where embedImages expects a data URI; JSON.stringify turns
-            // it into {}, which the provider rejects — taking the whole batch,
-            // and every valid item in it, down with one bad video.
+            // File where embedImages expects a data URI (remote: JSON.stringify
+            // turns it into {}) or where the worker expects decoded frames —
+            // either way taking the whole batch, and every valid item in it,
+            // down with one bad video.
             vectors[idx] = failedVector(idx)
             return
           } else {
@@ -2139,8 +2237,10 @@ async function embedAll(files: PhotoFile[]) {
           if (!remoteConfig) throw new Error('Remote endpoint not connected')
           extracted = await embedImages(remoteConfig, missInputs as string[])
         } else if (isVlm) {
-          if (!vlmTier) throw new Error('SmolVLM2 tier not loaded')
-          extracted = await embedWithVlm(missInputs as ImageBitmap[][])
+          if (!vlmTier) throw new Error(`${state.settings.modelVariant} not loaded`)
+          const res = await embedWithVlm(missInputs as ImageBitmap[][])
+          extracted = res.vectors
+          embedFailReason ||= res.errors[0] ?? ''
         } else if (isSapiens2) {
           if (!sapiens2Session) throw new Error('Sapiens2 session not loaded')
           extracted = await embedWithSapiens2(sapiens2Session, missInputs as (File | ImageBitmap)[])
@@ -2212,6 +2312,11 @@ async function embedAll(files: PhotoFile[]) {
         for (let m = 0; m < missIndices.length; m++) {
           const bi = missIndices[m]
           const idx = i + bi
+          // Zero-length: this item failed alone in the worker (see embedWithVlm).
+          if (extracted[m].length === 0) {
+            vectors[idx] = failedVector(idx)
+            continue
+          }
           vectors[idx] = extracted[m]
           if (failedInputs.has(missInputs[m])) embedFailed.add(idx)
           else writeQueue.push([keys[bi], vectors[idx]])
@@ -2219,6 +2324,10 @@ async function embedAll(files: PhotoFile[]) {
       } catch (err) {
         console.warn('Batch inference failed, filling zeros:', (err as Error).message)
         embedFailReason ||= (err as Error).message
+        // A lost GPU device never comes back for this page: every later
+        // batch would fail the same way (a Pixel 7a log had one reset
+        // followed by a failure per remaining photo).
+        if (/device[^.]*\blost|DEVICE_LOST/i.test((err as Error).message)) gpuLost = true
         // A remote failure usually repeats for every remaining batch (a bad key
         // stays bad), so without a toast the whole run silently zero-fills.
         // One per error kind keeps that from becoming a wall of notifications.
@@ -2291,10 +2400,29 @@ async function embedAll(files: PhotoFile[]) {
     setStatus(`Embedding ${done} / ${files.length} images…${eta}${fromCache}`)
     setProgress(10 + (done / files.length) * 80) // 10% to 90%
 
+    if (gpuLost) {
+      setStatus(`The GPU reset — stopped at ${done} / ${files.length} files. Reload the page to retry.`)
+      showToast(
+        `The GPU reset (device lost) after ${done} of ${files.length} files. ` +
+          'Reload the page to retry, or pick SmolVLM2 in Settings on this device.',
+        'error',
+        15000
+      )
+      console.error(`GPU device lost while embedding: ${state.settings.modelVariant}, ${done}/${files.length} files`)
+      await cachePutBatch(writeQueue)
+      writeQueue.length = 0
+      return vectors.slice(0, done)
+    }
+
     const pressure = getMemoryPressure()
     if (pressure !== null && pressure.freeRatio < 0.2) {
       setStatus(
         `Low memory (${(pressure.freeRatio * 100).toFixed(0)}% free) — stopping at ${done} / ${files.length} files…`
+      )
+      // console.error reaches Bugsink (src/sentry.ts); a status line on a phone does not.
+      console.error(
+        `Embedding stopped for low memory: ${state.settings.modelVariant}, ${done}/${files.length} files, ` +
+          `${(pressure.freeRatio * 100).toFixed(0)}% JS heap free`
       )
       await cachePutBatch(writeQueue)
       writeQueue.length = 0
@@ -2446,6 +2574,9 @@ async function processFiles(files: PhotoFile[]) {
       // Failures only reach the console otherwise, which a phone can't show.
       const why = embedFailReason ? `: ${embedFailReason}` : ''
       showToast(`${embedFailed.size} of ${files.length} files could not be embedded${why}`, 'warn', 12000)
+      console.error(
+        `Embedding failed for ${embedFailed.size}/${files.length} files (${state.settings.modelVariant})${why}`
+      )
     }
     resizeCanvas()
     setStatus('Arranging layout…')
@@ -3312,7 +3443,11 @@ exifDialog.addEventListener('click', (e) => {
 
 // ── Settings ────────────────────────────────────────────────────────────────
 const saveSettings = () => {
-  localStorage.setItem('mc_settings', JSON.stringify(state.settings))
+  const s =
+    modelStandIn?.used === state.settings.modelVariant
+      ? { ...state.settings, modelVariant: modelStandIn.saved }
+      : state.settings
+  localStorage.setItem('mc_settings', JSON.stringify(s))
 }
 
 // Sync UI with initial settings
@@ -3351,9 +3486,15 @@ dom.customModelHostInput.value = state.settings.customModelHost
     for (const tier of selectableVlmTiers()) {
       const opt = document.createElement('option')
       opt.value = tier.id
-      const what = tier.visionOnly ? 'embeddings only' : 'captions + embeddings'
+      const what = tier.queryPrefix
+        ? 'embeddings + text search'
+        : tier.visionOnly
+          ? 'embeddings only'
+          : 'captions + embeddings'
       opt.textContent = `${tier.id} (${what} · ${tier.downloadMB} MB)`
-      opt.title = 'Video-native, runs in a Web Worker. No text search yet.'
+      opt.title = tier.queryPrefix
+        ? 'Video-native, runs in a Web Worker. Photos, video and text search share one model.'
+        : 'Video-native, runs in a Web Worker. No text search.'
       group.appendChild(opt)
     }
   }
@@ -3562,7 +3703,9 @@ dom.enableSearchToggle.addEventListener('change', async () => {
     state.phase !== 'idle' &&
     state.phase !== 'loading_model' &&
     !textExtractor &&
-    state.settings.modelVariant !== 'openai'
+    state.settings.modelVariant !== 'openai' &&
+    // Tiers with their own text encoder need no nomic text model.
+    getVlmTier(state.settings.modelVariant)?.queryPrefix == null
   ) {
     // We duplicate the text loading logic here for dynamic loading
     dom.settingsModal.close()
@@ -4445,5 +4588,9 @@ debugCopyBtn.addEventListener('click', async () => {
   get embedFailed() {
     return embedFailed
   },
+  // Drive the real pipeline from a test page (device tests feed File objects).
+  processFiles,
+  searchImages,
+  extractVideoFrames,
   buildDebugInfo
 }
