@@ -18,7 +18,7 @@ flowchart LR
   PR --> E[e2e.yml, macos-14: Chrome on the Apple GPU]
   E --> P[phone profile, required]
   E --> K[desktop profile, informational]
-  E -.-> S[safari job, disabled with if: false]
+  E -.-> S[no safari job: e2e/safari kept for later]
   B[Run workflow button] --> T[testlab.yml: Pixel 7a on Firebase Test Lab, Chromium 158]
 ```
 
@@ -31,7 +31,7 @@ flowchart LR
 ## Things that look wrong but aren't
 
 - **Pixel 10:** left out on purpose. Chrome blocklists its PowerVR driver for WebGPU (`gpu/config/webgpu_blocklist_impl.cc`, pattern `"*:*:PowerVR*25.1*"`), so the adapter is `null`. With the flag forced on it runs on real hardware (`img-tec d-series`), but at about 330 s per photo, and the GPU watchdog reset it (`GUILTY_OVERRUNING`). Real users there get SmolVLM2 plus the help modal.
-- **Safari:** Safari 26.6 on GitHub's `macos-26` runner returns no WebGPU adapter, so the job is off. Re-enable it when that changes. The test is `e2e/safari/` (node:test + safaridriver).
+- **Safari:** Safari 26.6 on GitHub's `macos-26` runner returns no WebGPU adapter, so there is no Safari job (actionlint rejects `if: false`). Add one back to e2e.yml when that changes; the comment at its end says how. The test is `e2e/safari/` (node:test + safaridriver).
 - **Linux/Windows hosted runners:** SwiftShader only, no real GPU. Don't run the GPU suite there.
 - **Test Lab stock Chrome is too old:** Chrome 103 on the Pixel 7a has no WebGPU, so the workflow sideloads Chromium 158 (snapshot rev 1725074).
 - **npm 10 crashes on install** (`Cannot read properties of null (reading 'edgesOut')`). Use `npx -y npm@11 install …`. Add `--ignore-scripts` if the onnxruntime-node postinstall can't download.
@@ -43,6 +43,6 @@ flowchart LR
 2. **SmolVLM2 download is about 190 MB, not 55.** transformers.js 4.3 ignores `model_file_name` and also fetches embed_tokens and the decoder. Loading `onnx/vision_encoder_q4f16.onnx` alone through onnxruntime-web would fix that. There's a `shortcut:` comment in `src/vlmWorker.ts`.
 3. **SmolVLM2 vectors barely separate:** cat vs tiger cosine is 0.962. The benchmark (#34) should say whether it should stay the no-WebGPU default (`NO_WEBGPU_MODEL` in `src/app.ts`).
 4. **Pick the phone/desktop profile from the adapter, not the user agent.** Use `maxStorageBufferBindingSize`: Pixel 7a reports 256 MB, the macOS runner 2 GB.
-5. **Gemini Nano runs on hosted runners.** On ubuntu-latest and windows-latest (4 vCPU, 16 GB RAM), Chrome 155 and 156 reported `downloadable`. The model downloaded in about 90 s, then described a test image in about 9 s ("A white circle is centered on a red background."). It needed `--enable-features=PromptAPIForGeminiNano,PromptAPIForGeminiNanoMultimodalInput,OptimizationGuideOnDeviceModel:BypassPerfRequirement/true`, plus Playwright's `--disable-component-update` and `--disable-background-networking` removed. The probe's source is in commit 6fea338 on #33. Next: an informational Linux job that saves Chrome AI descriptions as an artifact for the benchmark. The harness is on #34 (`bench/run-chrome-ai.mjs`).
+5. **Gemini Nano runs on hosted runners.** On ubuntu-latest and windows-latest (4 vCPU, 16 GB RAM), Chrome 155 and 156 reported `downloadable`. The model downloaded in about 90 s, then described a test image in about 9 s ("A white circle is centered on a red background."). It needed `--enable-features=PromptAPIForGeminiNano,PromptAPIForGeminiNanoMultimodalInput,OptimizationGuideOnDeviceModel:BypassPerfRequirement/true`, plus Playwright's `--disable-component-update` and `--disable-background-networking` removed. The on-demand test is `.github/workflows/chrome-ai.yml` (`e2e/chrome-ai.spec.ts`, its own persistent Chrome profile, because the Prompt API is off in Playwright's default incognito-like contexts). **App bug:** when Nano is `downloadable`, `loadModelOnce` only polls availability and never calls `LanguageModel.create()`, which needs a user gesture, so a fresh user times out after 120 s. Start the download from the Load Model click.
 6. **#34 (benchmark):** still running (desktop profile, Sapiens2, COCO). Re-run `bench/rank.mjs` when it's done to refresh `src/benchmarkRanks.ts`.
 7. **#32:** marked not for merge, and #33 carries its harness. Close it.

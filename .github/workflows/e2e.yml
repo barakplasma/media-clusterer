@@ -33,29 +33,7 @@ jobs:
       - run: npm ci
       - run: npx playwright test --project=${{ matrix.profile }}
 
-  # One real-Safari run (Safari 26 ships WebGPU); Chrome carries the rest.
-  safari:
-    name: e2e (safari)
-    # Disabled: Safari 26.6 on GitHub's macos-26 runner returns no WebGPU
-    # adapter (Chrome on the same runners gets the Apple GPU). Re-enable when
-    # the runner's Safari exposes WebGPU.
-    if: false
-    runs-on: macos-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: sudo safaridriver --enable
-      - name: Serve the app
-        run: |
-          nohup npx vite --host 127.0.0.1 --port 5173 --strictPort > vite.log 2>&1 &
-          npx -y wait-on@8 -t 60000 http://127.0.0.1:5173
-      - run: node --test --test-reporter=spec e2e/safari/embeddinggemma2.test.mjs
-      - if: failure()
-        run: cat vite.log
+  # Safari: e2e/safari/ (node:test + safaridriver) is kept but has no job.
+  # Safari 26.6 on GitHub's macos-26 runner returns no WebGPU adapter (Chrome
+  # on the same runners gets the Apple GPU). Add a macos job running
+  # `node --test e2e/safari/embeddinggemma2.test.mjs` once it does.

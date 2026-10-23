@@ -53,6 +53,8 @@ test('Chrome AI (Gemini Nano) describes photos and finds them by text', async ()
       b.onclick = () => void LanguageModel.create(o)
       document.body.append(b)
     }, opts)
+    // The first-visit About dialog would swallow the click.
+    await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => (d as HTMLDialogElement).close()))
     await page.click('#e2e-nano')
     await expect.poll(availability, { timeout: 10 * 60_000, intervals: [5_000] }).toBe('available')
     console.log(`Gemini Nano downloaded in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
