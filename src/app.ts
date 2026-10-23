@@ -653,6 +653,7 @@ async function extractVideoFrames(file: File, n: number, px: number): Promise<Im
     let timestamps: number[] = []
     let cursor = 0
     let settled = false
+    let probingDuration = false
 
     // video.remove() is a no-op when the element was never added to the DOM.
     // The only way to release a WebMediaPlayer in Chrome is: pause → clear src → load().
@@ -677,13 +678,30 @@ async function extractVideoFrames(file: File, n: number, px: number): Promise<Im
       resolve(frames)
     }
 
-    video.onloadedmetadata = () => {
+    const startSampling = () => {
       const duration = Number.isFinite(video.duration) ? video.duration : 0
       timestamps = frameTimestamps(duration, n)
       video.currentTime = timestamps[cursor]
     }
 
+    video.onloadedmetadata = () => {
+      // MediaRecorder WebMs (screen recordings, many Android recorders) carry
+      // no duration, which sampled the first frame n times. Seeking far past
+      // the end makes the browser scan to the end and fill in the real one.
+      if (video.duration === Infinity && n > 1) {
+        probingDuration = true
+        video.currentTime = 1e101
+        return
+      }
+      startSampling()
+    }
+
     video.onseeked = async () => {
+      if (probingDuration) {
+        probingDuration = false
+        startSampling()
+        return
+      }
       try {
         frames.push(await createImageBitmap(video, { resizeWidth: px, resizeQuality: 'medium' }))
       } catch (e) {
@@ -2056,11 +2074,12 @@ async function embedAll(files: PhotoFile[]) {
                 missInputs.push(f.file)
               }
             }
-          } else if (isRemote) {
+          } else if (isRemote || isVlm) {
             // No frame to send. Falling through to the File below would put a
-            // File where embedImages expects a data URI; JSON.stringify turns
-            // it into {}, which the provider rejects — taking the whole batch,
-            // and every valid item in it, down with one bad video.
+            // File where embedImages expects a data URI (remote: JSON.stringify
+            // turns it into {}) or where the worker expects decoded frames —
+            // either way taking the whole batch, and every valid item in it,
+            // down with one bad video.
             vectors[idx] = failedVector(idx)
             return
           } else {
@@ -2152,7 +2171,9 @@ async function embedAll(files: PhotoFile[]) {
           extracted = await embedImages(remoteConfig, missInputs as string[])
         } else if (isVlm) {
           if (!vlmTier) throw new Error(`${state.settings.modelVariant} not loaded`)
-          extracted = await embedWithVlm(missInputs as ImageBitmap[][])
+          const res = await embedWithVlm(missInputs as ImageBitmap[][])
+          extracted = res.vectors
+          embedFailReason ||= res.errors[0] ?? ''
         } else if (isSapiens2) {
           if (!sapiens2Session) throw new Error('Sapiens2 session not loaded')
           extracted = await embedWithSapiens2(sapiens2Session, missInputs as (File | ImageBitmap)[])
@@ -2224,6 +2245,11 @@ async function embedAll(files: PhotoFile[]) {
         for (let m = 0; m < missIndices.length; m++) {
           const bi = missIndices[m]
           const idx = i + bi
+          // Zero-length: this item failed alone in the worker (see embedWithVlm).
+          if (extracted[m].length === 0) {
+            vectors[idx] = failedVector(idx)
+            continue
+          }
           vectors[idx] = extracted[m]
           if (failedInputs.has(missInputs[m])) embedFailed.add(idx)
           else writeQueue.push([keys[bi], vectors[idx]])
@@ -4491,5 +4517,9 @@ debugCopyBtn.addEventListener('click', async () => {
   get embedFailed() {
     return embedFailed
   },
+  // Drive the real pipeline from a test page (device tests feed File objects).
+  processFiles,
+  searchImages,
+  extractVideoFrames,
   buildDebugInfo
 }
