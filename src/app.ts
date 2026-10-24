@@ -223,6 +223,7 @@ const dom: DOMElements = {
   headerRecenterBtn: document.getElementById('header-recenter-btn') as HTMLButtonElement,
   demoBtn: document.getElementById('demo-btn') as HTMLButtonElement,
   modelSelect: document.getElementById('model-select') as HTMLSelectElement,
+  embedProfileSelect: document.getElementById('embed-profile-select') as HTMLSelectElement,
   modalCaption: document.getElementById('modal-caption') as HTMLDivElement,
   chromeAIPromptInput: document.getElementById('chrome-ai-prompt') as HTMLTextAreaElement,
   chromeAIPromptReset: document.getElementById('chrome-ai-prompt-reset') as HTMLButtonElement,
@@ -283,6 +284,7 @@ const DEFAULT_SETTINGS: Settings = {
   // EmbeddingGemma 2 runs only on WebGPU (src/vlmWorker.ts); loadModelOnce
   // swaps in NO_WEBGPU_MODEL when there is no adapter behind navigator.gpu.
   modelVariant: 'gpu' in navigator ? 'embeddinggemma2' : NO_WEBGPU_MODEL,
+  embedProfile: 'auto',
   enableLazyCaption: false,
   doNotTrack: false,
   customModelHost: '',
@@ -2444,7 +2446,7 @@ async function embedAll(files: PhotoFile[]) {
       setStatus(`The GPU reset — stopped at ${done} / ${files.length} files. Reload the page to retry.`)
       showToast(
         `The GPU reset (device lost) after ${done} of ${files.length} files. ` +
-          'Reload the page to retry, or pick SmolVLM2 in Settings on this device.',
+          'Reload the page to retry, or set Image budget to Light (or pick SmolVLM2) in Settings.',
         'error',
         15000
       )
@@ -3862,6 +3864,13 @@ dom.modelSelect.addEventListener('change', () => {
   updateChromeAIPromptVisibility()
   updateTextSearchAvailability()
   reloadIfModelLoaded()
+})
+
+dom.embedProfileSelect.value = state.settings.embedProfile
+dom.embedProfileSelect.addEventListener('change', () => {
+  state.settings.embedProfile = dom.embedProfileSelect.value as Settings['embedProfile']
+  saveSettings()
+  reloadIfModelLoaded() // the budget is read once at startup, like the model
 })
 
 dom.densitySlider.addEventListener('input', async () => {

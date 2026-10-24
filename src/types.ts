@@ -127,6 +127,7 @@ export interface Settings {
   randomSampleSize: number // 0 = load all; >0 = randomly sample n files when folder has more than n
   viewerOnly: boolean // Skip AI models, arrange by folder/date instead
   modelVariant: ModelVariant // Vision embedding model to use
+  embedProfile: 'auto' | 'light' | 'full' // EmbeddingGemma 2 image budget; auto = light on phones/Chromebooks
   enableLazyCaption: boolean // Generate captions on modal open via Chrome AI (off by default)
   doNotTrack: boolean // Disable BugSink error reporting (default false)
   customModelHost: string // Alternative HuggingFace-compatible host (corporate proxy/mirror); '' = huggingface.co
@@ -220,6 +221,7 @@ export interface DOMElements {
   headerRecenterBtn: HTMLButtonElement
   demoBtn: HTMLButtonElement
   modelSelect: HTMLSelectElement
+  embedProfileSelect: HTMLSelectElement
   modalCaption: HTMLDivElement
   chromeAIPromptInput: HTMLTextAreaElement
   chromeAIPromptReset: HTMLButtonElement

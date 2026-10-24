@@ -94,6 +94,9 @@ const TIERS: Record<string, VlmTier> = {
 // vision patches per image, and attention memory grows with their square.
 // 70 tokens (~630 patches) cuts that ~16x. Its own cache prefix, because a
 // different budget embeds the same photo differently (AGENT.md).
+// Chromebooks take the same row: an Intel gen-12lp one lost the GPU
+// (VK_ERROR_DEVICE_LOST) on the first photo at the default budget (Bugsink
+// MEDIA-CLUSTERER-21/23/25).
 // shortcut: UA sniffing, upgrade to the adapter's limits once pickVlmTier() (M6) exists.
 // fixedSeqLen fits the longest input, a 4-frame video: 4 × (70 soft tokens +
 // boi/eoi) + bos/eos = 292. Queries and photos are padded up to it.
@@ -106,7 +109,20 @@ const PHONE_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
   }
 }
 const IS_PHONE =
-  typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|CrOS/i.test(navigator.userAgent)
+
+// Settings → Image budget: 'light' / 'full' override the UA guess above. Read
+// straight from storage because tiers are looked up before settings load; a
+// change reloads the page (app.ts), so reading once is enough.
+function savedProfile(): string | undefined {
+  try {
+    return JSON.parse(localStorage.getItem('mc_settings') ?? '{}').embedProfile
+  } catch {
+    return undefined
+  }
+}
+const profile = savedProfile()
+const USE_LIGHT = profile === 'light' ? true : profile === 'full' ? false : IS_PHONE
 
 /** True when `variant` is one of the SmolVLM2 tiers. */
 export function isVlmVariant(variant: ModelVariant): boolean {
@@ -117,7 +133,7 @@ export function isVlmVariant(variant: ModelVariant): boolean {
  * Tier descriptor for a variant, or null when the variant is not a VLM tier.
  * On phones, tiers with a PHONE_OVERRIDES row come back with its lighter settings.
  */
-export function getVlmTier(variant: ModelVariant, phone = IS_PHONE): VlmTier | null {
+export function getVlmTier(variant: ModelVariant, phone = USE_LIGHT): VlmTier | null {
   const tier = TIERS[variant]
   if (!tier) return null
   const phoneRow = phone ? PHONE_OVERRIDES[variant] : undefined

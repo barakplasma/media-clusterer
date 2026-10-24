@@ -174,6 +174,8 @@
     }
     nav#toolbar button:active:not(:disabled) { transform: scale(0.97); }
     nav#toolbar button:disabled { opacity: 0.38; cursor: not-allowed; }
+    /* display:flex above beats the UA [hidden] rule, so hidden buttons stayed visible */
+    nav#toolbar button[hidden] { display: none; }
 
     nav#toolbar button.primary {
       background: var(--primary);
@@ -897,6 +899,16 @@
         <optgroup id="vlm-tier-group" label="Video-native (runs in a worker)"></optgroup>
       </select>
       <div class="setting-hint">Sapiens2 is pretrained on 1B human images — better for photos of people. Chrome AI uses the browser's built-in Gemini Nano to describe images (Chrome 138+ only, requires <code>chrome://flags/#prompt-api-for-gemini-nano</code>). Takes effect on next model load. Switching requires a page reload.</div>
+    </div>
+
+    <div class="setting-item">
+      <label for="embed-profile-select">Image budget (EmbeddingGemma 2)</label>
+      <select id="embed-profile-select" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;">
+        <option value="auto">Auto (light on phones and Chromebooks)</option>
+        <option value="light">Light — faster, less detail, gentler on the GPU</option>
+        <option value="full">Full — more detail, needs a stronger GPU</option>
+      </select>
+      <div class="setting-hint">How many image tokens each photo gets. Switch to Light if the GPU resets while embedding. Each choice keeps its own cache, and changing it reloads the page.</div>
     </div>
 
     <div class="setting-item">
