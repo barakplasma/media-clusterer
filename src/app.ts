@@ -1516,13 +1516,8 @@ async function loadModelOnce(signal?: AbortSignal) {
     const baseUrl = normalizeBaseUrl(state.settings.openai.baseUrl)
     const model = state.settings.openai.model.trim()
 
-    // Re-enable as well as unhide: the click handler disables the button before
-    // calling in, so returning without this strands the user with a dead button
-    // and no way to retry.
     const bailOut = (message: string) => {
-      setStatus(message)
-      dom.loadModelBtn.hidden = false
-      dom.loadModelBtn.disabled = false
+      offerRetry(message)
       state.phase = 'idle'
     }
 
@@ -1958,6 +1953,15 @@ function applyFallbackChoice(choice: FallbackChoice) {
 }
 
 // Load the model, retrying through the fallback modal on download failures.
+// Only Chrome AI keeps the button: Chrome starts the Gemini Nano download from
+// a click. Every other model loads at startup, so a failure is retried by reload.
+function offerRetry(message: string) {
+  const chrome = state.settings.modelVariant === 'chrome-ai'
+  setStatus(chrome ? message : `${message} Reload the page to retry.`)
+  dom.loadModelBtn.hidden = !chrome
+  dom.loadModelBtn.disabled = false
+}
+
 async function loadModel(signal?: AbortSignal) {
   if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) return
   // Clear any custom upload cache from a previous run — env is a global
@@ -1985,13 +1989,11 @@ async function loadModel(signal?: AbortSignal) {
       }
       // describeOpenAIError adds the actionable hint ("key rejected", "no such
       // model") and is already redacted; the raw message may hold the key.
-      setStatus(
+      offerRetry(
         state.settings.modelVariant === 'openai'
           ? `Remote endpoint failed: ${describeOpenAIError(err)}`
           : `Failed to load model: ${(err as Error).message}`
       )
-      dom.loadModelBtn.hidden = false
-      dom.loadModelBtn.disabled = false
       throw err
     }
   }
@@ -3962,9 +3964,7 @@ dom.viewerOnlyToggle.addEventListener('change', async () => {
     }
   } else if (!state.settings.viewerOnly && state.phase === 'idle') {
     // Switching back to AI mode
-    dom.loadModelBtn.hidden = false
-    dom.loadModelBtn.disabled = false
-    setStatus('AI mode enabled — click "Load AI Models" to begin.')
+    autoLoadModel()
   }
 
   // If changing mode with loaded data, need to reset and reprocess
@@ -4255,21 +4255,22 @@ dom.resumeBtn.addEventListener('click', async () => {
 })
 
 // Auto-start model loading (only if not in viewer mode)
-if (!state.settings.viewerOnly) {
-  dom.loadModelBtn.disabled = true
+function autoLoadModel() {
   modelLoadAbort = new AbortController()
   ;(async () => {
     try {
       await loadModel(modelLoadAbort!.signal)
     } catch (err) {
       if ((err as Error).name === 'AbortError') return // user switched to viewer mode
-      dom.loadModelBtn.hidden = false
-      dom.loadModelBtn.disabled = false
-      setStatus(`Model failed: ${(err as Error).message}. Tap "Load Model" to retry.`)
+      offerRetry(`Model failed: ${(err as Error).message}.`)
     } finally {
       modelLoadAbort = null
     }
   })()
+}
+
+if (!state.settings.viewerOnly) {
+  autoLoadModel()
 } else {
   // Viewer mode: update UI to reflect no AI needed
   dom.loadModelBtn.hidden = true
