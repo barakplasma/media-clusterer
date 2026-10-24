@@ -34,30 +34,30 @@ Higher is better everywhere. Node CPU, the app's settings. Holidays: 274 photos 
 
 ### Models
 
-| Model | Holidays mAP | COCO category mAP | COCO k-means NMI | Caption search R@1 | CPU s/image |
-|---|---|---|---|---|---|
-| EmbeddingGemma 2, desktop (280 tokens) | 0.941 | 0.547 | 0.766 | 0.91 | 5.73 |
-| EmbeddingGemma 2, phone (70 tokens) | 0.933 | 0.564 | 0.790 | 0.88 | 1.71 |
-| nomic, mean pooling (app) | 0.911 | 0.560 | 0.797 | 0.54 | 0.33 |
-| nomic, CLS pooling | 0.882 | – | – | – | 0.32 |
-| SmolVLM2 (576-d vision encoder) | 0.895 | 0.505 | 0.758 | – | 1.73 |
-| Chrome AI (Gemini Nano descriptions → nomic-embed-text) | 0.744 | 0.649 | 0.833 | 0.66 | ~14.5 COCO, 22–33 Holidays (Gemini, CI runner) |
-| Sapiens2-0.1B int8 | 0.739 | 0.149 | 0.643 | – | 3.97 |
+| Model                                                   | Holidays mAP | COCO category mAP | COCO k-means NMI | Caption search R@1 | CPU s/image                                    |
+|---------------------------------------------------------|--------------|-------------------|------------------|--------------------|------------------------------------------------|
+| EmbeddingGemma 2, desktop (280 tokens)                  | 0.941        | 0.547             | 0.766            | 0.91               | 5.73                                           |
+| EmbeddingGemma 2, phone (70 tokens)                     | 0.933        | 0.564             | 0.790            | 0.88               | 1.71                                           |
+| nomic, mean pooling (app)                               | 0.911        | 0.560             | 0.797            | 0.54               | 0.33                                           |
+| nomic, CLS pooling                                      | 0.882        | –                 | –                | –                  | 0.32                                           |
+| SmolVLM2 (576-d vision encoder)                         | 0.895        | 0.505             | 0.758            | –                  | 1.73                                           |
+| Chrome AI (Gemini Nano descriptions → nomic-embed-text) | 0.744        | 0.649             | 0.833            | 0.66               | ~14.5 COCO, 22–33 Holidays (Gemini, CI runner) |
+| Sapiens2-0.1B int8                                      | 0.739        | 0.149             | 0.643            | –                  | 3.97                                           |
 
 nomic CLS was not run on COCO (comparison only). Chrome AI's descriptions came from GitHub ubuntu-latest (Chrome with Gemini Nano via bench/run-chrome-ai.mjs); it is the best at grouping by content (COCO) and near the bottom at near-duplicate scene matching (Holidays), since a description drops the visual detail that tells two similar scenes apart. Caption search needs a text side: SmolVLM2 and Sapiens2 have none.
 
 ### Projections (mean over every model run on that dataset)
 
 | Projection | Holidays 2D mAP | COCO 2D mAP | Holidays trust@10 | COCO 2D NMI |
-|---|---|---|---|---|
-| TSNE | 0.874 | 0.516 | 0.953 | 0.819 |
-| TriMap | 0.555 | 0.357 | 0.960 | 0.759 |
-| UMAP | 0.393 | 0.206 | 0.919 | 0.706 |
-| ISOMAP | 0.361 | 0.156 | 0.846 | 0.680 |
-| PCA | 0.353 | 0.147 | 0.845 | 0.680 |
-| MDS | 0.352 | 0.146 | 0.844 | 0.683 |
-| SAMMON | 0.314 | 0.092 | 0.821 | 0.660 |
-| LLE | 0.036 | 0.050 | 0.570 | 0.599 |
+|------------|-----------------|-------------|-------------------|-------------|
+| TSNE       | 0.874           | 0.516       | 0.953             | 0.819       |
+| TriMap     | 0.555           | 0.357       | 0.960             | 0.759       |
+| UMAP       | 0.393           | 0.206       | 0.919             | 0.706       |
+| ISOMAP     | 0.361           | 0.156       | 0.846             | 0.680       |
+| PCA        | 0.353           | 0.147       | 0.845             | 0.680       |
+| MDS        | 0.352           | 0.146       | 0.844             | 0.683       |
+| SAMMON     | 0.314           | 0.092       | 0.821             | 0.660       |
+| LLE        | 0.036           | 0.050       | 0.570             | 0.599       |
 
 Raw numbers: `bench/results/`.
 
