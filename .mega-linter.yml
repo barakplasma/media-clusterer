@@ -6,6 +6,11 @@ APPLY_FIXES: all
 
 FILTER_REGEX_EXCLUDE: '(dist/|node_modules/|package-lock\.json|megalinter-reports/)'
 
+# v8r skips files the root .gitignore matches (*.json), so on the bench
+# inputs/results it finds nothing to check and fails. They have no
+# SchemaStore schema either; jsonlint and prettier still check them.
+JSON_V8R_FILTER_REGEX_EXCLUDE: 'bench/(data|results)/'
+
 DISABLE:
   # jscpd would drown in the duplication already documented in IMPROVEMENT_PLAN.md
   - COPYPASTE

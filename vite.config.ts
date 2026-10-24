@@ -44,7 +44,8 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       // device-test.html: headless EmbeddingGemma 2 smoke test for Firebase Test Lab.
-      input: { main: 'index.html', deviceTest: 'device-test.html' },
+      // chrome-ai-bench.html: the Chrome AI half of the embedding benchmark (bench/).
+      input: { main: 'index.html', deviceTest: 'device-test.html', chromeAiBench: 'chrome-ai-bench.html' },
     },
   }
 });
