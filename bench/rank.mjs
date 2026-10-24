@@ -20,11 +20,11 @@ const VARIANT = {
   'nomic-mean': 'nomic', // src/embeddings.ts mean-pools
   'nomic-cls': null, // model-card pooling, for comparison only
   'sapiens2-fp16': 'sapiens2-fp16',
-  'sapiens2-int8': 'sapiens2-int8'
+  'sapiens2-int8': 'sapiens2-int8',
+  'chrome-ai': 'chrome-ai' // Gemini Nano descriptions, embedded with nomic-embed-text
 }
-// Never benchmarked here: fp32 matches fp16 to within rounding, Chrome AI
-// needs Gemini Nano hardware, and a remote endpoint depends on its model.
-const UNRANKED_TAIL = ['chrome-ai', 'openai']
+// Never benchmarked here: a remote endpoint depends on whatever model it serves.
+const UNRANKED_TAIL = ['openai']
 
 const files = process.argv.slice(2)
 const datasets = await Promise.all(files.map(async (f) => ({ file: f, rows: JSON.parse(await readFile(f, 'utf8')) })))
