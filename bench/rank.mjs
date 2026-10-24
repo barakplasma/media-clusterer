@@ -1,7 +1,7 @@
 // Turn benchmark results (bench/metrics.mjs --json) into src/benchmarkRanks.ts,
 // the order the Settings lists use.
 //
-//   node bench/rank.mjs bench/out/holidays.json bench/out/coco.json > src/benchmarkRanks.ts
+//   node bench/rank.mjs bench/results/holidays-274.json bench/results/coco-216.json > src/benchmarkRanks.ts
 //
 // Models: average rank across the image-similarity scores (each dataset's
 // mAP, plus k-means NMI where the dataset has categories); ties go to the
@@ -20,11 +20,11 @@ const VARIANT = {
   'nomic-mean': 'nomic', // src/embeddings.ts mean-pools
   'nomic-cls': null, // model-card pooling, for comparison only
   'sapiens2-fp16': 'sapiens2-fp16',
-  'sapiens2-int8': 'sapiens2-int8'
+  'sapiens2-int8': 'sapiens2-int8',
+  'chrome-ai': 'chrome-ai' // Gemini Nano descriptions, embedded with nomic-embed-text
 }
-// Never benchmarked here: fp32 matches fp16 to within rounding, Chrome AI
-// needs Gemini Nano hardware, and a remote endpoint depends on its model.
-const UNRANKED_TAIL = ['chrome-ai', 'openai']
+// Never benchmarked here: a remote endpoint depends on whatever model it serves.
+const UNRANKED_TAIL = ['openai']
 
 const files = process.argv.slice(2)
 const datasets = await Promise.all(files.map(async (f) => ({ file: f, rows: JSON.parse(await readFile(f, 'utf8')) })))
@@ -70,6 +70,18 @@ for (const id of modelOrder) {
     for (const v of SAPIENS) if (!modelOrder.some((m) => VARIANT[m] === v)) modelLines.push(`  '${v}', // not run: same model as ${VARIANT[id]}`)
   }
 }
+// Speed: seconds per photo, averaged over the datasets. Chrome AI's results
+// time is only nomic embedding its descriptions; Gemini Nano writing them
+// (CI runner, not in the results files) took ~14.5 s on COCO, 22-33 s on Holidays.
+const EXTRA_S = { 'chrome-ai': 20 }
+const secs = (id) =>
+  datasets.reduce((t, d) => t + d.rows.find((r) => r.model === id).sPerImage, 0) / datasets.length + (EXTRA_S[id] ?? 0)
+const speedOrder = [...ids].sort((a, b) => secs(a) - secs(b))
+const badgeLines = modelOrder.map(
+  // Quote only keys that need it, as prettier does.
+  (id, i) => `  ${/^\w+$/.test(VARIANT[id]) ? VARIANT[id] : `'${VARIANT[id]}'`}: { speed: ${speedOrder.indexOf(id) + 1}, quality: ${i + 1} }, // ${secs(id).toFixed(2)} s/photo`
+)
+
 // Known app models with no results yet keep a place ahead of the never-run tail.
 const ranked = new Set(modelLines.map((l) => l.match(/'([^']+)'/)[1]))
 for (const v of [...new Set([...Object.values(VARIANT).filter(Boolean), 'sapiens2-fp32'])])
@@ -101,6 +113,11 @@ import type { ModelVariant, ProjectionMethod } from './types'
 export const MODEL_RANK: readonly ModelVariant[] = [
 ${modelLines.join('\n').replace(/,( \/\/[^\n]*)?$/, '$1')}
 ]
+
+/** Rank on the benchmark, 1 = best: quality as in MODEL_RANK, speed by seconds per photo. */
+export const MODEL_BADGES: Partial<Record<ModelVariant, { speed: number; quality: number }>> = {
+${badgeLines.join('\n').replace(/,( \/\/[^\n]*)?$/, '$1')}
+}
 
 /** Best first by how well the 2D map keeps real neighbours (average rank). */
 export const PROJECTION_RANK: readonly ProjectionMethod[] = [
