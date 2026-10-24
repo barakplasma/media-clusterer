@@ -3051,6 +3051,7 @@ dom.searchClearBtn.addEventListener('click', () => {
 
 const openFileModal = (index: number) => {
   const f = state.files[index]
+  if (!f) return
   dom.modalPosition.textContent = `${sequencePosition(index) + 1} / ${state.files.length}`
   dom.modalPosition.title = state.settings.viewerOnly ? 'Position in folder order' : 'Position by date'
   const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
