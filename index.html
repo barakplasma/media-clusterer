@@ -902,6 +902,16 @@
     </div>
 
     <div class="setting-item">
+      <label for="embed-profile-select">Image budget (EmbeddingGemma 2)</label>
+      <select id="embed-profile-select" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;">
+        <option value="auto">Auto (light on phones and Chromebooks)</option>
+        <option value="light">Light — faster, less detail, gentler on the GPU</option>
+        <option value="full">Full — more detail, needs a stronger GPU</option>
+      </select>
+      <div class="setting-hint">How many image tokens each photo gets. Switch to Light if the GPU resets while embedding. Each choice keeps its own cache, and changing it reloads the page.</div>
+    </div>
+
+    <div class="setting-item">
       <label>Model Download Host</label>
       <input type="text" id="custom-model-host" placeholder="https://huggingface.co" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;box-sizing:border-box;">
       <div class="setting-hint">For offline/corporate networks: a HuggingFace-compatible mirror or proxy base URL (e.g. Artifactory). Leave blank to use huggingface.co.</div>
