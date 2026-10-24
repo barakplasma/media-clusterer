@@ -1,0 +1,39 @@
+name: E2E (WebGPU)
+
+# EmbeddingGemma 2 end to end on a real GPU: GitHub's macOS arm64 runners give
+# Chrome the Apple GPU through WebGPU (Linux/Windows runners only get SwiftShader).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: e2e (${{ matrix.profile }})
+    runs-on: macos-14
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [phone, desktop]
+    # Only the phone profile is required; desktop is informational.
+    continue-on-error: ${{ matrix.profile == 'desktop' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright test --project=${{ matrix.profile }}
+
+  # Safari: e2e/safari/ (node:test + safaridriver) is kept but has no job.
+  # Safari 26.6 on GitHub's macos-26 runner returns no WebGPU adapter (Chrome
+  # on the same runners gets the Apple GPU). Add a macos job running
+  # `node --test e2e/safari/embeddinggemma2.test.mjs` once it does.

@@ -7,24 +7,20 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
-    "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage",
-    "bench": "vitest bench --run",
+    "test": "playwright test --project=cpu",
     "type-check": "tsc --noEmit",
     "deploy": "npm run build && wrangler pages deploy dist --project-name media-clusterer",
-    "prepare": "husky"
+    "prepare": "husky",
+    "test:gpu": "playwright test --project=phone --project=desktop"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@types/node": "^20.11.0",
-    "@vitest/coverage-v8": "^4.1.12",
-    "@vitest/ui": "^4.1.12",
     "@webgpu/types": "^0.1.70",
     "husky": "^9.1.7",
-    "jsdom": "^29.0.1",
+    "selenium-webdriver": "^4.51.0",
     "typescript": "^5.3.3",
     "vite": "^8.3.4",
-    "vitest": "^4.1.12",
     "wrangler": "^4.151.3"
   },
   "overrides": {

@@ -40,6 +40,7 @@ interface LanguageModelStatic {
     expectedInputs?: Array<{ type: string; languages?: string[] }>
     expectedOutputs?: Array<{ type: string; languages?: string[] }>
     signal?: AbortSignal
+    monitor?: (m: EventTarget) => void
   }): Promise<LanguageModelSession>
 }
 
@@ -74,6 +75,21 @@ export async function getChromeAIAvailability(): Promise<LanguageModelAvailabili
   } catch {
     return 'unavailable'
   }
+}
+
+/**
+ * Start Gemini Nano's one-time download and resolve once it is usable.
+ * Chrome only starts the download from create() with user activation, so
+ * call this synchronously inside a click handler, before any await.
+ */
+export function downloadChromeAI(onProgress: (fraction: number) => void): Promise<void> {
+  return getAPI()
+    .create({
+      expectedInputs: [{ type: 'image' }, { type: 'text', languages: ['en'] }],
+      expectedOutputs: [{ type: 'text', languages: ['en'] }],
+      monitor: (m) => m.addEventListener('downloadprogress', (e) => onProgress((e as ProgressEvent).loaded))
+    })
+    .then((session) => session.destroy())
 }
 
 function getAPI(): LanguageModelStatic {

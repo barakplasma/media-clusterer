@@ -37,3 +37,5 @@ Thumbs.db
 !package-lock.json
 !tsconfig.json
 !.markdownlint.json
+test-results/
+playwright-report/

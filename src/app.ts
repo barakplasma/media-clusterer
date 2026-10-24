@@ -9,6 +9,8 @@ import * as druid from '@saehrimnir/druidjs'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
 import { loadVlm, embedWithVlm, embedTextWithVlm, disposeVlm, vlmDevice } from './vlm'
+import { rankModels, rankProjections, strike, type DeviceCaps } from './modelRanking'
+import { PROJECTION_RANK } from './benchmarkRanks'
 import {
   getVlmTier,
   isVlmVariant,
@@ -27,6 +29,7 @@ import {
 } from './modelFallback'
 import {
   getChromeAIAvailability,
+  downloadChromeAI,
   ChromeAISessionManager,
   DEFAULT_DESCRIBE_PROMPT
 } from './chromeAI'
@@ -258,9 +261,9 @@ if (versionEl) {
 // ── Constants ────────────────────────────────────────────────────────────────
 // ── Auto batch size ───────────────────────────────────────────────────────────
 
-// Default where WebGPU is missing. A single constant so it is easy to flip
-// once the embedding benchmark picks a winner.
-const NO_WEBGPU_MODEL = 'smolvlm2-vision'
+// Default where WebGPU is missing: the benchmark (bench/README.md) has nomic
+// ahead of SmolVLM2 on both datasets, and it has text search.
+const NO_WEBGPU_MODEL = 'nomic'
 // Set when a WebGPU-only model was swapped out for this session; saveSettings
 // writes the saved choice back instead of the stand-in.
 let modelStandIn: { saved: string; used: string } | null = null
@@ -271,7 +274,8 @@ const DEFAULT_SETTINGS: Settings = {
   drawBudget: IS_MOBILE ? 150 : 400,
   slideshowSeconds: 3,
   enableTextSearch: true, // the default model embeds text itself, so search costs no extra download
-  projectionMethod: 'TSNE',
+  // The benchmark's best projection; a saved choice still wins.
+  projectionMethod: PROJECTION_RANK[0],
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
@@ -348,7 +352,7 @@ function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
     kind === 'blocked' ? '⚠️ WebGPU is turned off for this GPU' : '⚠️ WebGPU is running in software'
   el('webgpu-help-why').textContent =
     kind === 'blocked'
-      ? `This browser supports WebGPU but hides your GPU from web pages, so ${model} can't run and the app is using ${NO_WEBGPU_MODEL} instead (no text search). To use ${model}:`
+      ? `This browser supports WebGPU but hides your GPU from web pages, so ${model} can't run and the app is using ${NO_WEBGPU_MODEL} instead. To use ${model}:`
       : `This browser only offers a software (CPU) WebGPU adapter, so ${model} will be very slow. To use your GPU:`
   el('webgpu-help-url').textContent = url
   el('webgpu-help-accel').hidden = kind !== 'software'
@@ -368,6 +372,12 @@ function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
   return true
 }
 
+// Pick the device before loading: after a failed WebGPU load, transformers.js
+// 4.3 fails the wasm retry with the same WebGPU error (seen on a GPU-less
+// Linux runner), so the catch-and-retry below alone never reached wasm.
+const webgpuOrWasm = async (): Promise<'webgpu' | 'wasm'> =>
+  (await navigator.gpu?.requestAdapter().catch(() => null)) ? 'webgpu' : 'wasm'
+
 // ── Model singleton ──────────────────────────────────────────────────────────
 let extractor: PipelineInstance | null = null // Vision model (for images)
 let textExtractor: PipelineInstance | null = null // Text model (for search queries)
@@ -378,6 +388,7 @@ let modelFallbackReason: Sapiens2FallbackReason | undefined
 let pendingSapiens2Buffer: ArrayBuffer | null = null
 let sapiens2Session: Sapiens2Session | null = null // Sapiens2 ONNX session
 let chromeAIManager: ChromeAISessionManager | null = null // Chrome built-in AI session manager
+let chromeAIDownload: Promise<void> | null = null // Gemini Nano download started by a Load Model click
 let remoteConfig: OpenAICompatConfig | null = null // Remote OpenAI-compatible endpoint
 let vlmTier: VlmTier | null = null // Loaded SmolVLM2 tier (worker-backed), see ADR-0001
 
@@ -1620,10 +1631,31 @@ async function loadModelOnce(signal?: AbortSignal) {
       return
     }
 
-    if (availability === 'downloadable' || availability === 'downloading') {
+    // Chrome starts the download only from a user gesture (the Load Model
+    // click, see downloadChromeAI); the auto-load at startup has none.
+    if (availability === 'downloadable' && !chromeAIDownload) {
+      setStatus('Gemini Nano needs a one-time download, managed by Chrome. Tap "Load Model" to start it.')
+      dom.loadModelBtn.hidden = false
+      dom.loadModelBtn.disabled = false
+      state.phase = 'idle'
+      return
+    }
+
+    if (chromeAIDownload && availability !== 'available') {
+      try {
+        await chromeAIDownload
+      } catch (err) {
+        chromeAIDownload = null
+        setStatus(`Gemini Nano download failed: ${(err as Error).message}. Tap "Load Model" to retry.`)
+        dom.loadModelBtn.hidden = false
+        dom.loadModelBtn.disabled = false
+        state.phase = 'idle'
+        return
+      }
+    } else if (availability === 'downloadable' || availability === 'downloading') {
       setStatus('Chrome AI model downloading (managed by Chrome, this happens once)…')
       let polls = 0
-      while (polls < 60) {
+      while (polls < 300) {
         signal?.throwIfAborted()
         await new Promise((r) => setTimeout(r, 2000))
         signal?.throwIfAborted()
@@ -1665,7 +1697,7 @@ async function loadModelOnce(signal?: AbortSignal) {
         }) as Promise<PipelineInstance>
 
       try {
-        textExtractor = await tryLoadText('webgpu')
+        textExtractor = await tryLoadText(await webgpuOrWasm())
       } catch {
         textLoaded.clear()
         textExtractor = await tryLoadText('wasm')
@@ -1761,8 +1793,9 @@ async function loadModelOnce(signal?: AbortSignal) {
     }) as Promise<PipelineInstance>
 
   try {
-    extractor = await tryLoad('webgpu')
-    modelDevice = 'webgpu'
+    const device = await webgpuOrWasm()
+    extractor = await tryLoad(device)
+    modelDevice = device === 'webgpu' ? 'webgpu' : 'cpu'
   } catch (gpuErr) {
     console.warn('WebGPU init failed, falling back to wasm:', gpuErr)
     setStatus('WebGPU unavailable — using CPU (slower)…')
@@ -1796,7 +1829,7 @@ async function loadModelOnce(signal?: AbortSignal) {
       }) as Promise<PipelineInstance>
 
     try {
-      textExtractor = await tryLoadText('webgpu')
+      textExtractor = await tryLoadText(await webgpuOrWasm())
     } catch (gpuErr) {
       console.warn('Text model WebGPU failed, using wasm:', gpuErr)
       textLoaded.clear()
@@ -3470,7 +3503,6 @@ function updateTextSearchAvailability() {
   if (!ok) dom.enableSearchToggle.checked = false
 }
 updateTextSearchAvailability()
-if (dom.projectionSelect) dom.projectionSelect.value = state.settings.projectionMethod
 dom.batchSizeInput.value = state.settings.batchSize.toString()
 dom.randomSampleSizeInput.value = state.settings.randomSampleSize.toString()
 dom.viewerOnlyToggle.checked = state.settings.viewerOnly
@@ -3500,24 +3532,64 @@ dom.customModelHostInput.value = state.settings.customModelHost
   }
 }
 
-dom.modelSelect.value = state.settings.modelVariant
-
-// Disable the Chrome AI option on unsupported browsers/platforms at startup
-getChromeAIAvailability().then((avail) => {
-  chromeAIAvailability = avail
-  const chromeAIOption = dom.modelSelect.querySelector<HTMLOptionElement>(
-    'option[value="chrome-ai"]'
+// Order both lists by the benchmark (src/modelRanking.ts): the best model this
+// device can run on top as the recommendation, the rest best to worst, and
+// models it cannot run struck through. Labels are captured once, so a
+// re-render never stacks markers.
+const optionLabels = (select: HTMLSelectElement) =>
+  new Map([...select.querySelectorAll('option')].map((o) => [o.value, { text: o.textContent ?? o.value, title: o.title }]))
+const modelLabels = optionLabels(dom.modelSelect)
+const renderModelOptions = (caps: DeviceCaps) => {
+  const ranked = rankModels([...modelLabels.keys()] as ModelVariant[], caps)
+  dom.modelSelect.replaceChildren(
+    ...ranked.map(({ value, blocked, recommended }) => {
+      const { text, title } = modelLabels.get(value)!
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.title = title
+      if (blocked) {
+        opt.textContent = `${strike(text)} — ${blocked}`
+        opt.disabled = true
+        opt.title = `Can't run on this device: ${blocked}.`
+      } else {
+        opt.textContent = recommended ? `★ ${text} — recommended for this device` : text
+      }
+      return opt
+    })
   )
-  if (!chromeAIOption) return
-  if (avail === 'unavailable') {
-    chromeAIOption.disabled = true
-    chromeAIOption.textContent += ' — not available on this browser'
-    // If the saved setting was chrome-ai but it's unavailable, fall back to sapiens2-fp16
-    if (state.settings.modelVariant === 'chrome-ai') {
-      state.settings.modelVariant = 'sapiens2-fp16'
-      dom.modelSelect.value = 'sapiens2-fp16'
-      saveSettings()
-    }
+  dom.modelSelect.value = state.settings.modelVariant
+  return ranked
+}
+// Until the checks below resolve, assume what navigator exposes.
+renderModelOptions({ webgpu: 'gpu' in navigator, chromeAI: true })
+
+if (dom.projectionSelect) {
+  const projectionLabels = optionLabels(dom.projectionSelect)
+  dom.projectionSelect.replaceChildren(
+    ...rankProjections([...projectionLabels.keys()] as ProjectionMethod[]).map(({ value, recommended }) => {
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.textContent = `${recommended ? '★ ' : ''}${projectionLabels.get(value)!.text}${recommended ? ' — best on benchmark' : ''}`
+      return opt
+    })
+  )
+  dom.projectionSelect.value = state.settings.projectionMethod
+}
+
+// The real capabilities: an adapter behind navigator.gpu, and Gemini Nano.
+Promise.all([
+  navigator.gpu?.requestAdapter().catch(() => null) ?? Promise.resolve(null),
+  getChromeAIAvailability()
+]).then(([adapter, avail]) => {
+  chromeAIAvailability = avail
+  const ranked = renderModelOptions({ webgpu: !!adapter, chromeAI: avail !== 'unavailable' })
+  // A saved Chrome AI choice that cannot run falls back to the recommendation.
+  // (EmbeddingGemma 2 without WebGPU is handled at load, for the session only.)
+  const recommended = ranked.find((o) => o.recommended)
+  if (state.settings.modelVariant === 'chrome-ai' && avail === 'unavailable' && recommended) {
+    state.settings.modelVariant = recommended.value
+    dom.modelSelect.value = recommended.value
+    saveSettings()
   }
 })
 
@@ -3731,7 +3803,7 @@ dom.enableSearchToggle.addEventListener('change', async () => {
       }) as Promise<PipelineInstance>
 
     try {
-      textExtractor = await tryLoadText('webgpu')
+      textExtractor = await tryLoadText(await webgpuOrWasm())
     } catch (gpuErr) {
       console.warn('Text model WebGPU failed, using wasm:', gpuErr)
       textLoaded.clear()
@@ -3978,6 +4050,10 @@ if (_savedKeys) {
 dom.loadModelBtn.addEventListener('click', async () => {
   if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) return
   dom.loadModelBtn.disabled = true
+  // Must run before any await: create() needs this click's user activation.
+  if (state.settings.modelVariant === 'chrome-ai' && !chromeAIDownload && 'LanguageModel' in self) {
+    chromeAIDownload = downloadChromeAI((f) => setStatus(`Downloading Gemini Nano… ${(f * 100).toFixed(0)}%`))
+  }
   await loadModel()
 })
 
