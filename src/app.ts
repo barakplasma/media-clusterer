@@ -925,8 +925,10 @@ async function searchImages(query: string) {
     setStatus(statusMsg)
     if (dom.statsEl) dom.statsEl.textContent = statusMsg
   } catch (err) {
-    console.error('Search failed:', err)
-    setStatus('Search failed. Check console.')
+    // warn, not error: "model not loaded" / "no text search" are user states, not bugs
+    // (Bugsink: "Text search is not available with smolvlm2-vision", "… not loaded")
+    console.warn('Search failed:', err)
+    setStatus(`Search failed: ${(err as Error).message}`)
   } finally {
     dom.searchWrap.classList.remove('loading')
   }
@@ -1406,6 +1408,8 @@ async function runProjection(
   nNeighbors: number,
   { silent = false } = {}
 ): Promise<number[][]> {
+  // UMAP/ISOMAP/LLE need n_neighbors < N, so 1–2 files crashed (Bugsink: "n_neighbors (=2) … N=1")
+  if (vectors.length < 3) return vectors.map((_, i) => [i, 0])
   try {
     if (!silent) setStatus(`Projecting with ${method}…`)
     // Druid accepts Float64Array rows directly; copy each f32 row to f64
