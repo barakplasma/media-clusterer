@@ -10,7 +10,7 @@ import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
 import { loadVlm, embedWithVlm, embedTextWithVlm, disposeVlm, vlmDevice } from './vlm'
 import { rankModels, rankProjections, strike, type DeviceCaps } from './modelRanking'
-import { PROJECTION_RANK } from './benchmarkRanks'
+import { MODEL_BADGES, PROJECTION_RANK } from './benchmarkRanks'
 import {
   getVlmTier,
   isVlmVariant,
@@ -3544,15 +3544,18 @@ const renderModelOptions = (caps: DeviceCaps) => {
   dom.modelSelect.replaceChildren(
     ...ranked.map(({ value, blocked, recommended }) => {
       const { text, title } = modelLabels.get(value)!
+      const b = MODEL_BADGES[value]
+      // Speed vs quality trade-off at a glance: benchmark ranks, 1 = best.
+      const badges = b ? ` ⚡:${b.speed} Q:${b.quality}` : ''
       const opt = document.createElement('option')
       opt.value = value
-      opt.title = title
+      opt.title = b ? `${title}${title ? ' ' : ''}Benchmark rank: ⚡ speed ${b.speed}, Q quality ${b.quality} (1 = best).` : title
       if (blocked) {
-        opt.textContent = `${strike(text)} — ${blocked}`
+        opt.textContent = `${strike(text)}${badges} — ${blocked}`
         opt.disabled = true
         opt.title = `Can't run on this device: ${blocked}.`
       } else {
-        opt.textContent = recommended ? `★ ${text} — recommended for this device` : text
+        opt.textContent = recommended ? `★ ${text}${badges} — recommended for this device` : `${text}${badges}`
       }
       return opt
     })
