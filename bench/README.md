@@ -41,23 +41,23 @@ Higher is better everywhere. Node CPU, the app's settings. Holidays: 274 photos 
 | nomic, mean pooling (app) | 0.911 | 0.560 | 0.797 | 0.54 | 0.33 |
 | nomic, CLS pooling | 0.882 | – | – | – | 0.32 |
 | SmolVLM2 (576-d vision encoder) | 0.895 | 0.505 | 0.758 | – | 1.73 |
-| Chrome AI (Gemini Nano descriptions → nomic-embed-text) | – | 0.649 | 0.833 | 0.66 | ~14.5 (Gemini, CI runner) |
+| Chrome AI (Gemini Nano descriptions → nomic-embed-text) | 0.744 | 0.649 | 0.833 | 0.66 | ~14.5 COCO, 22–33 Holidays (Gemini, CI runner) |
 | Sapiens2-0.1B int8 | 0.739 | 0.149 | 0.643 | – | 3.97 |
 
-nomic CLS was not run on COCO (comparison only). Chrome AI ran on COCO only (GitHub ubuntu-latest, Chrome with Gemini Nano via bench/run-chrome-ai.mjs), so it is not in the model ranking yet. Caption search needs a text side: SmolVLM2 and Sapiens2 have none.
+nomic CLS was not run on COCO (comparison only). Chrome AI's descriptions came from GitHub ubuntu-latest (Chrome with Gemini Nano via bench/run-chrome-ai.mjs); it is the best at grouping by content (COCO) and near the bottom at near-duplicate scene matching (Holidays), since a description drops the visual detail that tells two similar scenes apart. Caption search needs a text side: SmolVLM2 and Sapiens2 have none.
 
-### Projections (mean over models)
+### Projections (mean over every model run on that dataset)
 
 | Projection | Holidays 2D mAP | COCO 2D mAP | Holidays trust@10 | COCO 2D NMI |
 |---|---|---|---|---|
-| TSNE | 0.887 | 0.486 | 0.951 | 0.808 |
-| TriMap | 0.559 | 0.341 | 0.957 | 0.753 |
-| UMAP | 0.395 | 0.197 | 0.915 | 0.702 |
-| ISOMAP | 0.364 | 0.150 | 0.846 | 0.676 |
-| PCA | 0.354 | 0.138 | 0.842 | 0.676 |
-| MDS | 0.355 | 0.138 | 0.842 | 0.677 |
-| SAMMON | 0.313 | 0.098 | 0.817 | 0.663 |
-| LLE | 0.036 | 0.049 | 0.567 | 0.601 |
+| TSNE | 0.874 | 0.516 | 0.953 | 0.819 |
+| TriMap | 0.555 | 0.357 | 0.960 | 0.759 |
+| UMAP | 0.393 | 0.206 | 0.919 | 0.706 |
+| ISOMAP | 0.361 | 0.156 | 0.846 | 0.680 |
+| PCA | 0.353 | 0.147 | 0.845 | 0.680 |
+| MDS | 0.352 | 0.146 | 0.844 | 0.683 |
+| SAMMON | 0.314 | 0.092 | 0.821 | 0.660 |
+| LLE | 0.036 | 0.050 | 0.570 | 0.599 |
 
 Raw numbers: `bench/results/`.
 
