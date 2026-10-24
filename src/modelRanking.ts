@@ -46,7 +46,9 @@ function byRank<T extends string>(values: readonly T[], rank: readonly string[])
 /**
  * The model list for this device: the recommended model first, then every
  * other model best to worst. A remote endpoint is never the recommendation,
- * since it needs the user's own server and uploads thumbnails.
+ * since it needs the user's own server and uploads thumbnails. Nor is Chrome
+ * AI: it ranks high on quality but takes 15-33 s per photo (bench/README.md),
+ * so a whole library would take hours.
  */
 export function rankModels(values: readonly ModelVariant[], caps: DeviceCaps): RankedOption<ModelVariant>[] {
   const ordered = byRank(values, MODEL_RANK).map((value) => ({
@@ -54,7 +56,7 @@ export function rankModels(values: readonly ModelVariant[], caps: DeviceCaps): R
     blocked: blockedReason(value, caps),
     recommended: false
   }))
-  const pick = ordered.find((o) => !o.blocked && o.value !== 'openai')
+  const pick = ordered.find((o) => !o.blocked && o.value !== 'openai' && o.value !== 'chrome-ai')
   if (!pick) return ordered
   pick.recommended = true
   return [pick, ...ordered.filter((o) => o !== pick)]
