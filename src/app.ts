@@ -2,6 +2,7 @@
  * Main application logic for Media Clusterer
  */
 
+import * as Sentry from '@sentry/browser'
 import './sentry'
 import exifr from '@modernized/exifr'
 import { pipeline, env, RawImage } from '@huggingface/transformers'
@@ -2445,6 +2446,19 @@ async function embedAll(files: PhotoFile[]) {
         'error',
         15000
       )
+      // Context, not console args: extra args would change the message Bugsink groups by.
+      const gpu = await navigator.gpu?.requestAdapter().catch(() => null)
+      Sentry.setContext('gpu', {
+        vendor: gpu?.info.vendor,
+        architecture: gpu?.info.architecture,
+        device: gpu?.info.device,
+        description: gpu?.info.description,
+        maxBufferSize: gpu?.limits.maxBufferSize,
+        maxStorageBufferBindingSize: gpu?.limits.maxStorageBufferBindingSize,
+        dtype: getVlmTier(state.settings.modelVariant)?.dtype,
+        deviceMemoryGB: (navigator as { deviceMemory?: number }).deviceMemory,
+        reason: embedFailReason.slice(0, 300)
+      })
       console.error(`GPU device lost while embedding: ${state.settings.modelVariant}, ${done}/${files.length} files`)
       await cachePutBatch(writeQueue)
       writeQueue.length = 0
