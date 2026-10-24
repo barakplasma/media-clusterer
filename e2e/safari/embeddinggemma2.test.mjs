@@ -57,7 +57,7 @@ test('model loads', async () => {
       new Promise((res) => {
         const tick = () => {
           const p = window.__debug?.state.phase
-          if (p === 'model_ready' || (p === 'idle' && document.getElementById('load-model-btn')?.hidden === false))
+          if (p === 'model_ready' || (p === 'idle' && /Reload the page/.test(document.getElementById('status')?.textContent ?? '')))
             res({ phase: p, status: document.getElementById('status')?.textContent })
           else setTimeout(tick, 1000)
         }
