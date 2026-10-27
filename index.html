@@ -837,6 +837,7 @@
         <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></td><td>Nearest photo in that direction on the map</td></tr>
         <tr><td><kbd>N</kbd> / <kbd>P</kbd></td><td>Next / previous photo by date</td></tr>
         <tr><td><kbd>R</kbd></td><td>Random photo</td></tr>
+        <tr><td><kbd>E</kbd></td><td>Back to the photo before the last random jump</td></tr>
         <tr><td><kbd>Space</kbd></td><td>Play / pause the slideshow (asks the order — date, random or similarity — the first time)</td></tr>
         <tr><td><kbd>Enter</kbd></td><td>Open the highlighted photo on the map</td></tr>
         <tr><td><kbd>/</kbd></td><td>Jump to the search box</td></tr>
@@ -983,6 +984,10 @@
     <div class="setting-item">
       <label>Slideshow: <span id="slideshow-seconds-label">3</span>s per photo</label>
       <input type="range" id="slideshow-seconds-slider" min="1" max="15" step="1" value="3" style="width:100%;accent-color:var(--primary);cursor:pointer;">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;margin-top:8px;">
+        <input type="checkbox" id="slideshow-cut-videos-toggle" style="width:16px;height:16px;accent-color:var(--primary);cursor:pointer;">
+        Slideshow cuts videos at the timer (off: waits for each video to end)
+      </label>
     </div>
 
     <div class="setting-item">

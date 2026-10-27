@@ -197,6 +197,9 @@ const dom: DOMElements = {
   slideshowSimilarBtn: document.getElementById('slideshow-similar-btn') as HTMLButtonElement,
   slideshowSecondsSlider: document.getElementById('slideshow-seconds-slider') as HTMLInputElement,
   slideshowSecondsLabel: document.getElementById('slideshow-seconds-label') as HTMLSpanElement,
+  slideshowCutVideosToggle: document.getElementById(
+    'slideshow-cut-videos-toggle'
+  ) as HTMLInputElement,
   modalRandomBtn: document.getElementById('modal-random-btn') as HTMLButtonElement,
   modalPlayBtn: document.getElementById('modal-play-btn') as HTMLButtonElement,
   modalPosition: document.getElementById('modal-position') as HTMLSpanElement,
@@ -275,6 +278,7 @@ const DEFAULT_SETTINGS: Settings = {
   loopVideos: true,
   drawBudget: IS_MOBILE ? 150 : 400,
   slideshowSeconds: 3,
+  slideshowCutVideos: false,
   enableTextSearch: true, // the default model embeds text itself, so search costs no extra download
   // The benchmark's best projection; a saved choice still wins.
   projectionMethod: PROJECTION_RANK[0],
@@ -1289,6 +1293,7 @@ function render() {
   }
 
   drawClusterLabels(ctx, pts, s, cxW, cyW, drawSize)
+  drawFolderLabels(ctx, pts, s, cxW, cyW, drawSize)
 
   if (useFull && drawnFull) {
     // Evict full images that weren't drawn this frame
@@ -1367,6 +1372,57 @@ function drawClusterLabels(
     ctx.fillStyle = '#fff'
     ctx.fillText(text, sx, sy + 0.5)
     clusterLabelHits.push({ x: sx - w / 2, y: sy - h / 2, w, h, cluster: c })
+  }
+}
+
+// Viewer mode lays files out one block per folder (generateMetadataBasedLayout);
+// name each block just above its top-left thumbnail.
+let folderNameCache: { files: PhotoFile[]; names: string[] } | null = null
+function folderNames(): string[] {
+  if (folderNameCache?.files !== state.files) {
+    const names = state.files.map((f) => f.name.split('/').slice(0, -1).join('/') || '(root)')
+    folderNameCache = { files: state.files, names }
+  }
+  return folderNameCache.names
+}
+
+function drawFolderLabels(
+  ctx: CanvasRenderingContext2D,
+  pts: Point[],
+  s: number,
+  cxW: number,
+  cyW: number,
+  drawSize: number
+) {
+  // AI layouts group by meaning, not folder (state.clusters is set there).
+  if (!state.settings.viewerOnly || state.clusters) return
+  const names = folderNames()
+  const topLeft = new Map<string, [number, number]>()
+  for (let i = 0; i < pts.length; i++) {
+    if (isHidden(i) || !names[i]) continue
+    const acc = topLeft.get(names[i])
+    if (!acc) topLeft.set(names[i], [pts[i][0], pts[i][1]])
+    else {
+      acc[0] = Math.min(acc[0], pts[i][0])
+      acc[1] = Math.min(acc[1], pts[i][1])
+    }
+  }
+  ctx.font = '600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  const h = 22
+  for (const [name, [x, y]] of topLeft) {
+    const sx = (x - camera.x) * s + cxW - drawSize / 2
+    const sy = (y - camera.y) * s + cyW - drawSize / 2 - h / 2 - 4
+    if (sy < -h || sy > dom.canvas.height + h) continue
+    const w = ctx.measureText(name).width + 16
+    if (sx > dom.canvas.width || sx + w < 0) continue
+    ctx.fillStyle = 'rgba(17, 24, 39, 0.78)'
+    ctx.beginPath()
+    ctx.roundRect(sx, sy - h / 2, w, h, 6)
+    ctx.fill()
+    ctx.fillStyle = '#fff'
+    ctx.fillText(name, sx + 8, sy + 0.5)
   }
 }
 
@@ -2524,6 +2580,7 @@ async function processFiles(files: PhotoFile[]) {
   // replaces the files while the viewer is open, and its ‹ › or a key press
   // then indexed past the new list (Bugsink: "reading 'name'" / "'0'").
   state.lastViewedIndex = null
+  randomHistory = []
   if (dom.modal.open) closeModal()
 
   state.files = files
@@ -3081,7 +3138,8 @@ const openFileModal = (index: number) => {
   if (VIDEO_EXTS.has(ext)) {
     dom.modalImg.style.display = 'none'
     dom.modalVideo.style.display = 'block'
-    dom.modalVideo.loop = state.settings.loopVideos
+    // A looping video never ends, so a slideshow waiting on it would stall.
+    dom.modalVideo.loop = state.settings.loopVideos && !slideshowWaitsOnVideos()
     // Ensure objectURL exists (created lazily during thumbnail decode)
     if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file)
     dom.modalVideo.src = f.objectURL
@@ -3511,6 +3569,7 @@ dom.densitySlider.value = state.settings.density.toString()
 dom.drawBudgetSlider.value = state.settings.drawBudget.toString()
 dom.slideshowSecondsSlider.value = state.settings.slideshowSeconds.toString()
 dom.slideshowSecondsLabel.textContent = state.settings.slideshowSeconds.toString()
+dom.slideshowCutVideosToggle.checked = state.settings.slideshowCutVideos
 dom.loopToggle.checked = state.settings.loopVideos
 dom.enableSearchToggle.checked = state.settings.enableTextSearch
 
@@ -3893,10 +3952,13 @@ dom.slideshowSecondsSlider.addEventListener('input', () => {
   dom.slideshowSecondsLabel.textContent = dom.slideshowSecondsSlider.value
   saveSettings()
   // Apply to a running slideshow right away rather than on the next start.
-  if (slideshow) {
-    clearInterval(slideshow.timer)
-    slideshow.timer = setInterval(slideshowStep, state.settings.slideshowSeconds * 1000)
-  }
+  restartSlideshowTimer()
+})
+
+dom.slideshowCutVideosToggle.addEventListener('change', () => {
+  state.settings.slideshowCutVideos = dom.slideshowCutVideosToggle.checked
+  saveSettings()
+  dom.modalVideo.loop = state.settings.loopVideos && !slideshowWaitsOnVideos()
 })
 
 dom.batchSizeInput.addEventListener('input', () => {
@@ -4204,6 +4266,7 @@ dom.resumeBtn.addEventListener('click', async () => {
     const wasViewerMode = localStorage.getItem('po_viewerMode') === 'true'
 
     state.files = matched
+    randomHistory = []
     state.rawPoints = savedPoints
     state.points = savedPoints.slice(0, matched.length)
     state.clusters = savedClusters ? new Int32Array(savedClusters.slice(0, matched.length)) : null
@@ -4465,6 +4528,14 @@ function getChronologicalOrder(): number[] {
   return chronologicalOrderCache
 }
 
+// Photos open before each R jump, so E can walk back through them.
+let randomHistory: number[] = []
+
+function openPreviousRandom() {
+  const prev = randomHistory.pop()
+  if (prev !== undefined && prev < state.files.length) openFileModal(prev)
+}
+
 function openRandomFile() {
   const len = state.points.length
   if (!len) return
@@ -4475,6 +4546,7 @@ function openRandomFile() {
   for (let k = 0; k < len; k++) {
     const next = (start + k) % len
     if (next !== current && !isHidden(next)) {
+      if (current !== -1) randomHistory.push(current)
       openFileModal(next)
       return
     }
@@ -4510,14 +4582,26 @@ function startSlideshow(order: SlideshowOrder) {
     seen: new Set([start]),
     timer: setInterval(slideshowStep, state.settings.slideshowSeconds * 1000)
   }
+  dom.modalVideo.loop = state.settings.loopVideos && !slideshowWaitsOnVideos()
   dom.modalPlayBtn.textContent = '⏸'
   dom.modalPlayBtn.title = 'Pause slideshow (Space)'
+}
+
+function slideshowWaitsOnVideos(): boolean {
+  return !!slideshow && !state.settings.slideshowCutVideos
+}
+
+function restartSlideshowTimer() {
+  if (!slideshow) return
+  clearInterval(slideshow.timer)
+  slideshow.timer = setInterval(slideshowStep, state.settings.slideshowSeconds * 1000)
 }
 
 function stopSlideshow() {
   if (!slideshow) return
   clearInterval(slideshow.timer)
   slideshow = null
+  dom.modalVideo.loop = state.settings.loopVideos
   dom.modalPlayBtn.textContent = '▶'
   dom.modalPlayBtn.title = 'Play slideshow (Space)'
 }
@@ -4536,6 +4620,9 @@ function slideshowStep() {
     slideshowOrder = null
     return stopSlideshow()
   }
+  // A video on screen holds the slide until its 'ended' listener advances.
+  const v = dom.modalVideo
+  if (slideshowWaitsOnVideos() && v.style.display !== 'none' && !v.ended && !v.error) return
   if (slideshow.order === 'date') return navigateSequential(1)
   if (slideshow.order === 'random') return openRandomFile()
   const cur = state.activeFileIndex
@@ -4563,6 +4650,11 @@ dom.slideshowModal.addEventListener('click', (e) => {
 })
 dom.modalPlayBtn.addEventListener('click', toggleSlideshow)
 dom.modalImg.addEventListener('click', stopSlideshow)
+dom.modalVideo.addEventListener('ended', () => {
+  if (!slideshowWaitsOnVideos()) return
+  slideshowStep()
+  restartSlideshowTimer() // the next slide gets its full time
+})
 
 dom.modalRandomBtn.addEventListener('click', openRandomFile)
 dom.modalPrevBtn.addEventListener('click', () => navigateSequential(-1))
@@ -4585,6 +4677,12 @@ document.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'r' && state.points.length > 0) {
     e.preventDefault()
     openRandomFile()
+    return
+  }
+
+  if (e.key.toLowerCase() === 'e' && randomHistory.length > 0) {
+    e.preventDefault()
+    openPreviousRandom()
     return
   }
 
