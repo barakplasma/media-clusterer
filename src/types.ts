@@ -121,6 +121,7 @@ export interface Settings {
   loopVideos: boolean
   drawBudget: number // MAX_DRAW_PER_FRAME
   slideshowSeconds: number // seconds each photo stays up in a slideshow
+  slideshowCutVideos: boolean // advance on the timer mid-video instead of waiting for it to end
   enableTextSearch: boolean
   projectionMethod: ProjectionMethod
   batchSize: number // GPU inference batch size (higher = faster, more memory)
@@ -195,6 +196,7 @@ export interface DOMElements {
   slideshowSimilarBtn: HTMLButtonElement
   slideshowSecondsSlider: HTMLInputElement
   slideshowSecondsLabel: HTMLSpanElement
+  slideshowCutVideosToggle: HTMLInputElement
   modalRandomBtn: HTMLButtonElement
   modalPlayBtn: HTMLButtonElement
   modalPosition: HTMLSpanElement

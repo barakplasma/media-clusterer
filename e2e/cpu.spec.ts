@@ -26,6 +26,13 @@ test('viewer mode lays out photos without loading a model', async ({ page }) => 
   })
   expect(r).toEqual({ phase: 'done', points: 4, vectors: 0 })
   await expect(page.locator('#search-input')).toBeDisabled()
+
+  // R jumps to a random photo; E goes back to the one before it.
+  await page.keyboard.press('r')
+  const first = await page.evaluate(() => window.__debug.state.activeFileIndex)
+  await page.keyboard.press('r')
+  await page.keyboard.press('e')
+  expect(await page.evaluate(() => window.__debug.state.activeFileIndex)).toBe(first)
 })
 
 test('a saved WebGPU-only model falls back when there is no adapter', async ({ page }) => {
