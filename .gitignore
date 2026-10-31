@@ -33,6 +33,8 @@ Thumbs.db
 
 # ONNX model files (stored in HuggingFace, not git)
 *.onnx
+# Small hand-made graphs served by the app (scripts/webnn_split_embed.py); weights stay on Hugging Face.
+!public/models/**/*.onnx
 !package.json
 !package-lock.json
 !tsconfig.json

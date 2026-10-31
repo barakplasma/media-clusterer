@@ -315,6 +315,15 @@ async function cachedFetch(file: string): Promise<Uint8Array> {
   return new Uint8Array(await res.arrayBuffer())
 }
 
+/** A graph this site serves itself; an HTML reply means the file is missing (SPA fallback). */
+async function ownGraph(file: string): Promise<Uint8Array> {
+  const res = await fetch(`${import.meta.env.BASE_URL}models/embeddinggemma2-webnn/${file}`)
+  if (!res.ok || res.headers.get('content-type')?.includes('text/html')) {
+    throw new Error(`${file} is not deployed (HTTP ${res.status}, ${res.headers.get('content-type')})`)
+  }
+  return new Uint8Array(await res.arrayBuffer())
+}
+
 // WebNN is not in the TS DOM lib yet; only what this page touches.
 interface MLContext {
   opSupportLimits?: () => Record<string, unknown>
@@ -443,9 +452,7 @@ async function run(): Promise<void> {
       // fp16 text model on WebNN: our graph without the 268 MB embedding table
       // (scripts/webnn_split_embed.py), which WebNN refuses to build.
       part.embedInJs = name === 'model' && dtype === 'fp16' && device.startsWith('webnn')
-      const graph = part.embedInJs
-        ? new Uint8Array(await (await fetch(`${import.meta.env.BASE_URL}models/embeddinggemma2-webnn/model_fp16_noembed.onnx`)).arrayBuffer())
-        : await cachedFetch(`${name}${suffix}.onnx`)
+      const graph = part.embedInJs ? await ownGraph('model_fp16_noembed.onnx') : await cachedFetch(`${name}${suffix}.onnx`)
       const data = await cachedFetch(`${name}${suffix}.onnx_data`)
       if (part.embedInJs) embedTable = new Uint16Array(data.buffer, data.byteOffset + EMBED_OFFSET, EMBED_ROWS * EMBED_WIDTH)
       part.downloadMs = performance.now() - tDl
