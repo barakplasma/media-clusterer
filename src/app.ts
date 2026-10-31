@@ -440,18 +440,8 @@ const CHROME_AI_PROMPT_KEY = 'mc_chrome_ai_prompt'
 const getChromeAIPrompt = () =>
   localStorage.getItem(CHROME_AI_PROMPT_KEY) ?? DEFAULT_DESCRIBE_PROMPT
 
-// Progressive projection state
-let progressiveProjectionRunning = false
-let lastProgressiveCount = 0
-let lastProgressiveTime = 0
-// Refit the camera on every progressive layout until the user pans or zooms;
-// the layout grows with sqrt(n), so a camera fitted once at the start ends
-// up zoomed into the middle of the pile.
+// Refit the camera on layout changes until the user pans or zooms.
 let cameraFollow = true
-const PROGRESSIVE_MIN = 3 // min vectors before first progressive projection
-const PROGRESSIVE_MIN_MS = 2500 // min time between progressive projections — a
-// per-N-vectors trigger meant PCA + spread ran
-// near-continuously over the whole embed phase
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const welcomeEl = document.getElementById('welcome')!
@@ -2163,8 +2153,6 @@ async function embedAll(files: PhotoFile[]) {
   const vectors = new Array<Float32Array>(files.length)
   let cacheHits = 0
   const writeQueue: [CacheKey, Float32Array][] = []
-  lastProgressiveCount = 0
-  lastProgressiveTime = 0
   cameraFollow = true
   const embedStart = performance.now()
 
@@ -2478,44 +2466,6 @@ async function embedAll(files: PhotoFile[]) {
 
     const done = i + batch.length
 
-    if (done < PROGRESSIVE_MIN) {
-      // Too few vectors for projection — show a simple grid
-      resizeCanvas()
-      const cols = Math.ceil(Math.sqrt(files.length))
-      state.points = Array.from({ length: done }, (_, j) => [
-        (j % cols) * 60,
-        Math.floor(j / cols) * 60
-      ]) as Point[]
-      fitCamera()
-      scheduleRender()
-    } else if (
-      !progressiveProjectionRunning &&
-      done > lastProgressiveCount &&
-      (lastProgressiveCount === 0 || performance.now() - lastProgressiveTime >= PROGRESSIVE_MIN_MS)
-    ) {
-      const isFirst = lastProgressiveCount === 0 // first progressive projection → fit camera
-      lastProgressiveCount = done
-      lastProgressiveTime = performance.now()
-      progressiveProjectionRunning = true
-      const partialVecs = vectors.slice(0, done)
-      const nNeigh = Math.max(2, Math.min(15, done - 1))
-      runProjection(partialVecs, 'PCA', nNeigh, { silent: true })
-        .then((rawPts) => spreadPointsAsync(rawPts, state.settings.density))
-        .then((spreadPts) => {
-          if (state.phase === 'embedding') {
-            setPointsAnimated(spreadPts)
-            resizeCanvas()
-            if (isFirst || cameraFollow) fitCamera()
-            scheduleRender()
-          }
-        })
-        .catch((err) => {
-          console.error('Progressive projection failed:', err)
-        })
-        .finally(() => {
-          progressiveProjectionRunning = false
-        })
-    }
     const fromCache = cacheHits > 0 ? ` (${cacheHits} cached)` : ''
     // Overall rate self-corrects as cache-hit bursts fade; only show the ETA
     // once a few seconds have passed so early estimates aren't nonsense.
@@ -2578,6 +2528,29 @@ async function embedAll(files: PhotoFile[]) {
 }
 
 // ── Main run ─────────────────────────────────────────────────────────────────
+/** Lay every file out in the folder/date grid (viewer mode's arrangement) and
+ *  show it now. Returns the files in grid order, so index i matches point i. */
+async function showFolderGrid(files: PhotoFile[]): Promise<PhotoFile[]> {
+  // Sort by folder then date so n/p navigation follows the visual order.
+  const folderGroups = new Map<string, PhotoFile[]>()
+  for (const f of files) {
+    const folder = f.name.split('/').slice(0, -1).join('/') || '(root)'
+    if (!folderGroups.has(folder)) folderGroups.set(folder, [])
+    folderGroups.get(folder)!.push(f)
+  }
+  const sortedFolders = Array.from(folderGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  for (const [, folderFiles] of sortedFolders) folderFiles.sort((a, b) => a.lastModified - b.lastModified)
+  const sorted = sortedFolders.flatMap(([, g]) => g)
+  state.files = sorted
+  state.thumbnails = initThumbnails(sorted)
+  state.rawPoints = generateMetadataBasedLayout(sorted).map((p) => [p[0], p[1]])
+  resizeCanvas()
+  state.points = await spreadPointsAsync(state.rawPoints, state.settings.density)
+  fitCamera()
+  scheduleRender()
+  return sorted
+}
+
 async function processFiles(files: PhotoFile[]) {
   showWelcome(false)
   if (files.length === 0) {
@@ -2620,40 +2593,12 @@ async function processFiles(files: PhotoFile[]) {
     setStatus(`Viewer mode: ${files.length} files (no AI)`)
     setProgress(10)
 
-    // Sort files by folder then date to match visual grid layout
-    // This ensures n/p navigation follows the visual order
-    const folderGroups = new Map<string, PhotoFile[]>()
-    for (const f of files) {
-      const pathParts = f.name.split('/')
-      const folder = pathParts.slice(0, -1).join('/') || '(root)'
-      if (!folderGroups.has(folder)) folderGroups.set(folder, [])
-      folderGroups.get(folder)!.push(f)
-    }
-    const sortedFolders = Array.from(folderGroups.entries()).sort((a, b) =>
-      a[0].localeCompare(b[0])
-    )
-    for (const [, folderFiles] of sortedFolders) {
-      folderFiles.sort((a, b) => a.lastModified - b.lastModified)
-    }
-    const sortedFiles = sortedFolders.flatMap(([, files]) => files)
-    state.files = sortedFiles
-
-    state.thumbnails = initThumbnails(sortedFiles)
-
-    // Generate metadata-based grid layout (already sorted)
-    setProgress(50)
-    const layoutPoints = generateMetadataBasedLayout(sortedFiles)
-    state.rawPoints = layoutPoints.map((p) => [p[0], p[1]])
+    const sortedFiles = await showFolderGrid(files)
 
     // No semantic clustering in viewer mode - use folder-based colors if needed
     state.clusters = null
     state.vectors = []
-
-    resizeCanvas()
-    state.points = await spreadPointsAsync(state.rawPoints, state.settings.density)
     state.phase = 'done' // Set after async work completes
-    fitCamera()
-    scheduleRender()
     setProgress(100)
 
     setStatus(`${sortedFiles.length} media files — viewer mode (arranged by folder & date)`)
@@ -2685,7 +2630,10 @@ async function processFiles(files: PhotoFile[]) {
   setStatus(`Found ${files.length} media files. Loading thumbnails…`)
 
   try {
-    state.thumbnails = initThumbnails(files)
+    // Every photo is on screen in the viewer-mode grid from the start; the
+    // embedded layout then glides in (setPointsAnimated) instead of photos
+    // popping in one by one as they are embedded.
+    files = await showFolderGrid(files)
 
     const vectors = await embedAll(files)
 
