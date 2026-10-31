@@ -7,7 +7,7 @@
  * the descriptor rather than re-deriving it from the variant string.
  */
 
-import type { ModelVariant, VlmTier } from './types'
+import type { ModelVariant, VlmTier, WebnnDevice } from './types'
 
 // Longest-edge pixel sizes. These are deliberately different values, not one
 // constant reused: the display thumbnail and the VLM input serve different
@@ -108,11 +108,12 @@ const PHONE_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
     cachePrefix: '@embeddinggemma2-q4-t70-s296/'
   }
 }
-// PowerVR GPUs (Pixel 10) run EmbeddingGemma 2 at ~330 s per photo on WebGPU
-// and froze loading it, but WebNN ran it there at ~3 s per photo
-// (npu-test.html). WebNN needs the fp16 files (the q4 ones use ops WebNN
-// lacks) and fixed shapes; its own cache prefix because fp16 embeds a little
-// differently from q4. Image tokens / frames / length match the phone row.
+// The most native path first: WebNN (NPU, then GPU, then CPU) whenever the
+// browser offers it, then WebGPU (see useWebnn). On a Pixel 10, WebNN ran
+// EmbeddingGemma 2 at ~3 s per photo where WebGPU took ~330 s (npu-test.html).
+// WebNN needs the fp16 files (the q4 ones use ops WebNN lacks) and fixed
+// shapes; its own cache prefix because fp16 embeds a little differently from
+// q4. Image tokens / frames / length match the phone row.
 const WEBNN_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
   embeddinggemma2: {
     backend: 'webnn',
@@ -141,23 +142,18 @@ export function isPowerVRRenderer(): boolean {
   }
 }
 
-/** localStorage mc_webnn = '1' forces the WebNN path on any GPU (e2e webnn project, debugging). */
-function webnnForced(): boolean {
-  try {
-    return localStorage.getItem('mc_webnn') === '1'
-  } catch {
-    return false
-  }
-}
 
 /**
- * EmbeddingGemma 2 goes through WebNN: a PowerVR GPU and WebNN (chrome://flags
- * "WebNN API"). Starts from the synchronous WebGL guess; app.ts turns it on with
- * useWebnn() when the WebGPU adapter names PowerVR but WebGL did not (Pixel 10).
+ * Whether EmbeddingGemma 2 goes through WebNN. Off until app.ts's device
+ * check (runSetupWizard) finds WebNN contexts, which it does before any model
+ * loads; then on for every device that has WebNN, whatever its GPU.
  */
-export let USE_WEBNN = typeof navigator !== 'undefined' && 'ml' in navigator && (isPowerVRRenderer() || webnnForced())
-export function useWebnn(on: boolean): void {
-  USE_WEBNN = on
+export let USE_WEBNN = false
+/** WebNN device types that created a context, most native first (npu, gpu, cpu). */
+export let WEBNN_DEVICES: WebnnDevice[] = []
+export function useWebnn(devices: WebnnDevice[]): void {
+  WEBNN_DEVICES = devices
+  USE_WEBNN = devices.length > 0
 }
 
 const IS_PHONE =
@@ -189,7 +185,7 @@ export function getVlmTier(variant: ModelVariant, phone = USE_LIGHT): VlmTier | 
   const tier = TIERS[variant]
   if (!tier) return null
   const phoneRow = phone ? PHONE_OVERRIDES[variant] : undefined
-  const webnnRow = USE_WEBNN ? WEBNN_OVERRIDES[variant] : undefined
+  const webnnRow = USE_WEBNN && WEBNN_OVERRIDES[variant] ? { ...WEBNN_OVERRIDES[variant], webnnDevices: WEBNN_DEVICES } : undefined
   return { ...tier, ...phoneRow, ...webnnRow }
 }
 

@@ -84,6 +84,9 @@ export interface VlmTier {
   // Run on WebNN (raw onnxruntime-web sessions, fp16, token lookup in JS)
   // instead of transformers.js on WebGPU. See WEBNN_OVERRIDES in vlmTiers.ts.
   backend?: 'webnn'
+  // WebNN device types to try, most native first; the next one is used when
+  // the model does not build on one.
+  webnnDevices?: WebnnDevice[]
 }
 
 /** Request sent from the main thread to the VLM worker. */
@@ -103,7 +106,8 @@ export type VlmResponse =
   | { type: 'error'; id: number; message: string; name: string }
 
 /** Backend the worker actually got, after the webgpu→wasm fallback. */
-export type VlmDevice = 'webgpu' | 'wasm' | 'webnn'
+export type WebnnDevice = 'npu' | 'gpu' | 'cpu'
+export type VlmDevice = 'webgpu' | 'wasm' | `webnn-${WebnnDevice}`
 
 /**
  * Remote OpenAI-compatible endpoint settings.

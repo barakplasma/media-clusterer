@@ -21,6 +21,8 @@ type Debug = {
   }
   embedFailed: Set<number>
   processFiles: (files: unknown[]) => Promise<void>
+  updateURL: (s: unknown) => void
+  parseURLHash: (h: string) => { granularity: string; year: number; month?: number }
   searchImages: (q: string) => Promise<void>
 }
 declare global {
@@ -37,7 +39,6 @@ test('EmbeddingGemma 2 embeds photos and videos and finds them by text', async (
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.addInitScript((webnn) => {
     localStorage.setItem('mc_settings', JSON.stringify({ modelVariant: 'embeddinggemma2', enableTextSearch: true }))
-    if (webnn) localStorage.setItem('mc_webnn', '1')
   }, webnn)
   await page.goto('/')
 
@@ -60,6 +61,8 @@ test('EmbeddingGemma 2 embeds photos and videos and finds them by text', async (
     polling: 2000,
   })
   console.log(`model ready in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
+  // WebNN is preferred whenever offered, most native device first.
+  if (webnn) await expect(page.locator('#device-badge')).toContainText('WebNN')
 
   const t1 = Date.now()
   const run = await page.evaluate(async (names) => {

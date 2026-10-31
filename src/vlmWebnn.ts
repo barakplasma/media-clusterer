@@ -17,7 +17,7 @@
  */
 
 import * as ort from 'onnxruntime-web'
-import type { VlmTier } from './types'
+import type { VlmTier, WebnnDevice } from './types'
 
 const GRAPH_URL = `${import.meta.env.BASE_URL}models/embeddinggemma2-webnn/model_fp16_noembed.onnx`
 // model.embed_tokens.weight inside model_fp16.onnx_data (printed by scripts/webnn_split_embed.py).
@@ -79,10 +79,10 @@ export async function loadWebnnModel(
   remoteHost: string,
   patches: number,
   progress: Progress
-): Promise<WebnnModel> {
+): Promise<{ model: WebnnModel; device: WebnnDevice }> {
   const base = `${remoteHost}/${tier.repo}/resolve/main/onnx/`
+  const devices: WebnnDevice[] = tier.webnnDevices?.length ? tier.webnnDevices : ['npu', 'gpu', 'cpu']
   const options = {
-    executionProviders: [{ name: 'webnn', deviceType: 'npu' } as const],
     freeDimensionOverrides: {
       s11: 1,
       s35: patches,
@@ -92,16 +92,33 @@ export async function loadWebnnModel(
     }
   }
   // A failed WebNN graph build surfaces as an unhandled rejection and the
-  // create() never settles; turn it into this load's error.
+  // create() never settles; turn it into that attempt's error.
   let rejectBuild: (e: unknown) => void = () => {}
-  const buildFailed = new Promise<never>((_, reject) => (rejectBuild = reject))
   const onRejection = (e: PromiseRejectionEvent) => rejectBuild(e.reason)
   self.addEventListener('unhandledrejection', onRejection)
-  const create = (graph: Uint8Array, file: string, data: Uint8Array) =>
-    Promise.race([
-      ort.InferenceSession.create(graph, { ...options, externalData: [{ path: file, data }] }),
-      buildFailed
-    ])
+  let used = 0 // index into devices of the least native device any part needed
+  /** Build on the most native WebNN device that takes the graph: NPU, then GPU, then CPU. */
+  const create = async (graph: Uint8Array, file: string, data: Uint8Array) => {
+    const errors: string[] = []
+    for (let i = 0; i < devices.length; i++) {
+      const buildFailed = new Promise<never>((_, reject) => (rejectBuild = reject))
+      try {
+        const session = await Promise.race([
+          ort.InferenceSession.create(graph, {
+            ...options,
+            executionProviders: [{ name: 'webnn', deviceType: devices[i] }],
+            externalData: [{ path: file, data }]
+          }),
+          buildFailed
+        ])
+        used = Math.max(used, i)
+        return session
+      } catch (e) {
+        errors.push(`${devices[i]}: ${(e as Error)?.message ?? e}`)
+      }
+    }
+    throw new Error(`WebNN could not build ${file} on any device (${errors.join('; ')})`)
+  }
 
   let vision: ort.InferenceSession
   let text: ort.InferenceSession
@@ -187,5 +204,5 @@ export async function loadWebnnModel(
   model.dispose = async () => {
     await Promise.allSettled([vision.release(), text.release()])
   }
-  return model
+  return { model, device: devices[used] }
 }

@@ -33,8 +33,8 @@ export default defineConfig({
     // The app picks its phone profile (fewer image tokens, fixed sequence length) from the UA.
     { name: 'phone', testMatch: 'embeddinggemma2.spec.ts', use: { userAgent: PIXEL_UA } },
     { name: 'desktop', testMatch: 'embeddinggemma2.spec.ts' },
-    // The WebNN path PowerVR phones get (src/vlmWebnn.ts), forced on with
-    // localStorage mc_webnn by the spec. No GPU needed: WebNN runs on the CPU here.
+    // The WebNN path (src/vlmWebnn.ts), which the app prefers whenever the
+    // browser has WebNN; the flag below turns it on. No GPU needed.
     {
       name: 'webnn',
       testMatch: 'embeddinggemma2.spec.ts',

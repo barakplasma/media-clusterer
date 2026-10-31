@@ -162,10 +162,11 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
         null, [[new RawImage(new Uint8ClampedArray(64 * 48 * 4), 64, 48, 4)]], null, null, seqOptions(tier)
       )) as { pixel_values: { dims: number[] } }
       const { loadWebnnModel } = await import('./vlmWebnn')
-      model = await loadWebnnModel(tier, env.remoteHost, probe.pixel_values.dims[1], (file, loaded, total) =>
+      const loaded = await loadWebnnModel(tier, env.remoteHost, probe.pixel_values.dims[1], (file, loaded, total) =>
         post({ type: 'progress', id, file, loaded, total })
       )
-      device = 'webnn'
+      model = loaded.model
+      device = `webnn-${loaded.device}`
     } else {
       // Dropping audio_config skips the 189 MB audio encoder: this app embeds
       // images and video frames only.

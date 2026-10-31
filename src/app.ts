@@ -494,9 +494,10 @@ function updateDeviceBadge() {
     deviceBadgeEl.textContent = 'Viewer'
     deviceBadgeEl.style.color = '#4ade80'
   } else if (vlmTier) {
-    const dev = { webgpu: 'WebGPU', webnn: 'WebNN', wasm: 'WASM' }[vlmDevice()]
+    const d = vlmDevice()
+    const dev = d === 'webgpu' ? 'WebGPU' : d === 'wasm' ? 'WASM' : `WebNN ${d.slice(6).toUpperCase()}`
     deviceBadgeEl.textContent = `${vlmTier.id} · ${dev} · worker`
-    deviceBadgeEl.style.color = vlmDevice() === 'wasm' ? '#fbbf24' : '#4ade80'
+    deviceBadgeEl.style.color = d === 'wasm' || d === 'webnn-cpu' ? '#fbbf24' : '#4ade80'
   } else if (sapiens2Session) {
     const threads = navigator.hardwareConcurrency || 1
     const mt = typeof SharedArrayBuffer !== 'undefined'
@@ -1651,11 +1652,6 @@ async function loadModelOnce(signal?: AbortSignal) {
   }
 
   // navigator.gpu can exist with no usable adapter (emulators, blocklisted GPUs).
-  if (getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2') {
-    const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
-    // WebGL can miss a PowerVR GPU that WebGPU names (Pixel 10); WebNN runs there.
-    if ('ml' in navigator && isPowerVR(adapter)) useWebnn(true)
-  }
   if (getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2' && !USE_WEBNN) {
     const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
     const saved = state.settings.modelVariant
@@ -1667,11 +1663,11 @@ async function loadModelOnce(signal?: AbortSignal) {
     }
     if (slow) {
       // Never point these users at the WebGPU flag: it is what makes it hang.
-      if (savedSettings) showToast(`${saved} is too slow on this GPU — using ${NO_WEBGPU_MODEL} instead.`, 'warn', 8000)
+      if (savedSettings) showToast(`${saved} is too slow on this GPU — using ${NO_WEBGPU_MODEL}. Turn on chrome://flags "WebNN API" to run ${saved} here.`, 'warn', 10000)
     } else if (!adapter || adapter.info?.isFallbackAdapter) {
       const shown = showWebGpuHelp(!adapter ? 'blocked' : 'software', saved)
       if (!shown && !adapter && savedSettings) {
-        showToast(`${saved} needs WebGPU, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`, 'warn', 8000)
+        showToast(`${saved} needs WebGPU or WebNN, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`, 'warn', 8000)
       }
     }
   }
@@ -2892,7 +2888,7 @@ async function filterByDateTime(
 }
 
 // ── URL State Management ───────────────────────────────────────────────────────
-// URL format: #folder:path/to/folder or #dt:2025-01-15T14:30
+// URL format: #folder:path/to/folder or #dt:2025, #dt:2025-01, #dt:2025-01-15, #dt:2025-01-15T14, #dt:2025-01-15T14:30
 
 type URLState =
   | { type: 'folder'; path: string }
@@ -2918,16 +2914,16 @@ function parseURLHash(hash: string): URLState {
 
   if (content.startsWith('dt:')) {
     const dtStr = content.slice(3)
-    // Parse datetime: 2025-01-15T14:30
-    const parts = dtStr.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}))?(?::(\d{2}))?$/)
+    // Parse datetime, as coarse as a year: 2025, 2025-01, ... 2025-01-15T14:30
+    const parts = dtStr.match(/^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?(?:T(\d{2}))?(?::(\d{2}))?$/)
     if (parts) {
       const [, year, month, day, hour, minute] = parts
       return {
         type: 'datetime',
-        granularity: minute ? 'minute' : hour ? 'hour' : 'day',
+        granularity: minute ? 'minute' : hour ? 'hour' : day ? 'day' : month ? 'month' : 'year',
         year: parseInt(year),
-        month: parseInt(month) - 1,
-        day: parseInt(day),
+        month: month ? parseInt(month) - 1 : undefined,
+        day: day ? parseInt(day) : undefined,
         hour: hour ? parseInt(hour) : undefined,
         minute: minute ? parseInt(minute) : undefined
       }
@@ -2947,13 +2943,15 @@ function updateURL(state: URLState) {
   if (state.type === 'folder') {
     hash = `#folder:${state.path}`
   } else if (state.type === 'datetime') {
+    // Only the parts the filter has: a year or month filter has no day
+    // (day!.toString() threw there, Bugsink MEDIA-CLUSTERER-27).
     const { year, month, day, hour, minute } = state
-    const datePart = `${year}-${(month! + 1).toString().padStart(2, '0')}-${day!.toString().padStart(2, '0')}`
-    const timePart =
-      hour !== undefined
-        ? `T${hour.toString().padStart(2, '0')}${minute !== undefined ? ':' + minute.toString().padStart(2, '0') : ''}`
-        : ''
-    hash = `#dt:${datePart}${timePart}`
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    hash = `#dt:${year}`
+    if (month !== undefined) hash += `-${pad(month + 1)}`
+    if (day !== undefined) hash += `-${pad(day)}`
+    if (hour !== undefined) hash += `T${pad(hour)}`
+    if (minute !== undefined) hash += `:${pad(minute)}`
   }
 
   history.pushState(state, '', hash)
@@ -3736,7 +3734,7 @@ function modelReason(v: ModelVariant, d: DeviceDiag, blocked: string | null, rec
   const ranks = b ? `Benchmark: speed #${b.speed}, quality #${b.quality}.` : ''
   if (v === 'embeddinggemma2') {
     return USE_WEBNN
-      ? `Runs on WebNN (${d.webnn[0]?.toUpperCase() ?? 'NPU'}): this graphics chip is too slow for WebGPU. About 3 s per photo on a Pixel 10. ${ranks}`
+      ? `Runs on WebNN (${d.webnn.map((t) => t.toUpperCase()).join(' → ')}), the most direct AI hardware path this browser offers; about 3 s per photo on a Pixel 10. ${ranks}`
       : `Runs on your graphics chip (WebGPU); also answers text searches itself. ${ranks}`
   }
   if (v === 'nomic' && recommended) return `No graphics chip this model can use, so it runs on the CPU. ${ranks}`
@@ -3766,10 +3764,11 @@ function renderChecks(d: DeviceDiag) {
 async function runSetupWizard() {
   const d = await diagnoseDevice()
   chromeAIAvailability = d.chromeAI
-  // WebGL can miss a PowerVR GPU that WebGPU names (Pixel 10); WebNN runs there.
-  if (d.powerVR && d.webnn.length) useWebnn(true)
+  // Most native first: WebNN (NPU > GPU > CPU) whenever offered, then WebGPU, then CPU models.
+  useWebnn(d.webnn)
   const ranked = renderModelOptions({
-    webgpu: !!d.adapter || USE_WEBNN,
+    // "webgpu" here means EmbeddingGemma 2 has a path: WebNN, or a usable WebGPU.
+    webgpu: (!!d.adapter && !d.powerVR) || USE_WEBNN,
     slowGpu: d.powerVR && !USE_WEBNN,
     chromeAI: d.chromeAI !== 'unavailable'
   })
@@ -4946,6 +4945,8 @@ debugCopyBtn.addEventListener('click', async () => {
 
 // Expose to console for deeper inspection
 ;(window as Window & { __debug?: unknown }).__debug = {
+  updateURL,
+  parseURLHash,
   get state() {
     return state
   },

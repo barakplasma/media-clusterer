@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 
-// The two checks that need no GPU. Both hide WebGPU, so they behave the same
+// The checks that need no GPU. Both hide WebGPU, so they behave the same
 // on a Mac runner, a Linux deploy job or a laptop.
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -33,6 +33,27 @@ test('viewer mode lays out photos without loading a model', async ({ page }) => 
   await page.keyboard.press('r')
   await page.keyboard.press('e')
   expect(await page.evaluate(() => window.__debug.state.activeFileIndex)).toBe(first)
+
+})
+
+test('date links: year and month filters round-trip through the URL', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true })))
+  await page.goto('/')
+  // A year or month filter has no day; building its URL threw (Bugsink MEDIA-CLUSTERER-27).
+  const hashes = await page.evaluate(() => {
+    const d = window.__debug
+    return [
+      { type: 'datetime', granularity: 'year', year: 2026 },
+      { type: 'datetime', granularity: 'month', year: 2026, month: 4 },
+      { type: 'datetime', granularity: 'minute', year: 2026, month: 4, day: 9, hour: 7, minute: 5 }
+    ].map((s) => {
+      d.updateURL(s)
+      return { hash: location.hash, parsed: d.parseURLHash(location.hash) }
+    })
+  })
+  expect(hashes.map((h) => h.hash)).toEqual(['#dt:2026', '#dt:2026-05', '#dt:2026-05-09T07:05'])
+  expect(hashes.map((h) => h.parsed.granularity)).toEqual(['year', 'month', 'minute'])
+  expect(hashes[1].parsed).toMatchObject({ year: 2026, month: 4 })
 })
 
 test('a saved WebGPU-only model falls back when there is no adapter', async ({ page }) => {
