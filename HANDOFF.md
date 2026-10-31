@@ -15,7 +15,7 @@ Read this with `AGENT.md`. It covers what landed, how testing works now, and wha
 ```mermaid
 flowchart LR
   PR[every PR] --> D[deploy.yml, ubuntu: tsc, npm test = 2 CPU-only Playwright checks, build]
-  PR --> E[e2e.yml, macos-14: Chrome on the Apple GPU]
+  PR --> E[e2e.yml, macos-latest: Chrome on the Apple GPU]
   E --> P[phone profile, required]
   E --> K[desktop profile, informational]
   E -.-> S[no safari job: e2e/safari kept for later]
@@ -23,7 +23,7 @@ flowchart LR
 ```
 
 - `npm test`: `e2e/cpu.spec.ts` checks viewer mode and the no-adapter fallback plus the help modal. It needs Google Chrome installed. The pre-commit hook runs it. With no Chrome, set `SWIFTSHADER=<chromium binary>`.
-- `npm run test:gpu`: `e2e/embeddinggemma2.spec.ts` runs real files from `e2e/fixtures/` (jpg, png, webp, mp4, webm). Four text queries must each rank the right file first. On macos-14 the model loads in about 14 s and embedding takes about 11 s.
+- `npm run test:gpu`: `e2e/embeddinggemma2.spec.ts` runs real files from `e2e/fixtures/` (jpg, png, webp, mp4, webm). Four text queries must each rank the right file first. On macos-14 (retired 2026-11-02; CI now uses macos-latest) the model loads in about 14 s and embedding takes about 11 s.
 - **Test Lab** (`testlab.yml`) is on demand only. The harness is in `android-device-test/` and the page is `device-test.html` (`src/deviceTest.ts`). It signs in with Workload Identity Federation (through a service account, no key file), and setup steps are at the top of the file.
   - Still to do: set the repository variables `GCP_WIF_PROVIDER`, `GCP_SA_EMAIL`, `GCP_PROJECT_ID` and `GCP_RESULTS_BUCKET`. The bucket can be `personal-398106-eg2-testlab-c50fbb6f`.
   - The Pixel 7a passed in 825 s: about 504 s to load (mostly the Hugging Face download), about 34 s per photo, 131 s for a 4-frame video, and about 13 s per search.
