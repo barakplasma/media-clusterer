@@ -6,7 +6,7 @@ Try it: <https://barakplasma.github.io/media-clusterer/> · Speed test for your 
 
 ---
 
-<img width="1891" height="1035" alt="demo of the media clusterer based on https://www.kaggle.com/datasets/heavensky/image-dataset-for-unsupervised-clustering?resource=download" src="https://github.com/user-attachments/assets/db8520e5-b937-4f1b-b28e-df0c52821c0a" />
+![demo of the media clusterer based on https://www.kaggle.com/datasets/heavensky/image-dataset-for-unsupervised-clustering?resource=download](https://github.com/user-attachments/assets/db8520e5-b937-4f1b-b28e-df0c52821c0a)
 
 ---
 
