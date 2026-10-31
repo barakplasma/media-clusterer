@@ -1,0 +1,30 @@
+name: Release
+
+# Run by hand (Actions tab, or the API) after a version bump lands on main:
+# tags the commit and publishes docs/releases/v<version>.md as the notes.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without the v (default: package.json version)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          persist-credentials: false
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          v="${INPUT_VERSION:-$(node -p "require('./package.json').version")}"
+          notes="docs/releases/v${v}.md"
+          test -f "$notes" || { echo "::error::missing $notes"; exit 1; }
+          gh release create "v${v}" --target "$GITHUB_SHA" --title "v${v}" --notes-file "$notes"
