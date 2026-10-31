@@ -379,7 +379,7 @@ function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
   return true
 }
 
-// Pixel 10's PowerVR GPU (Chrome blocklists it; forcing the flag on works):
+// Pixel 10's PowerVR GPU (Chrome now exposes it without any flag, 2026-10):
 // ~330 s per photo, the GPU watchdog resets, and loading EmbeddingGemma 2
 // froze the phone at ~95%. WebGL names the GPU even when WebGPU hides it.
 function isPowerVR(adapter: GPUAdapter | null | undefined): boolean {
