@@ -40,6 +40,8 @@
     "@saehrimnir/druidjs": "^0.8.0",
     "@sentry/browser": "^10.54.0",
     "onnxruntime-web": "^1.26.0",
-    "p-limit": "^7.3.0"
+    "p-limit": "^7.3.0",
+    "solid-js": "^1.9.18",
+    "vite-plugin-solid": "^2.11.15"
   }
 }

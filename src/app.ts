@@ -80,6 +80,7 @@ import {
 import '@picocss/pico/css/pico.conditional.min.css'
 import { computeOptimalBatchSize, getMemoryPressure } from './hardware'
 import { embedBatchAdaptive, createAdaptiveBatcher } from './batching'
+import { mountChrome, setStatus, setProgress, showToast } from './ui/chrome'
 import type {
   AppState,
   Camera,
@@ -161,14 +162,13 @@ const DEMO_CATEGORIES = [
 ]
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
+mountChrome()
 const dom: DOMElements = {
   loadModelBtn: document.getElementById('load-model-btn') as HTMLButtonElement,
   resumeBtn: document.getElementById('resume-btn') as HTMLButtonElement,
   openBtn: document.getElementById('open-btn') as HTMLButtonElement,
   recenterBtn: document.getElementById('recenter-btn') as HTMLButtonElement,
   resetBtn: document.getElementById('reset-btn') as HTMLButtonElement,
-  progressBar: document.getElementById('progress-bar') as HTMLDivElement,
-  statusEl: document.getElementById('status') as HTMLDivElement,
   canvas: document.getElementById('canvas') as HTMLCanvasElement,
   modal: document.getElementById('modal') as HTMLDialogElement,
   modalClose: document.getElementById('modal-close') as HTMLButtonElement,
@@ -448,15 +448,6 @@ let cameraFollow = true
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const welcomeEl = document.getElementById('welcome')!
-const setStatus = (msg: string) => {
-  dom.statusEl.textContent = msg
-  document.getElementById('welcome-status')!.textContent = msg
-}
-const setProgress = (pct: number) => {
-  const w = `${Math.min(100, Math.max(0, pct))}%`
-  dom.progressBar.style.width = w
-  document.getElementById('welcome-bar')!.style.width = w
-}
 /** The first-load card stands in for the empty map until files load. */
 function showWelcome(show: boolean) {
   welcomeEl.hidden = !show
@@ -464,17 +455,6 @@ function showWelcome(show: boolean) {
 }
 const yieldMain = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-let toastTimer: ReturnType<typeof setTimeout> | null = null
-function showToast(message: string, level: 'info' | 'warn' | 'error' = 'info', durationMs = 5000) {
-  const el = document.getElementById('toast')!
-  el.textContent = message
-  el.className = `visible ${level === 'info' ? '' : level}`.trim()
-  if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => {
-    el.classList.remove('visible')
-    toastTimer = null
-  }, durationMs)
-}
 
 const cacheSizeEl = document.getElementById('cache-size')
 const deviceBadgeEl = document.getElementById('device-badge')

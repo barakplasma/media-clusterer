@@ -1,0 +1,10 @@
+<!doctype html><meta charset="utf-8"><title>ui bench</title>
+<style>
+#progress-wrap{height:4px;background:#333}#progress-bar{height:100%;width:0;background:#4af;transition:width .3s}
+#toast{opacity:0}#toast.visible{opacity:1}
+</style>
+<div id="progress-wrap"><div id="progress-bar"></div></div>
+<div id="status">x</div><div id="welcome-status"></div>
+<div class="welcome-bar" id="welcome-bar-wrap"><div id="welcome-bar" style="width:0"></div></div>
+<div id="toast"></div><div id="toast-root"></div>
+<script type="module" src="./bench.tsx"></script>

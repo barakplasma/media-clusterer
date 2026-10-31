@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { defineConfig } from 'vite';
+import solid from 'vite-plugin-solid';
 import { execSync } from 'child_process';
 
 const getGitInfo = (cmd: string, envVar?: string) => {
@@ -39,7 +40,7 @@ export default defineConfig({
     __GIT_COMMIT__: JSON.stringify(gitCommit),
     __APP_VERSION__: JSON.stringify(appVersion),
   },
-  plugins: [excludeOrtWasm],
+  plugins: [solid(), excludeOrtWasm],
   build: {
     sourcemap: true,
     rollupOptions: {

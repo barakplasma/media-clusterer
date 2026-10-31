@@ -171,8 +171,6 @@ export interface DOMElements {
   openBtn: HTMLButtonElement
   recenterBtn: HTMLButtonElement
   resetBtn: HTMLButtonElement
-  progressBar: HTMLDivElement
-  statusEl: HTMLDivElement
   canvas: HTMLCanvasElement
   modal: HTMLDialogElement
   modalClose: HTMLButtonElement
