@@ -306,7 +306,7 @@ export function formatEta(seconds: number): string {
  * Hoare quickselect: partition `order` so its first `k` entries are the ones
  * with the smallest `keys` values (unordered within the partition).
  */
-function selectSmallest(order: Int32Array, keys: Float64Array, k: number): void {
+export function selectSmallest(order: Int32Array, keys: Float64Array, k: number): void {
   let left = 0
   let right = order.length - 1
   while (right > left) {
