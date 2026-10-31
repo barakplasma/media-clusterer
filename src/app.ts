@@ -369,9 +369,7 @@ function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
   el('webgpu-help-accel').hidden = kind !== 'software'
   const modal = el('webgpu-help-modal') as HTMLDialogElement
   el('webgpu-help-copy').onclick = () => {
-    void navigator.clipboard
-      ?.writeText(url)
-      .then(() => (el('webgpu-help-copy').textContent = 'Copied'))
+    void navigator.clipboard?.writeText(url).then(() => (el('webgpu-help-copy').textContent = 'Copied'))
   }
   el('webgpu-help-ok').onclick = () => modal.close()
   el('webgpu-help-close').onclick = () => modal.close()
@@ -487,8 +485,7 @@ function updateDeviceBadge() {
     deviceBadgeEl.style.color = '#4ade80'
   } else if (vlmTier) {
     const d = vlmDevice()
-    const dev =
-      d === 'webgpu' ? 'WebGPU' : d === 'wasm' ? 'WASM' : `WebNN ${d.slice(6).toUpperCase()}`
+    const dev = d === 'webgpu' ? 'WebGPU' : d === 'wasm' ? 'WASM' : `WebNN ${d.slice(6).toUpperCase()}`
     deviceBadgeEl.textContent = `${vlmTier.id} · ${dev} · worker`
     deviceBadgeEl.style.color = d === 'wasm' || d === 'webnn-cpu' ? '#fbbf24' : '#4ade80'
   } else if (sapiens2Session) {
@@ -1333,11 +1330,8 @@ function render() {
 // ── Cluster labels ───────────────────────────────────────────────────────────
 // Recomputed only when the clusters or the number of captions change; counting
 // captions each frame is a cheap O(n) scan next to drawing.
-let clusterLabelCache: {
-  clusters: Int32Array
-  captionCount: number
-  labels: Map<number, string>
-} | null = null
+let clusterLabelCache: { clusters: Int32Array; captionCount: number; labels: Map<number, string> } | null =
+  null
 let clusterLabelHits: { x: number; y: number; w: number; h: number; cluster: number }[] = []
 const LABEL_MAX_THUMB_PX = 64 // only label when zoomed out enough that thumbnails are small
 
@@ -1347,8 +1341,7 @@ function currentClusterLabels(): Map<number, string> | null {
   let captionCount = 0
   for (const c of state.captions) if (c) captionCount++
   const cache = clusterLabelCache
-  if (cache && cache.clusters === clusters && cache.captionCount === captionCount)
-    return cache.labels
+  if (cache && cache.clusters === clusters && cache.captionCount === captionCount) return cache.labels
   const labels = clusterCaptionLabels(clusters, state.captions)
   clusterLabelCache = { clusters, captionCount, labels }
   return labels
@@ -1660,20 +1653,11 @@ async function loadModelOnce(signal?: AbortSignal) {
     }
     if (slow) {
       // Never point these users at the WebGPU flag: it is what makes it hang.
-      if (savedSettings)
-        showToast(
-          `${saved} is too slow on this GPU — using ${NO_WEBGPU_MODEL}. Turn on chrome://flags "WebNN API" to run ${saved} here.`,
-          'warn',
-          10000
-        )
+      if (savedSettings) showToast(`${saved} is too slow on this GPU — using ${NO_WEBGPU_MODEL}. Turn on chrome://flags "WebNN API" to run ${saved} here.`, 'warn', 10000)
     } else if (!adapter || adapter.info?.isFallbackAdapter) {
       const shown = showWebGpuHelp(!adapter ? 'blocked' : 'software', saved)
       if (!shown && !adapter && savedSettings) {
-        showToast(
-          `${saved} needs WebGPU or WebNN, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`,
-          'warn',
-          8000
-        )
+        showToast(`${saved} needs WebGPU or WebNN, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`, 'warn', 8000)
       }
     }
   }
@@ -1683,14 +1667,10 @@ async function loadModelOnce(signal?: AbortSignal) {
     setStatus(`Loading ${tier.id} (${tier.downloadMB} MB)…`)
     try {
       activeEmbeddingDim = tier.visionDim
-      await loadVlm(
-        state.settings.modelVariant,
-        normalizeHost(state.settings.customModelHost),
-        (pct) => {
-          setProgress(pct)
-          setStatus(`Downloading ${tier.id}… ${pct.toFixed(0)}%`)
-        }
-      )
+      await loadVlm(state.settings.modelVariant, normalizeHost(state.settings.customModelHost), (pct) => {
+        setProgress(pct)
+        setStatus(`Downloading ${tier.id}… ${pct.toFixed(0)}%`)
+      })
     } catch (err) {
       signal?.throwIfAborted()
       throw err
@@ -1731,9 +1711,7 @@ async function loadModelOnce(signal?: AbortSignal) {
     // Chrome starts the download only from a user gesture (the Load Model
     // click, see downloadChromeAI); the auto-load at startup has none.
     if (availability === 'downloadable' && !chromeAIDownload) {
-      setStatus(
-        'Gemini Nano needs a one-time download, managed by Chrome. Tap "Load Model" to start it.'
-      )
+      setStatus('Gemini Nano needs a one-time download, managed by Chrome. Tap "Load Model" to start it.')
       dom.loadModelBtn.hidden = false
       dom.loadModelBtn.disabled = false
       state.phase = 'idle'
@@ -1745,9 +1723,7 @@ async function loadModelOnce(signal?: AbortSignal) {
         await chromeAIDownload
       } catch (err) {
         chromeAIDownload = null
-        setStatus(
-          `Gemini Nano download failed: ${(err as Error).message}. Tap "Load Model" to retry.`
-        )
+        setStatus(`Gemini Nano download failed: ${(err as Error).message}. Tap "Load Model" to retry.`)
         dom.loadModelBtn.hidden = false
         dom.loadModelBtn.disabled = false
         state.phase = 'idle'
@@ -2064,11 +2040,11 @@ function offerRetry(message: string) {
 }
 
 async function loadModel(signal?: AbortSignal) {
-  if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier)
-    return // Clear any custom upload cache from a previous run — env is a global
-    // singleton, so a stale cache would otherwise keep serving old files when the
-    // user switches models or starts a new session. A fresh upload re-sets it
-    // inside the retry loop below via applyFallbackChoice().
+  if (extractor || sapiens2Session || chromeAIManager || remoteConfig || vlmTier) return
+  // Clear any custom upload cache from a previous run — env is a global
+  // singleton, so a stale cache would otherwise keep serving old files when the
+  // user switches models or starts a new session. A fresh upload re-sets it
+  // inside the retry loop below via applyFallbackChoice().
   ;(env as unknown as { useCustomCache: boolean }).useCustomCache = false
   ;(env as unknown as { customCache: unknown }).customCache = null
   while (true) {
@@ -2174,11 +2150,12 @@ async function readCachedEmbeddings(
 // ── Embedding loop ───────────────────────────────────────────────────────────
 /** Scale and shift `pts` to fill the bounding box of `ref`. */
 function fitInto(pts: Point[], ref: readonly Point[]): Point[] {
+  // Loops, not Math.min(...xs): spreading overflows the stack on huge folders.
   const box = (ps: readonly Point[]) => {
-    let x0 = Infinity,
-      x1 = -Infinity,
-      y0 = Infinity,
-      y1 = -Infinity // loop: spread overflows the stack on huge folders
+    let x0 = Infinity
+    let x1 = -Infinity
+    let y0 = Infinity
+    let y1 = -Infinity
     for (const [x, y] of ps) {
       x0 = Math.min(x0, x)
       x1 = Math.max(x1, x)
@@ -2547,9 +2524,7 @@ async function embedAll(files: PhotoFile[]) {
     setProgress(10 + (done / files.length) * 80) // 10% to 90%
 
     if (gpuLost) {
-      setStatus(
-        `The GPU reset — stopped at ${done} / ${files.length} files. Reload the page to retry.`
-      )
+      setStatus(`The GPU reset — stopped at ${done} / ${files.length} files. Reload the page to retry.`)
       showToast(
         `The GPU reset (device lost) after ${done} of ${files.length} files. ` +
           'Reload the page to retry, or set Image budget to Light (or pick SmolVLM2) in Settings.',
@@ -2569,9 +2544,7 @@ async function embedAll(files: PhotoFile[]) {
         deviceMemoryGB: (navigator as { deviceMemory?: number }).deviceMemory,
         reason: embedFailReason.slice(0, 300)
       })
-      console.error(
-        `GPU device lost while embedding: ${state.settings.modelVariant}, ${done}/${files.length} files`
-      )
+      console.error(`GPU device lost while embedding: ${state.settings.modelVariant}, ${done}/${files.length} files`)
       await cachePutBatch(writeQueue)
       writeQueue.length = 0
       return vectors.slice(0, done)
@@ -2612,8 +2585,7 @@ async function showFolderGrid(files: PhotoFile[]): Promise<PhotoFile[]> {
     folderGroups.get(folder)!.push(f)
   }
   const sortedFolders = Array.from(folderGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-  for (const [, folderFiles] of sortedFolders)
-    folderFiles.sort((a, b) => a.lastModified - b.lastModified)
+  for (const [, folderFiles] of sortedFolders) folderFiles.sort((a, b) => a.lastModified - b.lastModified)
   const sorted = sortedFolders.flatMap(([, g]) => g)
   state.files = sorted
   state.thumbnails = initThumbnails(sorted)
@@ -2737,11 +2709,7 @@ async function processFiles(files: PhotoFile[]) {
     if (embedFailed.size > 0) {
       // Failures only reach the console otherwise, which a phone can't show.
       const why = embedFailReason ? `: ${embedFailReason}` : ''
-      showToast(
-        `${embedFailed.size} of ${files.length} files could not be embedded${why}`,
-        'warn',
-        12000
-      )
+      showToast(`${embedFailed.size} of ${files.length} files could not be embedded${why}`, 'warn', 12000)
       console.error(
         `Embedding failed for ${embedFailed.size}/${files.length} files (${state.settings.modelVariant})${why}`
       )
@@ -3075,9 +3043,7 @@ dom.canvas.addEventListener('pointerup', (e) => {
 
   if (wasSingleTap && state.points.length) {
     const { cx, cy } = pointerPos(e)
-    const label = clusterLabelHits.find(
-      (r) => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h
-    )
+    const label = clusterLabelHits.find((r) => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h)
     if (label) {
       zoomToCluster(label.cluster)
       return
@@ -3134,8 +3100,7 @@ dom.recenterBtn.addEventListener('click', () => {
 dom.resetBtn.addEventListener('click', resetAll)
 dom.failedChip.addEventListener('click', () => {
   hideFailed = !hideFailed
-  if (state.activeFileIndex === null && isHidden(state.lastViewedIndex ?? -1))
-    state.lastViewedIndex = null
+  if (state.activeFileIndex === null && isHidden(state.lastViewedIndex ?? -1)) state.lastViewedIndex = null
   updateFailedChip()
   scheduleRender()
 })
@@ -3193,9 +3158,7 @@ const openFileModal = (index: number) => {
   const f = state.files[index]
   if (!f) return
   dom.modalPosition.textContent = `${sequencePosition(index) + 1} / ${state.files.length}`
-  dom.modalPosition.title = state.settings.viewerOnly
-    ? 'Position in folder order'
-    : 'Position by date'
+  dom.modalPosition.title = state.settings.viewerOnly ? 'Position in folder order' : 'Position by date'
   const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
 
   if (VIDEO_EXTS.has(ext)) {
@@ -3682,12 +3645,7 @@ dom.customModelHostInput.value = state.settings.customModelHost
 // models it cannot run struck through. Labels are captured once, so a
 // re-render never stacks markers.
 const optionLabels = (select: HTMLSelectElement) =>
-  new Map(
-    [...select.querySelectorAll('option')].map((o) => [
-      o.value,
-      { text: o.textContent ?? o.value, title: o.title }
-    ])
-  )
+  new Map([...select.querySelectorAll('option')].map((o) => [o.value, { text: o.textContent ?? o.value, title: o.title }]))
 const modelLabels = optionLabels(dom.modelSelect)
 const renderModelOptions = (caps: DeviceCaps) => {
   const ranked = rankModels([...modelLabels.keys()] as ModelVariant[], caps)
@@ -3699,17 +3657,13 @@ const renderModelOptions = (caps: DeviceCaps) => {
       const badges = b ? ` ⚡:${b.speed} Q:${b.quality}` : ''
       const opt = document.createElement('option')
       opt.value = value
-      opt.title = b
-        ? `${title}${title ? ' ' : ''}Benchmark rank: ⚡ speed ${b.speed}, Q quality ${b.quality} (1 = best).`
-        : title
+      opt.title = b ? `${title}${title ? ' ' : ''}Benchmark rank: ⚡ speed ${b.speed}, Q quality ${b.quality} (1 = best).` : title
       if (blocked) {
         opt.textContent = `${strike(text)}${badges} — ${blocked}`
         opt.disabled = true
         opt.title = `Can't run on this device: ${blocked}.`
       } else {
-        opt.textContent = recommended
-          ? `★ ${text}${badges} — recommended for this device`
-          : `${text}${badges}`
+        opt.textContent = recommended ? `★ ${text}${badges} — recommended for this device` : `${text}${badges}`
       }
       return opt
     })
@@ -3723,14 +3677,12 @@ renderModelOptions({ webgpu: 'gpu' in navigator, chromeAI: true })
 if (dom.projectionSelect) {
   const projectionLabels = optionLabels(dom.projectionSelect)
   dom.projectionSelect.replaceChildren(
-    ...rankProjections([...projectionLabels.keys()] as ProjectionMethod[]).map(
-      ({ value, recommended }) => {
-        const opt = document.createElement('option')
-        opt.value = value
-        opt.textContent = `${recommended ? '★ ' : ''}${projectionLabels.get(value)!.text}${recommended ? ' — best on benchmark' : ''}`
-        return opt
-      }
-    )
+    ...rankProjections([...projectionLabels.keys()] as ProjectionMethod[]).map(({ value, recommended }) => {
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.textContent = `${recommended ? '★ ' : ''}${projectionLabels.get(value)!.text}${recommended ? ' — best on benchmark' : ''}`
+      return opt
+    })
   )
   dom.projectionSelect.value = state.settings.projectionMethod
 }
@@ -3745,36 +3697,21 @@ interface DeviceDiag {
 }
 
 /** A check that never answers (seen with the Chrome AI probe) must not stall the wizard. */
-const within = <T>(p: Promise<T>, fallback: T, ms = 3000) =>
+const within = <T,>(p: Promise<T>, fallback: T, ms = 3000) =>
   Promise.race([p.catch(() => fallback), new Promise<T>((r) => setTimeout(() => r(fallback), ms))])
 
 /** Cheap capability checks: no model files are fetched. */
 async function diagnoseDevice(): Promise<DeviceDiag> {
-  const ml = (
-    navigator as Navigator & {
-      ml?: { createContext: (o: { deviceType: string }) => Promise<unknown> }
-    }
-  ).ml
+  const ml = (navigator as Navigator & { ml?: { createContext: (o: { deviceType: string }) => Promise<unknown> } }).ml
   const [adapter, chromeAI, ...contexts] = await Promise.all([
     within(navigator.gpu?.requestAdapter() ?? Promise.resolve(null), null),
     within(getChromeAIAvailability(), 'unavailable' as LanguageModelAvailability),
     ...(['npu', 'gpu', 'cpu'] as const).map((t) =>
-      ml
-        ? within(
-            ml.createContext({ deviceType: t }).then(() => t),
-            null
-          )
-        : Promise.resolve(null)
+      ml ? within(ml.createContext({ deviceType: t }).then(() => t), null) : Promise.resolve(null)
     )
   ])
   const webnn = contexts.filter((t): t is 'npu' | 'gpu' | 'cpu' => !!t)
-  return {
-    adapter,
-    powerVR: isPowerVR(adapter),
-    webnn,
-    chromeAI,
-    memoryGB: (navigator as { deviceMemory?: number }).deviceMemory
-  }
+  return { adapter, powerVR: isPowerVR(adapter), webnn, chromeAI, memoryGB: (navigator as { deviceMemory?: number }).deviceMemory }
 }
 
 const esc = (t: string) => t.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -3785,12 +3722,7 @@ const modelSizeLabel = (v: ModelVariant) => {
 }
 
 /** Why the wizard suggests (or can't run) a model, in plain words. */
-function modelReason(
-  v: ModelVariant,
-  d: DeviceDiag,
-  blocked: string | null,
-  recommended: boolean
-): string {
+function modelReason(v: ModelVariant, d: DeviceDiag, blocked: string | null, recommended: boolean): string {
   if (blocked) return `Can't run here: ${blocked}.`
   const b = MODEL_BADGES[v]
   const ranks = b ? `Benchmark: speed #${b.speed}, quality #${b.quality}.` : ''
@@ -3799,19 +3731,14 @@ function modelReason(
       ? `Runs on WebNN (${d.webnn.map((t) => t.toUpperCase()).join(' → ')}), the most direct AI hardware path this browser offers; about 3 s per photo on a Pixel 10. ${ranks}`
       : `Runs on your graphics chip (WebGPU); also answers text searches itself. ${ranks}`
   }
-  if (v === 'nomic' && recommended)
-    return `No graphics chip this model can use, so it runs on the CPU. ${ranks}`
+  if (v === 'nomic' && recommended) return `No graphics chip this model can use, so it runs on the CPU. ${ranks}`
   return ranks
 }
 
 function renderChecks(d: DeviceDiag) {
   const gpu = d.adapter
     ? `${d.adapter.info.vendor || 'GPU'} ${d.adapter.info.architecture}`.trim() +
-      (d.powerVR
-        ? ': too slow for AI on WebGPU'
-        : d.adapter.info.isFallbackAdapter
-          ? ': software only (slow)'
-          : ' ✓')
+      (d.powerVR ? ': too slow for AI on WebGPU' : d.adapter.info.isFallbackAdapter ? ': software only (slow)' : ' ✓')
     : 'not available to web pages'
   const lines = [
     `🎮 Graphics (WebGPU): ${gpu}`,
@@ -3819,9 +3746,7 @@ function renderChecks(d: DeviceDiag) {
     ...(d.memoryGB ? [`🧠 Memory: ${d.memoryGB} GB`] : []),
     ...(d.chromeAI !== 'unavailable' ? [`💬 Chrome AI: ${d.chromeAI}`] : [])
   ]
-  document.getElementById('wizard-checks')!.innerHTML = lines
-    .map((l) => `<li>${esc(l)}</li>`)
-    .join('')
+  document.getElementById('wizard-checks')!.innerHTML = lines.map((l) => `<li>${esc(l)}</li>`).join('')
 }
 
 /**
@@ -3847,11 +3772,7 @@ async function runSetupWizard() {
     // A saved Chrome AI choice that cannot run falls back to the recommendation.
     // (EmbeddingGemma 2 without WebGPU is handled at load, for the session only.)
     const recommended = ranked.find((o) => o.recommended)
-    if (
-      state.settings.modelVariant === 'chrome-ai' &&
-      d.chromeAI === 'unavailable' &&
-      recommended
-    ) {
+    if (state.settings.modelVariant === 'chrome-ai' && d.chromeAI === 'unavailable' && recommended) {
       state.settings.modelVariant = recommended.value
       dom.modelSelect.value = recommended.value
       saveSettings()
@@ -3866,25 +3787,18 @@ async function runSetupWizard() {
   dom.modelSelect.value = state.settings.modelVariant
   const optionsEl = document.getElementById('wizard-options')!
   const go = document.getElementById('wizard-go') as HTMLButtonElement
-  const options = ranked.filter(
-    (o) => o.value !== 'openai' && (o.value !== 'chrome-ai' || !o.blocked)
-  )
+  const options = ranked.filter((o) => o.value !== 'openai' && (o.value !== 'chrome-ai' || !o.blocked))
   let showAll = false
   const render = () => {
     // The pick and two alternatives; the rest on request, so Start stays in view.
-    const shown = showAll
-      ? options
-      : options.filter((o, i) => i < 3 || o.value === state.settings.modelVariant)
-    optionsEl.innerHTML =
-      shown
-        .map(({ value, blocked, recommended }) => {
-          const label = `${recommended ? '★ ' : ''}${modelSizeLabel(value)}${recommended ? ' (recommended)' : ''}`
-          return `<button type="button" role="radio" data-v="${value}" aria-checked="${value === state.settings.modelVariant}" ${blocked ? 'disabled' : ''}>${esc(label)}<small>${esc(modelReason(value, d, blocked, recommended))}</small></button>`
-        })
-        .join('') +
-      (shown.length < options.length
-        ? `<button type="button" data-more>More models (${options.length - shown.length})…</button>`
-        : '')
+    const shown = showAll ? options : options.filter((o, i) => i < 3 || o.value === state.settings.modelVariant)
+    optionsEl.innerHTML = shown
+      .map(({ value, blocked, recommended }) => {
+        const label = `${recommended ? '★ ' : ''}${modelSizeLabel(value)}${recommended ? ' (recommended)' : ''}`
+        return `<button type="button" role="radio" data-v="${value}" aria-checked="${value === state.settings.modelVariant}" ${blocked ? 'disabled' : ''}>${esc(label)}<small>${esc(modelReason(value, d, blocked, recommended))}</small></button>`
+      })
+      .join('') +
+      (shown.length < options.length ? `<button type="button" data-more>More models (${options.length - shown.length})…</button>` : '')
     const tier = getVlmTier(state.settings.modelVariant)
     go.textContent = `Download and start${tier ? ` · ${tier.downloadMB} MB` : ''}`
   }
@@ -3948,9 +3862,7 @@ if (dom.openaiBaseUrl) {
     setOpenAIKey(dom.openaiKey.value.trim(), dom.openaiRemember.checked)
     // Never leave the key sitting in the input's value.
     dom.openaiKey.value = ''
-    dom.openaiKey.placeholder = getOpenAIKey()
-      ? '•••••••• (saved)'
-      : 'Leave blank for local servers'
+    dom.openaiKey.placeholder = getOpenAIKey() ? '•••••••• (saved)' : 'Leave blank for local servers'
   })
 
   dom.openaiRemember.addEventListener('change', () => {
@@ -4364,14 +4276,11 @@ showWelcome(!state.settings.viewerOnly)
 const welcomeModel = document.getElementById('welcome-model')!
 welcomeModel.textContent = `${state.settings.modelVariant}${USE_WEBNN ? ' · WebNN' : ''}`
 if (deviceBadgeEl) {
-  new MutationObserver(() => (welcomeModel.textContent = deviceBadgeEl.textContent)).observe(
-    deviceBadgeEl,
-    {
-      childList: true,
-      characterData: true,
-      subtree: true
-    }
-  )
+  new MutationObserver(() => (welcomeModel.textContent = deviceBadgeEl.textContent)).observe(deviceBadgeEl, {
+    childList: true,
+    characterData: true,
+    subtree: true
+  })
 }
 for (const [card, tb] of [
   ['welcome-open', dom.openBtn],
@@ -4402,9 +4311,7 @@ dom.loadModelBtn.addEventListener('click', async () => {
   dom.loadModelBtn.disabled = true
   // Must run before any await: create() needs this click's user activation.
   if (state.settings.modelVariant === 'chrome-ai' && !chromeAIDownload && 'LanguageModel' in self) {
-    chromeAIDownload = downloadChromeAI((f) =>
-      setStatus(`Downloading Gemini Nano… ${(f * 100).toFixed(0)}%`)
-    )
+    chromeAIDownload = downloadChromeAI((f) => setStatus(`Downloading Gemini Nano… ${(f * 100).toFixed(0)}%`))
   }
   await loadModel()
 })
