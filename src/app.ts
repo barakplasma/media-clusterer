@@ -2186,7 +2186,7 @@ async function embedAll(files: PhotoFile[]) {
   cameraFollow = true
   const embedStart = performance.now()
   // Photos not embedded yet stay in their grid slot; the embedded ones glide
-  // to a PCA layout (fitted into the grid's bounds) every few seconds.
+  // to the selected projection (fitted into the grid's bounds) every few seconds.
   const grid = state.points
   let projecting = false
   let lastProjection = 0
@@ -2504,9 +2504,12 @@ async function embedAll(files: PhotoFile[]) {
     if (done >= 3 && !projecting && performance.now() - lastProjection >= 2500) {
       projecting = true
       lastProjection = performance.now()
-      runProjection(vectors.slice(0, done), 'PCA', Math.max(2, Math.min(15, done - 1)), {
-        silent: true
-      })
+      runProjection(
+        vectors.slice(0, done),
+        state.settings.projectionMethod,
+        Math.max(2, Math.min(15, done - 1)),
+        { silent: true }
+      )
         .then((raw) => spreadPointsAsync(raw, state.settings.density))
         .then((pts) => {
           if (state.phase !== 'embedding') return
