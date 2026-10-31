@@ -198,6 +198,8 @@ const dom: DOMElements = {
   slideshowModal: document.getElementById('slideshow-modal') as HTMLDialogElement,
   slideshowClose: document.getElementById('slideshow-close') as HTMLButtonElement,
   slideshowSimilarBtn: document.getElementById('slideshow-similar-btn') as HTMLButtonElement,
+  searchPercentSlider: document.getElementById('search-percent-slider') as HTMLInputElement,
+  searchPercentLabel: document.getElementById('search-percent-label') as HTMLSpanElement,
   slideshowSecondsSlider: document.getElementById('slideshow-seconds-slider') as HTMLInputElement,
   slideshowSecondsLabel: document.getElementById('slideshow-seconds-label') as HTMLSpanElement,
   slideshowCutVideosToggle: document.getElementById(
@@ -280,6 +282,7 @@ const DEFAULT_SETTINGS: Settings = {
   density: 1.0,
   loopVideos: true,
   drawBudget: IS_MOBILE ? 150 : 400,
+  searchPercent: 20,
   slideshowSeconds: 3,
   slideshowCutVideos: false,
   enableTextSearch: true, // the default model embeds text itself, so search costs no extra download
@@ -1181,6 +1184,10 @@ function render() {
     state.settings.drawBudget
   )
 
+  // Matches inside the cutoff shrink from full size (best) to 35% (last kept);
+  // everything past it is small and dim.
+  const keep = Math.max(1, Math.ceil((pts.length * state.settings.searchPercent) / 100))
+
   for (const i of visibleIndices) {
     if (isHidden(i)) continue
     const sx = (pts[i][0] - camera.x) * s + cxW
@@ -1189,18 +1196,19 @@ function render() {
     let alphaMultiplier = 1.0
     let highlightBorder = null
     let isSelected = i === currentActive
+    let sizeMul = 1
 
     if (state.searchResults) {
       const r = rank[i]
-      if (r < 20) {
-        highlightBorder = '#facc15' // Bright yellow for top results
-        alphaMultiplier = 1.0
-      } else if (r < 100) {
-        alphaMultiplier = 0.4
+      if (r < keep) {
+        sizeMul = 1 - 0.65 * (r / keep)
+        if (r < 20) highlightBorder = '#facc15' // Bright yellow for top results
       } else {
+        sizeMul = 0.3
         alphaMultiplier = 0.1
       }
     }
+    const ds = drawSize * sizeMul
 
     if (isSelected) {
       highlightBorder = '#fff'
@@ -1253,8 +1261,8 @@ function render() {
 
       if (fullImg.complete && fullImg.naturalWidth > 0) {
         const ratio = fullImg.naturalWidth / fullImg.naturalHeight
-        const dw = ratio >= 1 ? drawSize : drawSize * ratio
-        const dh = ratio >= 1 ? drawSize / ratio : drawSize
+        const dw = ratio >= 1 ? ds : ds * ratio
+        const dh = ratio >= 1 ? ds / ratio : ds
         ctx.globalAlpha = 0.9 * alphaMultiplier
         ctx.drawImage(fullImg, sx - dw / 2, sy - dh / 2, dw, dh)
         ctx.globalAlpha = 1.0
@@ -1276,8 +1284,8 @@ function render() {
         thumbnailLRU.add(i)
 
         const ratio = thumb.width / thumb.height
-        const dw = ratio >= 1 ? drawSize : drawSize * ratio
-        const dh = ratio >= 1 ? drawSize / ratio : drawSize
+        const dw = ratio >= 1 ? ds : ds * ratio
+        const dh = ratio >= 1 ? ds / ratio : ds
         ctx.globalAlpha = 0.9 * alphaMultiplier
         ctx.drawImage(thumb, sx - dw / 2, sy - dh / 2, dw, dh)
         ctx.globalAlpha = 1.0
@@ -3593,6 +3601,8 @@ const saveSettings = () => {
 // Sync UI with initial settings
 dom.densitySlider.value = state.settings.density.toString()
 dom.drawBudgetSlider.value = state.settings.drawBudget.toString()
+dom.searchPercentSlider.value = state.settings.searchPercent.toString()
+dom.searchPercentLabel.textContent = state.settings.searchPercent.toString()
 dom.slideshowSecondsSlider.value = state.settings.slideshowSeconds.toString()
 dom.slideshowSecondsLabel.textContent = state.settings.slideshowSeconds.toString()
 dom.slideshowCutVideosToggle.checked = state.settings.slideshowCutVideos
@@ -4091,6 +4101,13 @@ dom.densitySlider.addEventListener('input', async () => {
 
 dom.drawBudgetSlider.addEventListener('input', () => {
   state.settings.drawBudget = parseInt(dom.drawBudgetSlider.value)
+  saveSettings()
+  scheduleRender()
+})
+
+dom.searchPercentSlider.addEventListener('input', () => {
+  state.settings.searchPercent = parseInt(dom.searchPercentSlider.value)
+  dom.searchPercentLabel.textContent = dom.searchPercentSlider.value
   saveSettings()
   scheduleRender()
 })
