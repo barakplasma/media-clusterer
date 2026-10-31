@@ -150,9 +150,15 @@ function webnnForced(): boolean {
   }
 }
 
-/** EmbeddingGemma 2 goes through WebNN: a PowerVR GPU and WebNN (chrome://flags "WebNN API"). */
-export const USE_WEBNN =
-  typeof navigator !== 'undefined' && 'ml' in navigator && (isPowerVRRenderer() || webnnForced())
+/**
+ * EmbeddingGemma 2 goes through WebNN: a PowerVR GPU and WebNN (chrome://flags
+ * "WebNN API"). Starts from the synchronous WebGL guess; app.ts turns it on with
+ * useWebnn() when the WebGPU adapter names PowerVR but WebGL did not (Pixel 10).
+ */
+export let USE_WEBNN = typeof navigator !== 'undefined' && 'ml' in navigator && (isPowerVRRenderer() || webnnForced())
+export function useWebnn(on: boolean): void {
+  USE_WEBNN = on
+}
 
 const IS_PHONE =
   typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|CrOS/i.test(navigator.userAgent)

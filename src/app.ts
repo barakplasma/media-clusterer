@@ -21,7 +21,8 @@ import {
   THUMB_FRAME_PX,
   VLM_FRAME_PX,
   isPowerVRRenderer,
-  USE_WEBNN
+  USE_WEBNN,
+  useWebnn
 } from './vlmTiers'
 import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2'
 import {
@@ -393,8 +394,11 @@ function isPowerVR(adapter: GPUAdapter | null | undefined): boolean {
 // Pick the device before loading: after a failed WebGPU load, transformers.js
 // 4.3 fails the wasm retry with the same WebGPU error (seen on a GPU-less
 // Linux runner), so the catch-and-retry below alone never reached wasm.
-const webgpuOrWasm = async (): Promise<'webgpu' | 'wasm'> =>
-  (await navigator.gpu?.requestAdapter().catch(() => null)) ? 'webgpu' : 'wasm'
+// PowerVR (Pixel 10) counts as no GPU: its WebGPU is far too slow (see isPowerVR).
+const webgpuOrWasm = async (): Promise<'webgpu' | 'wasm'> => {
+  const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
+  return adapter && !isPowerVR(adapter) ? 'webgpu' : 'wasm'
+}
 
 // ── Model singleton ──────────────────────────────────────────────────────────
 let extractor: PipelineInstance | null = null // Vision model (for images)
@@ -450,11 +454,20 @@ const PROGRESSIVE_MIN_MS = 2500 // min time between progressive projections — 
 // near-continuously over the whole embed phase
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+const welcomeEl = document.getElementById('welcome')!
 const setStatus = (msg: string) => {
   dom.statusEl.textContent = msg
+  document.getElementById('welcome-status')!.textContent = msg
 }
 const setProgress = (pct: number) => {
-  dom.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`
+  const w = `${Math.min(100, Math.max(0, pct))}%`
+  dom.progressBar.style.width = w
+  document.getElementById('welcome-bar')!.style.width = w
+}
+/** The first-load card stands in for the empty map until files load. */
+function showWelcome(show: boolean) {
+  welcomeEl.hidden = !show
+  document.body.classList.toggle('welcome', show)
 }
 const yieldMain = () => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -1638,8 +1651,12 @@ async function loadModelOnce(signal?: AbortSignal) {
   }
 
   // navigator.gpu can exist with no usable adapter (emulators, blocklisted GPUs).
-  const eg2 = getVlmTier(state.settings.modelVariant)
-  if (eg2?.family === 'embeddinggemma2' && eg2.backend !== 'webnn') {
+  if (getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2') {
+    const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
+    // WebGL can miss a PowerVR GPU that WebGPU names (Pixel 10); WebNN runs there.
+    if ('ml' in navigator && isPowerVR(adapter)) useWebnn(true)
+  }
+  if (getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2' && !USE_WEBNN) {
     const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
     const saved = state.settings.modelVariant
     const slow = isPowerVR(adapter)
@@ -2566,6 +2583,7 @@ async function embedAll(files: PhotoFile[]) {
 
 // ── Main run ─────────────────────────────────────────────────────────────────
 async function processFiles(files: PhotoFile[]) {
+  showWelcome(false)
   if (files.length === 0) {
     setStatus('No images found.')
     return
@@ -3677,26 +3695,143 @@ if (dom.projectionSelect) {
   dom.projectionSelect.value = state.settings.projectionMethod
 }
 
-// The real capabilities: an adapter behind navigator.gpu, and Gemini Nano.
-Promise.all([
-  navigator.gpu?.requestAdapter().catch(() => null) ?? Promise.resolve(null),
-  getChromeAIAvailability()
-]).then(([adapter, avail]) => {
-  chromeAIAvailability = avail
-  const ranked = renderModelOptions({
-    webgpu: !!adapter || USE_WEBNN,
-    slowGpu: isPowerVR(adapter) && !USE_WEBNN,
-    chromeAI: avail !== 'unavailable'
-  })
-  // A saved Chrome AI choice that cannot run falls back to the recommendation.
-  // (EmbeddingGemma 2 without WebGPU is handled at load, for the session only.)
-  const recommended = ranked.find((o) => o.recommended)
-  if (state.settings.modelVariant === 'chrome-ai' && avail === 'unavailable' && recommended) {
-    state.settings.modelVariant = recommended.value
-    dom.modelSelect.value = recommended.value
-    saveSettings()
+// ── Setup wizard: check the device before any weights download ───────────────
+interface DeviceDiag {
+  adapter: GPUAdapter | null
+  powerVR: boolean
+  webnn: ('npu' | 'gpu' | 'cpu')[] // WebNN device types that create a context
+  chromeAI: LanguageModelAvailability
+  memoryGB?: number
+}
+
+/** A check that never answers (seen with the Chrome AI probe) must not stall the wizard. */
+const within = <T,>(p: Promise<T>, fallback: T, ms = 3000) =>
+  Promise.race([p.catch(() => fallback), new Promise<T>((r) => setTimeout(() => r(fallback), ms))])
+
+/** Cheap capability checks: no model files are fetched. */
+async function diagnoseDevice(): Promise<DeviceDiag> {
+  const ml = (navigator as Navigator & { ml?: { createContext: (o: { deviceType: string }) => Promise<unknown> } }).ml
+  const [adapter, chromeAI, ...contexts] = await Promise.all([
+    within(navigator.gpu?.requestAdapter() ?? Promise.resolve(null), null),
+    within(getChromeAIAvailability(), 'unavailable' as LanguageModelAvailability),
+    ...(['npu', 'gpu', 'cpu'] as const).map((t) =>
+      ml ? within(ml.createContext({ deviceType: t }).then(() => t), null) : Promise.resolve(null)
+    )
+  ])
+  const webnn = contexts.filter((t): t is 'npu' | 'gpu' | 'cpu' => !!t)
+  return { adapter, powerVR: isPowerVR(adapter), webnn, chromeAI, memoryGB: (navigator as { deviceMemory?: number }).deviceMemory }
+}
+
+const esc = (t: string) => t.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
+const modelSizeLabel = (v: ModelVariant) => {
+  const tier = getVlmTier(v)
+  if (!tier) return modelLabels.get(v)?.text ?? v
+  return `${tier.family === 'embeddinggemma2' ? 'EmbeddingGemma 2' : 'SmolVLM2 vision'} · ${tier.downloadMB} MB`
+}
+
+/** Why the wizard suggests (or can't run) a model, in plain words. */
+function modelReason(v: ModelVariant, d: DeviceDiag, blocked: string | null, recommended: boolean): string {
+  if (blocked) return `Can't run here: ${blocked}.`
+  const b = MODEL_BADGES[v]
+  const ranks = b ? `Benchmark: speed #${b.speed}, quality #${b.quality}.` : ''
+  if (v === 'embeddinggemma2') {
+    return USE_WEBNN
+      ? `Runs on WebNN (${d.webnn[0]?.toUpperCase() ?? 'NPU'}): this graphics chip is too slow for WebGPU. About 3 s per photo on a Pixel 10. ${ranks}`
+      : `Runs on your graphics chip (WebGPU); also answers text searches itself. ${ranks}`
   }
-})
+  if (v === 'nomic' && recommended) return `No graphics chip this model can use, so it runs on the CPU. ${ranks}`
+  return ranks
+}
+
+function renderChecks(d: DeviceDiag) {
+  const gpu = d.adapter
+    ? `${d.adapter.info.vendor || 'GPU'} ${d.adapter.info.architecture}`.trim() +
+      (d.powerVR ? ': too slow for AI on WebGPU' : d.adapter.info.isFallbackAdapter ? ': software only (slow)' : ' ✓')
+    : 'not available to web pages'
+  const lines = [
+    `🎮 Graphics (WebGPU): ${gpu}`,
+    `⚡ WebNN: ${d.webnn.length ? `${d.webnn.join(', ').toUpperCase()} ✓` : 'off (chrome://flags → "WebNN API")'}`,
+    ...(d.memoryGB ? [`🧠 Memory: ${d.memoryGB} GB`] : []),
+    ...(d.chromeAI !== 'unavailable' ? [`💬 Chrome AI: ${d.chromeAI}`] : [])
+  ]
+  document.getElementById('wizard-checks')!.innerHTML = lines.map((l) => `<li>${esc(l)}</li>`).join('')
+}
+
+/**
+ * Runs before any model weights download: check the device, rank the models
+ * for it (src/modelRanking.ts), and pre-select the one most likely to work.
+ * A first visit waits for a tap on the pick (the download can be 880 MB);
+ * a saved choice loads right away, through loadModel's usual fallbacks.
+ */
+async function runSetupWizard() {
+  const d = await diagnoseDevice()
+  chromeAIAvailability = d.chromeAI
+  // WebGL can miss a PowerVR GPU that WebGPU names (Pixel 10); WebNN runs there.
+  if (d.powerVR && d.webnn.length) useWebnn(true)
+  const ranked = renderModelOptions({
+    webgpu: !!d.adapter || USE_WEBNN,
+    slowGpu: d.powerVR && !USE_WEBNN,
+    chromeAI: d.chromeAI !== 'unavailable'
+  })
+  renderChecks(d)
+  const current = document.getElementById('wizard-current')!
+  if (savedSettings) {
+    // A saved Chrome AI choice that cannot run falls back to the recommendation.
+    // (EmbeddingGemma 2 without WebGPU is handled at load, for the session only.)
+    const recommended = ranked.find((o) => o.recommended)
+    if (state.settings.modelVariant === 'chrome-ai' && d.chromeAI === 'unavailable' && recommended) {
+      state.settings.modelVariant = recommended.value
+      dom.modelSelect.value = recommended.value
+      saveSettings()
+    }
+    current.hidden = false
+    autoLoadModel()
+    return
+  }
+
+  const pick = ranked.find((o) => o.recommended)
+  if (pick) state.settings.modelVariant = pick.value
+  dom.modelSelect.value = state.settings.modelVariant
+  const optionsEl = document.getElementById('wizard-options')!
+  const go = document.getElementById('wizard-go') as HTMLButtonElement
+  const options = ranked.filter((o) => o.value !== 'openai' && (o.value !== 'chrome-ai' || !o.blocked))
+  let showAll = false
+  const render = () => {
+    // The pick and two alternatives; the rest on request, so Start stays in view.
+    const shown = showAll ? options : options.filter((o, i) => i < 3 || o.value === state.settings.modelVariant)
+    optionsEl.innerHTML = shown
+      .map(({ value, blocked, recommended }) => {
+        const label = `${recommended ? '★ ' : ''}${modelSizeLabel(value)}${recommended ? ' (recommended)' : ''}`
+        return `<button type="button" role="radio" data-v="${value}" aria-checked="${value === state.settings.modelVariant}" ${blocked ? 'disabled' : ''}>${esc(label)}<small>${esc(modelReason(value, d, blocked, recommended))}</small></button>`
+      })
+      .join('') +
+      (shown.length < options.length ? `<button type="button" data-more>More models (${options.length - shown.length})…</button>` : '')
+    const tier = getVlmTier(state.settings.modelVariant)
+    go.textContent = `Download and start${tier ? ` · ${tier.downloadMB} MB` : ''}`
+  }
+  optionsEl.onclick = (e) => {
+    const btn = (e.target as HTMLElement).closest('button')
+    if (!btn || btn.disabled) return
+    if (btn.hasAttribute('data-more')) {
+      showAll = true
+      return render()
+    }
+    state.settings.modelVariant = btn.dataset.v as ModelVariant
+    dom.modelSelect.value = state.settings.modelVariant
+    render()
+  }
+  go.onclick = () => {
+    saveSettings()
+    updateChromeAIPromptVisibility()
+    updateTextSearchAvailability()
+    optionsEl.hidden = go.hidden = true
+    current.hidden = false
+    autoLoadModel()
+  }
+  render()
+  go.hidden = false
+  setStatus('Pick a model to start. Nothing has been downloaded yet.')
+}
 
 // Initialize Chrome AI prompt textarea with stored value
 const updateChromeAIPromptVisibility = () => {
@@ -3995,14 +4130,14 @@ if (hasMemoryAPI && !savedSettings) {
   const optimal = computeOptimalBatchSize()
   state.settings.batchSize = optimal
   dom.batchSizeInput.value = optimal.toString()
-  saveSettings()
+  // Not saved: a saved mc_settings marks a returning visitor, who skips the setup wizard.
 }
 
 dom.batchSizeAutoBtn.addEventListener('click', () => {
   const optimal = computeOptimalBatchSize()
   state.settings.batchSize = optimal
   dom.batchSizeInput.value = optimal.toString()
-  saveSettings()
+  // Not saved: a saved mc_settings marks a returning visitor, who skips the setup wizard.
 })
 
 dom.randomSampleSizeInput.addEventListener('input', () => {
@@ -4142,10 +4277,28 @@ window.addEventListener('resize', () => {
 // ── Init ─────────────────────────────────────────────────────────────────────
 resizeCanvas()
 
-// Open about modal on first-ever visit
-if (!localStorage.getItem('mc_hasVisited')) {
-  localStorage.setItem('mc_hasVisited', 'true')
-  dom.aboutModal.showModal()
+// First-load card (replaces the about modal that used to open on a first visit).
+showWelcome(!state.settings.viewerOnly)
+// Until a model loads, name the one that will; then follow the toolbar badge.
+const welcomeModel = document.getElementById('welcome-model')!
+welcomeModel.textContent = `${state.settings.modelVariant}${USE_WEBNN ? ' · WebNN' : ''}`
+if (deviceBadgeEl) {
+  new MutationObserver(() => (welcomeModel.textContent = deviceBadgeEl.textContent)).observe(deviceBadgeEl, {
+    childList: true,
+    characterData: true,
+    subtree: true
+  })
+}
+for (const [card, tb] of [
+  ['welcome-open', dom.openBtn],
+  ['welcome-demo', dom.demoBtn]
+] as const) {
+  const btn = document.getElementById(card) as HTMLButtonElement
+  btn.onclick = () => tb.click()
+  // Mirror the toolbar button's enabled state, which the load flow toggles.
+  const sync = () => (btn.disabled = tb.disabled)
+  new MutationObserver(sync).observe(tb, { attributes: true, attributeFilter: ['disabled'] })
+  sync()
 }
 
 const _savedKeys = localStorage.getItem('po_fileKeys')
@@ -4362,7 +4515,7 @@ function autoLoadModel() {
 }
 
 if (!state.settings.viewerOnly) {
-  autoLoadModel()
+  void runSetupWizard()
 } else {
   // Viewer mode: update UI to reflect no AI needed
   dom.loadModelBtn.hidden = true

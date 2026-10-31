@@ -46,3 +46,18 @@ test('a saved WebGPU-only model falls back when there is no adapter', async ({ p
   await page.locator('#density-slider').dispatchEvent('input')
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('mc_settings')!).modelVariant)).toBe('embeddinggemma2')
 })
+
+test('first visit: the setup wizard checks the device and waits before downloading', async ({ page }) => {
+  const modelFetches: string[] = []
+  page.on('request', (r) => {
+    if (/huggingface\.co|\.onnx/.test(r.url())) modelFetches.push(r.url())
+  })
+  await page.goto('/')
+  await expect(page.locator('#wizard-checks')).toContainText('Graphics (WebGPU)')
+  // No adapter here, so the pick is the model that runs on the CPU.
+  await expect(page.locator('#wizard-options [aria-checked="true"]')).toContainText('nomic')
+  await expect(page.locator('#wizard-go')).toBeVisible()
+  await page.waitForTimeout(1000)
+  expect(modelFetches, 'no weights before the user starts').toEqual([])
+  expect(await page.evaluate(() => localStorage.getItem('mc_settings')), 'first visit stays a first visit').toBeNull()
+})

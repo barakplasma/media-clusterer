@@ -26,7 +26,8 @@ const EMBED_WIDTH = 512
 let embedTable: Uint16Array | null = null
 const params = new URLSearchParams(location.search)
 const device = params.get('device') ?? 'webnn-npu'
-const dtype = params.get('dtype') ?? (device === 'webgpu' ? 'q4' : 'fp16')
+// fp16 everywhere, so the three backends compare the same model (WASM runs the stock graph as a reference).
+const dtype = params.get('dtype') ?? 'fp16'
 
 // ── Report: the TypeScript shape and the JSON Schema shipped with the copy ──
 
@@ -705,7 +706,8 @@ async function run(): Promise<void> {
       const suffix = dtype === 'fp32' ? '' : `_${dtype}`
       // fp16 text model on WebNN: our graph without the 268 MB embedding table
       // (scripts/webnn_split_embed.py), which WebNN refuses to build.
-      part.embedInJs = name === 'model' && dtype === 'fp16' && device.startsWith('webnn')
+      // WebGPU needs it too: the table is above typical 128 MB storage-binding limits.
+      part.embedInJs = name === 'model' && dtype === 'fp16' && device !== 'wasm'
       const graph = part.embedInJs
         ? await ownGraph('model_fp16_noembed.onnx')
         : await cachedFetch(`${name}${suffix}.onnx`)
