@@ -16,6 +16,11 @@ import * as ort from 'onnxruntime-web'
 const REPO = 'onnx-community/embeddinggemma-2-ONNX'
 const IMAGE_TOKENS = 70 // phone profile (src/vlmTiers.ts PHONE_OVERRIDES)
 const SEQ_LEN = 296
+// model.embed_tokens.weight inside model_fp16.onnx_data (printed by scripts/webnn_split_embed.py).
+const EMBED_OFFSET = 1024
+const EMBED_ROWS = 262144
+const EMBED_WIDTH = 512
+let embedTable: Uint16Array | null = null
 const params = new URLSearchParams(location.search)
 const device = params.get('device') ?? 'webnn-npu'
 const dtype = params.get('dtype') ?? (device === 'webgpu' ? 'q4' : 'fp16')
@@ -192,8 +197,14 @@ async function run(): Promise<void> {
       phase = `download ${part}`
       const tDl = performance.now()
       const suffix = dtype === 'fp32' ? '' : `_${dtype}`
-      const graph = await cachedFetch(`${part}${suffix}.onnx`)
+      // fp16 text model: our graph without the 268 MB embedding table
+      // (scripts/webnn_split_embed.py), which WebNN refuses to build.
+      const split = part === 'model' && dtype === 'fp16' && device.startsWith('webnn')
+      const graph = split
+        ? new Uint8Array(await (await fetch(`${import.meta.env.BASE_URL}models/embeddinggemma2-webnn/model_fp16_noembed.onnx`)).arrayBuffer())
+        : await cachedFetch(`${part}${suffix}.onnx`)
       const data = await cachedFetch(`${part}${suffix}.onnx_data`)
+      if (split) embedTable = new Uint16Array(data.buffer, data.byteOffset + EMBED_OFFSET, EMBED_ROWS * EMBED_WIDTH)
       log(`download ${part} ${secs(tDl)} (${((graph.byteLength + data.byteLength) / 1e6).toFixed(0)} MB)`)
       phase = `compile ${part}`
       const tC = performance.now()
@@ -225,8 +236,18 @@ async function run(): Promise<void> {
       const vis = await vision(inp)
       const vMs = performance.now() - tV
       const empty = new ort.Tensor('float32', new Float32Array(0), [0, 512])
+      const ids = t(inp, 'input_ids')
+      const feeds: Record<string, ort.Tensor> = {}
+      if (embedTable) {
+        // The lookup the graph no longer does: one fp16 row per token.
+        const idData = ids.data as BigInt64Array
+        const rows = new Uint16Array(idData.length * EMBED_WIDTH)
+        idData.forEach((id, i) => rows.set(embedTable!.subarray(Number(id) * EMBED_WIDTH, (Number(id) + 1) * EMBED_WIDTH), i * EMBED_WIDTH))
+        feeds.inputs_embeds = new ort.Tensor('float16', rows, [...ids.dims, EMBED_WIDTH])
+      }
       const out = await sessions.model.run({
-        input_ids: t(inp, 'input_ids'), attention_mask: t(inp, 'attention_mask'),
+        ...feeds,
+        input_ids: ids, attention_mask: t(inp, 'attention_mask'),
         image_features: vis.image_features, video_features: empty, audio_features: empty
       })
       log(`  vision ${(vMs / 1000).toFixed(2)}s, text ${((performance.now() - tV - vMs) / 1000).toFixed(2)}s`)
