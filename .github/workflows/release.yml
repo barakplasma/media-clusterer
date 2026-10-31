@@ -1,0 +1,27 @@
+name: Release
+
+# Run by hand (Actions tab, or the API) after a version bump lands on main:
+# tags the commit with the package.json version and publishes
+# docs/releases/v<version>.md as the notes. No inputs, so the build output
+# depends only on the commit (checkov CKV_GHA_7).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="$(node -p "require('./package.json').version")"
+          notes="docs/releases/v${v}.md"
+          test -f "$notes" || { echo "::error::missing $notes"; exit 1; }
+          gh release create "v${v}" --target "$GITHUB_SHA" --title "v${v}" --notes-file "$notes"

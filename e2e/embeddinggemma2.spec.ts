@@ -21,6 +21,8 @@ type Debug = {
   }
   embedFailed: Set<number>
   processFiles: (files: unknown[]) => Promise<void>
+  updateURL: (s: unknown) => void
+  parseURLHash: (h: string) => { granularity: string; year: number; month?: number }
   searchImages: (q: string) => Promise<void>
 }
 declare global {
@@ -29,14 +31,15 @@ declare global {
   }
 }
 
-test('EmbeddingGemma 2 embeds photos and videos and finds them by text', async ({ page }) => {
+test('EmbeddingGemma 2 embeds photos and videos and finds them by text', async ({ page }, testInfo) => {
+  const webnn = testInfo.project.name === 'webnn'
   page.on('console', (m) => {
     if (!m.text().includes('[vite]')) console.log(`[${m.type()}] ${m.text().slice(0, 300)}`)
   })
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
-  await page.addInitScript(() =>
+  await page.addInitScript((webnn) => {
     localStorage.setItem('mc_settings', JSON.stringify({ modelVariant: 'embeddinggemma2', enableTextSearch: true }))
-  )
+  }, webnn)
   await page.goto('/')
 
   const adapter = await page.evaluate(async () => {
@@ -44,8 +47,12 @@ test('EmbeddingGemma 2 embeds photos and videos and finds them by text', async (
     return a && { vendor: a.info.vendor, fallback: a.info.isFallbackAdapter }
   })
   console.log('adapter', adapter)
-  expect(adapter, 'this browser has no WebGPU adapter').toBeTruthy()
-  if (!process.env.SWIFTSHADER) expect(adapter!.fallback, 'software WebGPU adapter; needs a real GPU').toBe(false)
+  if (webnn) {
+    expect(await page.evaluate(() => 'ml' in navigator), 'no WebNN (navigator.ml)').toBe(true)
+  } else {
+    expect(adapter, 'this browser has no WebGPU adapter').toBeTruthy()
+    if (!process.env.SWIFTSHADER) expect(adapter!.fallback, 'software WebGPU adapter; needs a real GPU').toBe(false)
+  }
 
   // The app starts loading the model on its own.
   const t0 = Date.now()
@@ -54,6 +61,8 @@ test('EmbeddingGemma 2 embeds photos and videos and finds them by text', async (
     polling: 2000,
   })
   console.log(`model ready in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
+  // WebNN is preferred whenever offered, most native device first.
+  if (webnn) await expect(page.locator('#device-badge')).toContainText('WebNN')
 
   const t1 = Date.now()
   const run = await page.evaluate(async (names) => {

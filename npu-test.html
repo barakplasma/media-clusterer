@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="EmbeddingGemma 2 on WebNN (NPU/GPU/CPU): diagnostics and timings." />
+  <title>EG2 NPU test</title>
+  <style>
+    :root {
+      --bg: #f6f7f9; --card: #fff; --text: #1c2330; --muted: #5d6878; --line: #e2e6ec;
+      --accent: #2f6fdb; --ok: #1a7f4b; --ok-bg: #e3f5eb; --bad: #c0362c; --bad-bg: #fbe7e5;
+      --run: #8a5a00; --run-bg: #fdf1d6;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #11151c; --card: #1a2029; --text: #e6e9ef; --muted: #98a2b3; --line: #2b3340;
+        --accent: #6b9bff; --ok: #5fd08f; --ok-bg: #173325; --bad: #ff7b70; --bad-bg: #3a1d1b;
+        --run: #f0c060; --run-bg: #3a2f14;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 16px; }
+    h1 { font-size: 20px; margin: 0; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+    .badge { padding: 4px 10px; border-radius: 999px; font-weight: 600; font-size: 13px; }
+    .badge.running { color: var(--run); background: var(--run-bg); }
+    .badge.pass { color: var(--ok); background: var(--ok-bg); }
+    .badge.fail { color: var(--bad); background: var(--bad-bg); }
+    nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    nav a { padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--accent); text-decoration: none; background: var(--card); font-size: 14px; }
+    nav a.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .actions { display: flex; gap: 8px; margin-bottom: 12px; }
+    button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+    button.secondary { background: var(--card); color: var(--accent); }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 12px; overflow-x: auto; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+    .tile { border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+    .tile b { display: block; font-size: 22px; }
+    .tile span { color: var(--muted); font-size: 13px; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; }
+    .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+    code, pre { font: 12px/1.4 ui-monospace, monospace; }
+    pre { white-space: pre-wrap; word-break: break-all; margin: 0; }
+    details summary { cursor: pointer; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1><a href="./" style="text-decoration:none" title="Back to the app">←</a> EmbeddingGemma 2 · speed test</h1>
+      <span id="status" class="badge running">running</span>
+    </header>
+    <nav id="devices">
+      <a href="?device=webnn-npu">WebNN NPU</a>
+      <a href="?device=webnn-gpu">WebNN GPU</a>
+      <a href="?device=webnn-cpu">WebNN CPU</a>
+      <a href="?device=webgpu">WebGPU</a>
+      <a href="?device=wasm">WASM (reference)</a>
+      <a href="?diag=1">Diagnostics only</a>
+    </nav>
+    <div class="actions">
+      <button id="copy-json" type="button">Copy JSON</button>
+      <button id="copy-log" type="button" class="secondary">Copy log</button>
+    </div>
+    <div id="report"></div>
+    <details class="card">
+      <summary>Raw log</summary>
+      <pre id="log"></pre>
+    </details>
+  </main>
+  <script type="module" src="/src/npuTest.ts"></script>
+</body>
+</html>

@@ -30,7 +30,7 @@ flowchart LR
 
 ## Things that look wrong but aren't
 
-- **Pixel 10:** left out on purpose. Chrome blocklists its PowerVR driver for WebGPU (`gpu/config/webgpu_blocklist_impl.cc`, pattern `"*:*:PowerVR*25.1*"`), so the adapter is `null`. With the flag forced on it runs on real hardware (`img-tec d-series`), but at about 330 s per photo, and the GPU watchdog reset it (`GUILTY_OVERRUNING`). Real users there get SmolVLM2 plus the help modal.
+- **Pixel 10:** left out on purpose. Chrome blocklists its PowerVR driver for WebGPU (`gpu/config/webgpu_blocklist_impl.cc`, pattern `"*:*:PowerVR*25.1*"`), so the adapter is `null`. With the flag forced on it runs on real hardware (`img-tec d-series`), but at about 330 s per photo, and the GPU watchdog reset it (`GUILTY_OVERRUNING`). Real users there get SmolVLM2 plus the help modal. **Update 2026-10-31:** Chrome now exposes the adapter with no flag, so a Pixel 10 started loading EmbeddingGemma 2 and froze at ~95%. On WebGPU it is unusable, but WebNN (chrome://flags "WebNN API") runs EmbeddingGemma 2 there at ~3 s per photo, so PowerVR + WebNN now uses the WebNN path (`USE_WEBNN` in `src/vlmTiers.ts`, `src/vlmWebnn.ts`); PowerVR without WebNN falls back to nomic (`isPowerVR()` in `src/app.ts`).
 - **Safari:** Safari 26.6 on GitHub's `macos-26` runner returns no WebGPU adapter, so there is no Safari job (actionlint rejects `if: false`). Add one back to e2e.yml when that changes; the comment at its end says how. The test is `e2e/safari/` (node:test + safaridriver).
 - **Linux/Windows hosted runners:** SwiftShader only, no real GPU. Don't run the GPU suite there.
 - **Test Lab stock Chrome is too old:** Chrome 103 on the Pixel 7a has no WebGPU, so the workflow sideloads Chromium 158 (snapshot rev 1725074).

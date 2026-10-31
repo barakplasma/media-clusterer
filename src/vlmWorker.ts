@@ -119,7 +119,7 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
   await dispose()
 
   // Checked before any download: without WebGPU this tier cannot run at all.
-  if (tier.family === 'embeddinggemma2' && !(await hasWebGpu())) {
+  if (tier.family === 'embeddinggemma2' && tier.backend !== 'webnn' && !(await hasWebGpu())) {
     throw new Error(
       `${tier.id} needs WebGPU, which this browser or device does not offer. ` +
         'Pick SmolVLM2 or nomic in Settings.'
@@ -153,28 +153,43 @@ async function load(id: number, tier: VlmTier, remoteHost: string): Promise<void
       // Video frames default to a smaller budget than stills; only ever lower it.
       const frames = p.video_processor?.frame_processor
       if (frames) frames.max_soft_tokens = Math.min(frames.max_soft_tokens, tier.imageTokens)
+      // WebNN pins the vision encoder to one patch count, so frames must pad to the stills' budget.
+      if (frames && tier.backend === 'webnn') frames.max_soft_tokens = tier.imageTokens
     }
-    // Dropping audio_config skips the 189 MB audio encoder: this app embeds
-    // images and video frames only.
-    const config = await AutoConfig.from_pretrained(tier.repo, { progress_callback })
-    ;(config as unknown as { audio_config: unknown }).audio_config = null
-    // No WASM fallback (see the WebGPU check above): both quantized exports
-    // (q4, q8) use GatherBlockQuantized, which onnxruntime-web implements only
-    // on WebGPU ("Could not find an implementation", verified in Chromium), and
-    // fp32 is ~1.75 GB.
-    model = (await AutoModel.from_pretrained(tier.repo, {
-      config,
-      dtype: tier.dtype,
-      progress_callback,
-      device: 'webgpu',
-      session_options: {
-        // The default 'bucket' cache keeps every freed GPU buffer for reuse.
-        // Photos vary in shape, so it grew until a Pixel 7a had no device
-        // memory left for the first search (VK_ERROR_OUT_OF_DEVICE_MEMORY).
-        executionProviders: [{ name: 'webgpu', storageBufferCacheMode: 'lazyRelease' }]
-      }
-    })) as unknown as typeof model
-    device = 'webgpu'
+    if (tier.backend === 'webnn') {
+      // The processor pads every still to the same patch count; read it off a probe.
+      const probe = (await (processor as unknown as Gemma2Processor)(
+        null, [[new RawImage(new Uint8ClampedArray(64 * 48 * 4), 64, 48, 4)]], null, null, seqOptions(tier)
+      )) as { pixel_values: { dims: number[] } }
+      const { loadWebnnModel } = await import('./vlmWebnn')
+      const loaded = await loadWebnnModel(tier, env.remoteHost, probe.pixel_values.dims[1], (file, loaded, total) =>
+        post({ type: 'progress', id, file, loaded, total })
+      )
+      model = loaded.model
+      device = `webnn-${loaded.device}`
+    } else {
+      // Dropping audio_config skips the 189 MB audio encoder: this app embeds
+      // images and video frames only.
+      const config = await AutoConfig.from_pretrained(tier.repo, { progress_callback })
+      ;(config as unknown as { audio_config: unknown }).audio_config = null
+      // No WASM fallback (see the WebGPU check above): both quantized exports
+      // (q4, q8) use GatherBlockQuantized, which onnxruntime-web implements only
+      // on WebGPU ("Could not find an implementation", verified in Chromium), and
+      // fp32 is ~1.75 GB.
+      model = (await AutoModel.from_pretrained(tier.repo, {
+        config,
+        dtype: tier.dtype,
+        progress_callback,
+        device: 'webgpu',
+        session_options: {
+          // The default 'bucket' cache keeps every freed GPU buffer for reuse.
+          // Photos vary in shape, so it grew until a Pixel 7a had no device
+          // memory left for the first search (VK_ERROR_OUT_OF_DEVICE_MEMORY).
+          executionProviders: [{ name: 'webgpu', storageBufferCacheMode: 'lazyRelease' }]
+        }
+      })) as unknown as typeof model
+      device = 'webgpu'
+    }
     loadedTier = tier
     // Build the text path's GPU pipelines now, while memory is free, instead
     // of at the first search after a whole folder has been embedded.

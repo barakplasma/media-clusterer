@@ -33,6 +33,19 @@ export default defineConfig({
     // The app picks its phone profile (fewer image tokens, fixed sequence length) from the UA.
     { name: 'phone', testMatch: 'embeddinggemma2.spec.ts', use: { userAgent: PIXEL_UA } },
     { name: 'desktop', testMatch: 'embeddinggemma2.spec.ts' },
+    // The WebNN path (src/vlmWebnn.ts), which the app prefers whenever the
+    // browser has WebNN; the flag below turns it on. No GPU needed.
+    {
+      name: 'webnn',
+      testMatch: 'embeddinggemma2.spec.ts',
+      use: {
+        userAgent: PIXEL_UA,
+        launchOptions: {
+          ...(swiftshader ? { executablePath: swiftshader } : {}),
+          args: ['--enable-features=WebMachineLearningNeuralNetwork'],
+        },
+      },
+    },
     // No GPU needed: `npm test`, the pre-commit hook and the Linux deploy job.
     { name: 'cpu', testMatch: 'cpu.spec.ts', timeout: 60_000 },
     // Chrome's built-in Gemini Nano; the spec launches its own persistent

@@ -7,7 +7,7 @@
  * the descriptor rather than re-deriving it from the variant string.
  */
 
-import type { ModelVariant, VlmTier } from './types'
+import type { ModelVariant, VlmTier, WebnnDevice } from './types'
 
 // Longest-edge pixel sizes. These are deliberately different values, not one
 // constant reused: the display thumbnail and the VLM input serve different
@@ -108,6 +108,54 @@ const PHONE_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
     cachePrefix: '@embeddinggemma2-q4-t70-s296/'
   }
 }
+// The most native path first: WebNN (NPU, then GPU, then CPU) whenever the
+// browser offers it, then WebGPU (see useWebnn). On a Pixel 10, WebNN ran
+// EmbeddingGemma 2 at ~3 s per photo where WebGPU took ~330 s (npu-test.html).
+// WebNN needs the fp16 files (the q4 ones use ops WebNN lacks) and fixed
+// shapes; its own cache prefix because fp16 embeds a little differently from
+// q4. Image tokens / frames / length match the phone row.
+const WEBNN_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
+  embeddinggemma2: {
+    backend: 'webnn',
+    dtype: 'fp16',
+    imageTokens: 70,
+    framesPerVideo: 4,
+    fixedSeqLen: 296,
+    cachePrefix: '@embeddinggemma2-fp16-webnn-t70-s296/',
+    downloadMB: 880 // text 543 (of which the 268 MB embedding table) + vision 336 + tokenizer 32
+  }
+}
+
+/**
+ * Whether WebGL reports a PowerVR GPU. WebGL names the GPU even when WebGPU
+ * hides it (Chrome's blocklist), and answers synchronously, so tiers can be
+ * chosen before anything loads. False off the main thread.
+ */
+export function isPowerVRRenderer(): boolean {
+  if (typeof document === 'undefined') return false
+  try {
+    const gl = document.createElement('canvas').getContext('webgl')
+    const ext = gl?.getExtension('WEBGL_debug_renderer_info')
+    return !!gl && !!ext && /PowerVR|Imagination/i.test(String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)))
+  } catch {
+    return false
+  }
+}
+
+
+/**
+ * Whether EmbeddingGemma 2 goes through WebNN. Off until app.ts's device
+ * check (runSetupWizard) finds WebNN contexts, which it does before any model
+ * loads; then on for every device that has WebNN, whatever its GPU.
+ */
+export let USE_WEBNN = false
+/** WebNN device types that created a context, most native first (npu, gpu, cpu). */
+export let WEBNN_DEVICES: WebnnDevice[] = []
+export function useWebnn(devices: WebnnDevice[]): void {
+  WEBNN_DEVICES = devices
+  USE_WEBNN = devices.length > 0
+}
+
 const IS_PHONE =
   typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|CrOS/i.test(navigator.userAgent)
 
@@ -137,7 +185,8 @@ export function getVlmTier(variant: ModelVariant, phone = USE_LIGHT): VlmTier | 
   const tier = TIERS[variant]
   if (!tier) return null
   const phoneRow = phone ? PHONE_OVERRIDES[variant] : undefined
-  return phoneRow ? { ...tier, ...phoneRow } : tier
+  const webnnRow = USE_WEBNN && WEBNN_OVERRIDES[variant] ? { ...WEBNN_OVERRIDES[variant], webnnDevices: WEBNN_DEVICES } : undefined
+  return { ...tier, ...phoneRow, ...webnnRow }
 }
 
 /** Every declared tier, including ones not yet offered to users. */
