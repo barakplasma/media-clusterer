@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="EmbeddingGemma 2 on WebNN (NPU/GPU/CPU): diagnostics and timings." />
+  <title>EG2 NPU test</title>
+</head>
+<body style="font-family: monospace; font-size: 12px; margin: 8px">
+  <p>
+    Run on:
+    <a href="?device=webnn-npu">WebNN NPU</a> ·
+    <a href="?device=webnn-gpu">WebNN GPU</a> ·
+    <a href="?device=webnn-cpu">WebNN CPU</a> ·
+    <a href="?device=webgpu">WebGPU</a> ·
+    <a href="?diag=1">diagnostics only</a>
+    (add <code>&amp;verbose=1</code> for ORT logs)
+  </p>
+  <button id="copy" type="button">Copy log</button>
+  <pre id="log" style="white-space: pre-wrap; word-break: break-all"></pre>
+  <script type="module" src="/src/npuTest.ts"></script>
+</body>
+</html>
