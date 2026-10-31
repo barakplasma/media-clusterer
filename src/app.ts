@@ -379,6 +379,20 @@ function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
   return true
 }
 
+// Pixel 10's PowerVR GPU (Chrome blocklists it; forcing the flag on works):
+// ~330 s per photo, the GPU watchdog resets, and loading EmbeddingGemma 2
+// froze the phone at ~95%. WebGL names the GPU even when WebGPU hides it.
+function isPowerVR(adapter: GPUAdapter | null | undefined): boolean {
+  if (adapter?.info?.vendor === 'img-tec') return true
+  try {
+    const gl = document.createElement('canvas').getContext('webgl')
+    const ext = gl?.getExtension('WEBGL_debug_renderer_info')
+    return !!gl && !!ext && /PowerVR|Imagination/i.test(String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)))
+  } catch {
+    return false
+  }
+}
+
 // Pick the device before loading: after a failed WebGPU load, transformers.js
 // 4.3 fails the wasm retry with the same WebGPU error (seen on a GPU-less
 // Linux runner), so the catch-and-retry below alone never reached wasm.
@@ -1630,12 +1644,16 @@ async function loadModelOnce(signal?: AbortSignal) {
   if (getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2') {
     const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
     const saved = state.settings.modelVariant
-    if (!adapter) {
+    const slow = isPowerVR(adapter)
+    if (!adapter || slow) {
       if (savedSettings) modelStandIn = { saved, used: NO_WEBGPU_MODEL }
       state.settings.modelVariant = NO_WEBGPU_MODEL
       dom.modelSelect.value = NO_WEBGPU_MODEL
     }
-    if (!adapter || adapter.info?.isFallbackAdapter) {
+    if (slow) {
+      // Never point these users at the WebGPU flag: it is what makes it hang.
+      if (savedSettings) showToast(`${saved} is too slow on this GPU — using ${NO_WEBGPU_MODEL} instead.`, 'warn', 8000)
+    } else if (!adapter || adapter.info?.isFallbackAdapter) {
       const shown = showWebGpuHelp(!adapter ? 'blocked' : 'software', saved)
       if (!shown && !adapter && savedSettings) {
         showToast(`${saved} needs WebGPU, which this device lacks — using ${NO_WEBGPU_MODEL} this session.`, 'warn', 8000)
@@ -3667,7 +3685,7 @@ Promise.all([
   getChromeAIAvailability()
 ]).then(([adapter, avail]) => {
   chromeAIAvailability = avail
-  const ranked = renderModelOptions({ webgpu: !!adapter, chromeAI: avail !== 'unavailable' })
+  const ranked = renderModelOptions({ webgpu: !!adapter, slowGpu: isPowerVR(adapter), chromeAI: avail !== 'unavailable' })
   // A saved Chrome AI choice that cannot run falls back to the recommendation.
   // (EmbeddingGemma 2 without WebGPU is handled at load, for the session only.)
   const recommended = ranked.find((o) => o.recommended)

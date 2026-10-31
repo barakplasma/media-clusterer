@@ -14,6 +14,8 @@ import type { ModelVariant, ProjectionMethod } from './types'
 export interface DeviceCaps {
   /** A real WebGPU adapter exists (navigator.gpu alone is not enough). */
   webgpu: boolean
+  /** The adapter is a PowerVR GPU, too slow for EmbeddingGemma 2 (isPowerVR in app.ts). */
+  slowGpu?: boolean
   /** Chrome's built-in Gemini Nano (Prompt API) is not 'unavailable'. */
   chromeAI: boolean
 }
@@ -30,6 +32,7 @@ export function blockedReason(variant: string, caps: DeviceCaps): string | null 
   // q4 EmbeddingGemma 2 uses GatherBlockQuantized, which onnxruntime-web
   // implements only on WebGPU. Every other local model has a WASM path.
   if (variant === 'embeddinggemma2' && !caps.webgpu) return 'needs WebGPU'
+  if (variant === 'embeddinggemma2' && caps.slowGpu) return 'too slow on this GPU'
   if (variant === 'chrome-ai' && !caps.chromeAI) return 'needs Chrome built-in AI'
   return null
 }
