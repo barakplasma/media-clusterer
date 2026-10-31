@@ -33,6 +33,19 @@ export default defineConfig({
     // The app picks its phone profile (fewer image tokens, fixed sequence length) from the UA.
     { name: 'phone', testMatch: 'embeddinggemma2.spec.ts', use: { userAgent: PIXEL_UA } },
     { name: 'desktop', testMatch: 'embeddinggemma2.spec.ts' },
+    // The WebNN path PowerVR phones get (src/vlmWebnn.ts), forced on with
+    // localStorage mc_webnn by the spec. No GPU needed: WebNN runs on the CPU here.
+    {
+      name: 'webnn',
+      testMatch: 'embeddinggemma2.spec.ts',
+      use: {
+        userAgent: PIXEL_UA,
+        launchOptions: {
+          ...(swiftshader ? { executablePath: swiftshader } : {}),
+          args: ['--enable-features=WebMachineLearningNeuralNetwork'],
+        },
+      },
+    },
     // No GPU needed: `npm test`, the pre-commit hook and the Linux deploy job.
     { name: 'cpu', testMatch: 'cpu.spec.ts', timeout: 60_000 },
     // Chrome's built-in Gemini Nano; the spec launches its own persistent

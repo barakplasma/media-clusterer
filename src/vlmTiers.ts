@@ -108,6 +108,52 @@ const PHONE_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
     cachePrefix: '@embeddinggemma2-q4-t70-s296/'
   }
 }
+// PowerVR GPUs (Pixel 10) run EmbeddingGemma 2 at ~330 s per photo on WebGPU
+// and froze loading it, but WebNN ran it there at ~3 s per photo
+// (npu-test.html). WebNN needs the fp16 files (the q4 ones use ops WebNN
+// lacks) and fixed shapes; its own cache prefix because fp16 embeds a little
+// differently from q4. Image tokens / frames / length match the phone row.
+const WEBNN_OVERRIDES: Partial<Record<string, Partial<VlmTier>>> = {
+  embeddinggemma2: {
+    backend: 'webnn',
+    dtype: 'fp16',
+    imageTokens: 70,
+    framesPerVideo: 4,
+    fixedSeqLen: 296,
+    cachePrefix: '@embeddinggemma2-fp16-webnn-t70-s296/',
+    downloadMB: 880 // text 543 (of which the 268 MB embedding table) + vision 336 + tokenizer 32
+  }
+}
+
+/**
+ * Whether WebGL reports a PowerVR GPU. WebGL names the GPU even when WebGPU
+ * hides it (Chrome's blocklist), and answers synchronously, so tiers can be
+ * chosen before anything loads. False off the main thread.
+ */
+export function isPowerVRRenderer(): boolean {
+  if (typeof document === 'undefined') return false
+  try {
+    const gl = document.createElement('canvas').getContext('webgl')
+    const ext = gl?.getExtension('WEBGL_debug_renderer_info')
+    return !!gl && !!ext && /PowerVR|Imagination/i.test(String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)))
+  } catch {
+    return false
+  }
+}
+
+/** localStorage mc_webnn = '1' forces the WebNN path on any GPU (e2e webnn project, debugging). */
+function webnnForced(): boolean {
+  try {
+    return localStorage.getItem('mc_webnn') === '1'
+  } catch {
+    return false
+  }
+}
+
+/** EmbeddingGemma 2 goes through WebNN: a PowerVR GPU and WebNN (chrome://flags "WebNN API"). */
+export const USE_WEBNN =
+  typeof navigator !== 'undefined' && 'ml' in navigator && (isPowerVRRenderer() || webnnForced())
+
 const IS_PHONE =
   typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|CrOS/i.test(navigator.userAgent)
 
@@ -137,7 +183,8 @@ export function getVlmTier(variant: ModelVariant, phone = USE_LIGHT): VlmTier | 
   const tier = TIERS[variant]
   if (!tier) return null
   const phoneRow = phone ? PHONE_OVERRIDES[variant] : undefined
-  return phoneRow ? { ...tier, ...phoneRow } : tier
+  const webnnRow = USE_WEBNN ? WEBNN_OVERRIDES[variant] : undefined
+  return { ...tier, ...phoneRow, ...webnnRow }
 }
 
 /** Every declared tier, including ones not yet offered to users. */

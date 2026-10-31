@@ -19,7 +19,9 @@ import {
   supportsTextSearch,
   frameTimestamps,
   THUMB_FRAME_PX,
-  VLM_FRAME_PX
+  VLM_FRAME_PX,
+  isPowerVRRenderer,
+  USE_WEBNN
 } from './vlmTiers'
 import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2'
 import {
@@ -285,9 +287,10 @@ const DEFAULT_SETTINGS: Settings = {
   batchSize: IS_MOBILE ? 4 : 16,
   randomSampleSize: 100,
   viewerOnly: false,
-  // EmbeddingGemma 2 runs only on WebGPU (src/vlmWorker.ts); loadModelOnce
-  // swaps in NO_WEBGPU_MODEL when there is no adapter behind navigator.gpu.
-  modelVariant: 'gpu' in navigator ? 'embeddinggemma2' : NO_WEBGPU_MODEL,
+  // EmbeddingGemma 2 runs on WebGPU, or on WebNN for PowerVR GPUs
+  // (src/vlmWorker.ts); loadModelOnce swaps in NO_WEBGPU_MODEL when there is
+  // no adapter behind navigator.gpu.
+  modelVariant: 'gpu' in navigator || USE_WEBNN ? 'embeddinggemma2' : NO_WEBGPU_MODEL,
   embedProfile: 'auto',
   enableLazyCaption: false,
   doNotTrack: false,
@@ -380,17 +383,11 @@ function showWebGpuHelp(kind: 'blocked' | 'software', model: string): boolean {
 }
 
 // Pixel 10's PowerVR GPU (Chrome now exposes it without any flag, 2026-10):
-// ~330 s per photo, the GPU watchdog resets, and loading EmbeddingGemma 2
-// froze the phone at ~95%. WebGL names the GPU even when WebGPU hides it.
+// ~330 s per photo, the GPU watchdog resets, and loading EmbeddingGemma 2 on
+// WebGPU froze the phone at ~95%. With WebNN on, EmbeddingGemma 2 runs there
+// instead (USE_WEBNN in vlmTiers.ts), so the GPU no longer matters.
 function isPowerVR(adapter: GPUAdapter | null | undefined): boolean {
-  if (adapter?.info?.vendor === 'img-tec') return true
-  try {
-    const gl = document.createElement('canvas').getContext('webgl')
-    const ext = gl?.getExtension('WEBGL_debug_renderer_info')
-    return !!gl && !!ext && /PowerVR|Imagination/i.test(String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)))
-  } catch {
-    return false
-  }
+  return adapter?.info?.vendor === 'img-tec' || isPowerVRRenderer()
 }
 
 // Pick the device before loading: after a failed WebGPU load, transformers.js
@@ -484,9 +481,9 @@ function updateDeviceBadge() {
     deviceBadgeEl.textContent = 'Viewer'
     deviceBadgeEl.style.color = '#4ade80'
   } else if (vlmTier) {
-    const dev = vlmDevice() === 'webgpu' ? 'WebGPU' : 'WASM'
+    const dev = { webgpu: 'WebGPU', webnn: 'WebNN', wasm: 'WASM' }[vlmDevice()]
     deviceBadgeEl.textContent = `${vlmTier.id} · ${dev} · worker`
-    deviceBadgeEl.style.color = vlmDevice() === 'webgpu' ? '#4ade80' : '#fbbf24'
+    deviceBadgeEl.style.color = vlmDevice() === 'wasm' ? '#fbbf24' : '#4ade80'
   } else if (sapiens2Session) {
     const threads = navigator.hardwareConcurrency || 1
     const mt = typeof SharedArrayBuffer !== 'undefined'
@@ -1641,7 +1638,8 @@ async function loadModelOnce(signal?: AbortSignal) {
   }
 
   // navigator.gpu can exist with no usable adapter (emulators, blocklisted GPUs).
-  if (getVlmTier(state.settings.modelVariant)?.family === 'embeddinggemma2') {
+  const eg2 = getVlmTier(state.settings.modelVariant)
+  if (eg2?.family === 'embeddinggemma2' && eg2.backend !== 'webnn') {
     const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
     const saved = state.settings.modelVariant
     const slow = isPowerVR(adapter)
@@ -3685,7 +3683,11 @@ Promise.all([
   getChromeAIAvailability()
 ]).then(([adapter, avail]) => {
   chromeAIAvailability = avail
-  const ranked = renderModelOptions({ webgpu: !!adapter, slowGpu: isPowerVR(adapter), chromeAI: avail !== 'unavailable' })
+  const ranked = renderModelOptions({
+    webgpu: !!adapter || USE_WEBNN,
+    slowGpu: isPowerVR(adapter) && !USE_WEBNN,
+    chromeAI: avail !== 'unavailable'
+  })
   // A saved Chrome AI choice that cannot run falls back to the recommendation.
   // (EmbeddingGemma 2 without WebGPU is handled at load, for the session only.)
   const recommended = ranked.find((o) => o.recommended)

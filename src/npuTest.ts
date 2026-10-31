@@ -46,8 +46,21 @@ interface ModelPart {
   /** True when the 268 MB embedding table was moved out of the graph (scripts/webnn_split_embed.py). */
   embedInJs?: boolean
 }
-interface VisionRun { rep: number; ms: number; tokens: number; nonFinite: number }
-interface EmbedRun { image: string; rep: number; ms: number; visionMs: number; textMs: number; norm: number; nonFinite: number }
+interface VisionRun {
+  rep: number
+  ms: number
+  tokens: number
+  nonFinite: number
+}
+interface EmbedRun {
+  image: string
+  rep: number
+  ms: number
+  visionMs: number
+  textMs: number
+  norm: number
+  nonFinite: number
+}
 interface NpuReport {
   build: string
   startedAt: string
@@ -59,7 +72,13 @@ interface NpuReport {
   totalMs?: number
   userAgent: string
   env: { cores: number; deviceMemoryGB: number | null; crossOriginIsolated: boolean }
-  gpu: { vendor: string; architecture: string; isFallbackAdapter: boolean; maxStorageBufferBindingSize: number; shaderF16: boolean } | null
+  gpu: {
+    vendor: string
+    architecture: string
+    isFallbackAdapter: boolean
+    maxStorageBufferBindingSize: number
+    shaderF16: boolean
+  } | null
   webnn: { available: boolean; contexts: WebnnContext[] }
   inputShapes: Record<string, number[]>
   freeDimensionOverrides: Record<string, number>
@@ -84,9 +103,28 @@ const str = { type: 'string' }
 const REPORT_SCHEMA = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   title: 'NpuReport',
-  description: 'EmbeddingGemma 2 on WebNN: environment, model load and embedding timings (npu-test.html).',
+  description:
+    'EmbeddingGemma 2 on WebNN: environment, model load and embedding timings (npu-test.html).',
   type: 'object',
-  required: ['build', 'startedAt', 'device', 'dtype', 'status', 'phase', 'userAgent', 'env', 'gpu', 'webnn', 'inputShapes', 'freeDimensionOverrides', 'parts', 'visionRuns', 'embeds', 'similarity', 'warnings'],
+  required: [
+    'build',
+    'startedAt',
+    'device',
+    'dtype',
+    'status',
+    'phase',
+    'userAgent',
+    'env',
+    'gpu',
+    'webnn',
+    'inputShapes',
+    'freeDimensionOverrides',
+    'parts',
+    'visionRuns',
+    'embeds',
+    'similarity',
+    'warnings'
+  ],
   properties: {
     build: { ...str, description: 'git commit of the page' },
     startedAt: { ...str, format: 'date-time' },
@@ -99,35 +137,56 @@ const REPORT_SCHEMA = {
     userAgent: str,
     env: {
       type: 'object',
-      properties: { cores: num, deviceMemoryGB: { type: ['number', 'null'] }, crossOriginIsolated: { type: 'boolean' } }
+      properties: {
+        cores: num,
+        deviceMemoryGB: { type: ['number', 'null'] },
+        crossOriginIsolated: { type: 'boolean' }
+      }
     },
     gpu: {
       type: ['object', 'null'],
       description: 'WebGPU adapter, null when none',
       properties: {
-        vendor: str, architecture: str, isFallbackAdapter: { type: 'boolean' },
-        maxStorageBufferBindingSize: num, shaderF16: { type: 'boolean' }
+        vendor: str,
+        architecture: str,
+        isFallbackAdapter: { type: 'boolean' },
+        maxStorageBufferBindingSize: num,
+        shaderF16: { type: 'boolean' }
       }
     },
     webnn: {
       type: 'object',
       properties: {
-        available: { type: 'boolean', description: 'navigator.ml exists (chrome://flags "WebNN API")' },
+        available: {
+          type: 'boolean',
+          description: 'navigator.ml exists (chrome://flags "WebNN API")'
+        },
         contexts: {
           type: 'array',
           items: {
             type: 'object',
             required: ['deviceType', 'ok'],
             properties: {
-              deviceType: { enum: ['npu', 'gpu', 'cpu'] }, ok: { type: 'boolean' }, error: str,
-              matmulTypes: { type: 'array', items: str }, maxTensorByteLength: num,
-              missingOps: { type: 'array', items: str, description: 'WebNN ops the model needs that this context lacks' }
+              deviceType: { enum: ['npu', 'gpu', 'cpu'] },
+              ok: { type: 'boolean' },
+              error: str,
+              matmulTypes: { type: 'array', items: str },
+              maxTensorByteLength: num,
+              missingOps: {
+                type: 'array',
+                items: str,
+                description: 'WebNN ops the model needs that this context lacks'
+              }
             }
           }
         }
       }
     },
-    inputShapes: { type: 'object', additionalProperties: { type: 'array', items: num }, description: 'processor output dims for picture A' },
+    inputShapes: {
+      type: 'object',
+      additionalProperties: { type: 'array', items: num },
+      description: 'processor output dims for picture A'
+    },
     freeDimensionOverrides: { type: 'object', additionalProperties: num },
     parts: {
       type: 'array',
@@ -135,8 +194,14 @@ const REPORT_SCHEMA = {
         type: 'object',
         required: ['name'],
         properties: {
-          name: { enum: ['vision_encoder', 'model'] }, downloadMs: num, megabytes: num, compileMs: num,
-          embedInJs: { type: 'boolean', description: 'token-embedding table looked up in JS instead of the graph' }
+          name: { enum: ['vision_encoder', 'model'] },
+          downloadMs: num,
+          megabytes: num,
+          compileMs: num,
+          embedInJs: {
+            type: 'boolean',
+            description: 'token-embedding table looked up in JS instead of the graph'
+          }
         }
       }
     },
@@ -148,7 +213,15 @@ const REPORT_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        properties: { image: str, rep: num, ms: num, visionMs: num, textMs: num, norm: num, nonFinite: num }
+        properties: {
+          image: str,
+          rep: num,
+          ms: num,
+          visionMs: num,
+          textMs: num,
+          norm: num,
+          nonFinite: num
+        }
       }
     },
     similarity: {
@@ -156,10 +229,17 @@ const REPORT_SCHEMA = {
       properties: {
         aVsAShifted: { ...num, description: 'cosine, near-copy; expect ≫ aVsB' },
         aVsB: { ...num, description: 'cosine, different picture' },
-        aVsPortrait: { ...num, description: 'cosine, same picture at 3:4 (different image-token count)' },
+        aVsPortrait: {
+          ...num,
+          description: 'cosine, same picture at 3:4 (different image-token count)'
+        },
         queryVsA: { ...num, description: 'cosine, text query describing A; expect > queryVsB' },
         queryVsB: num,
-        vsOtherRuns: { type: 'object', additionalProperties: num, description: 'cosine of picture A vs earlier runs on other devices in this browser' }
+        vsOtherRuns: {
+          type: 'object',
+          additionalProperties: num,
+          description: 'cosine of picture A vs earlier runs on other devices in this browser'
+        }
       }
     },
     warnings: { type: 'array', items: str }
@@ -175,7 +255,11 @@ const report: NpuReport = {
   status: 'running',
   phase: 'diagnostics',
   userAgent: navigator.userAgent,
-  env: { cores: navigator.hardwareConcurrency, deviceMemoryGB: nav.deviceMemory ?? null, crossOriginIsolated },
+  env: {
+    cores: navigator.hardwareConcurrency,
+    deviceMemoryGB: nav.deviceMemory ?? null,
+    crossOriginIsolated
+  },
   gpu: null,
   webnn: { available: !!nav.ml, contexts: [] },
   inputShapes: {},
@@ -192,17 +276,24 @@ const report: NpuReport = {
 const $ = (id: string) => document.getElementById(id)!
 const logEl = $('log')
 const esc = (s: unknown) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
-const s = (ms?: number) => (ms === undefined ? '–' : `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}&nbsp;s`)
+const s = (ms?: number) =>
+  ms === undefined ? '–' : `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}&nbsp;s`
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined)
 const table = (head: string[], rows: unknown[][]) =>
   `<table><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</table>`
-const card = (title: string, body: string) => `<section class="card"><h2>${title}</h2>${body}</section>`
+const card = (title: string, body: string) =>
+  `<section class="card"><h2>${title}</h2>${body}</section>`
 
 function render(): void {
   const r = report
   const status = $('status')
   status.className = `badge ${r.status}`
-  status.textContent = r.status === 'running' ? `running · ${r.phase}` : r.status === 'fail' ? `failed in ${r.phase}` : 'pass'
+  status.textContent =
+    r.status === 'running'
+      ? `running · ${r.phase}`
+      : r.status === 'fail'
+        ? `failed in ${r.phase}`
+        : 'pass'
 
   // Steady state: skip the first run of picture A (it pays one-time warm-up).
   const steady = r.embeds.filter((e) => !(e.image === 'A' && e.rep === 1) && e.image !== 'query')
@@ -210,59 +301,127 @@ function render(): void {
   const vision = r.visionRuns.slice(1)
   const tiles = [
     ['per photo', s(avg(steady.map((e) => e.ms)))],
-    ['vision part', s(avg(steady.length ? steady.map((e) => e.visionMs) : vision.map((v) => v.ms)))],
+    [
+      'vision part',
+      s(avg(steady.length ? steady.map((e) => e.visionMs) : vision.map((v) => v.ms)))
+    ],
     ['text part', s(avg(steady.map((e) => e.textMs)))],
     ['search query', s(query?.ms)],
     ['compile (both)', s(r.parts.reduce((a, p) => a + (p.compileMs ?? 0), 0) || undefined)]
   ]
-  let html = card('Result', `<div class="tiles">${tiles.map(([k, v]) => `<div class="tile"><b>${v}</b><span>${k}</span></div>`).join('')}</div>` +
-    (r.error ? `<p class="bad"><b>Error:</b> ${esc(r.error)}</p>` : ''))
+  let html = card(
+    'Result',
+    `<div class="tiles">${tiles.map(([k, v]) => `<div class="tile"><b>${v}</b><span>${k}</span></div>`).join('')}</div>` +
+      (r.error ? `<p class="bad"><b>Error:</b> ${esc(r.error)}</p>` : '')
+  )
 
-  html += card('Device', table(['', ''], [
-    ['Run on', `<code>${esc(r.device)}</code> · <code>${esc(r.dtype)}</code>`],
-    ['Browser', `<span class="muted">${esc(r.userAgent)}</span>`],
-    ['CPU / RAM', `${r.env.cores} cores · ${r.env.deviceMemoryGB ?? '?'} GB · ${r.env.crossOriginIsolated ? 'threads on' : 'threads off'}`],
-    ['GPU', r.gpu ? `${esc(r.gpu.vendor)} ${esc(r.gpu.architecture)} · max binding ${(r.gpu.maxStorageBufferBindingSize / 2 ** 20).toFixed(0)} MB · f16 ${r.gpu.shaderF16 ? 'yes' : 'no'}${r.gpu.isFallbackAdapter ? ' · <span class="bad">software</span>' : ''}` : '<span class="muted">none</span>']
-  ]))
+  html += card(
+    'Device',
+    table(
+      ['', ''],
+      [
+        ['Run on', `<code>${esc(r.device)}</code> · <code>${esc(r.dtype)}</code>`],
+        ['Browser', `<span class="muted">${esc(r.userAgent)}</span>`],
+        [
+          'CPU / RAM',
+          `${r.env.cores} cores · ${r.env.deviceMemoryGB ?? '?'} GB · ${r.env.crossOriginIsolated ? 'threads on' : 'threads off'}`
+        ],
+        [
+          'GPU',
+          r.gpu
+            ? `${esc(r.gpu.vendor)} ${esc(r.gpu.architecture)} · max binding ${(r.gpu.maxStorageBufferBindingSize / 2 ** 20).toFixed(0)} MB · f16 ${r.gpu.shaderF16 ? 'yes' : 'no'}${r.gpu.isFallbackAdapter ? ' · <span class="bad">software</span>' : ''}`
+            : '<span class="muted">none</span>'
+        ]
+      ]
+    )
+  )
 
-  html += card('WebNN', r.webnn.available
-    ? table(['Device', 'Context', 'matmul types', 'Max tensor', 'Missing ops'], r.webnn.contexts.map((c) => [
-      c.deviceType.toUpperCase(),
-      c.ok ? '<span class="ok">ok</span>' : `<span class="bad">${esc(c.error)}</span>`,
-      esc(c.matmulTypes?.join(', ') ?? '–'),
-      c.maxTensorByteLength ? `${(c.maxTensorByteLength / 2 ** 30).toFixed(1)} GB` : '–',
-      c.missingOps ? (c.missingOps.length ? `<span class="bad">${c.missingOps.join(', ')}</span>` : '<span class="ok">none</span>') : '–'
-    ]))
-    : '<p class="bad">navigator.ml is missing: turn on <code>chrome://flags</code> → "WebNN API" and restart Chrome.</p>')
+  html += card(
+    'WebNN',
+    r.webnn.available
+      ? table(
+          ['Device', 'Context', 'matmul types', 'Max tensor', 'Missing ops'],
+          r.webnn.contexts.map((c) => [
+            c.deviceType.toUpperCase(),
+            c.ok ? '<span class="ok">ok</span>' : `<span class="bad">${esc(c.error)}</span>`,
+            esc(c.matmulTypes?.join(', ') ?? '–'),
+            c.maxTensorByteLength ? `${(c.maxTensorByteLength / 2 ** 30).toFixed(1)} GB` : '–',
+            c.missingOps
+              ? c.missingOps.length
+                ? `<span class="bad">${c.missingOps.join(', ')}</span>`
+                : '<span class="ok">none</span>'
+              : '–'
+          ])
+        )
+      : '<p class="bad">navigator.ml is missing: turn on <code>chrome://flags</code> → "WebNN API" and restart Chrome.</p>'
+  )
 
   if (r.parts.length) {
-    html += card('Model load', table(['Part', 'Download', 'Size', 'Compile'], r.parts.map((p) => [
-      `${p.name === 'model' ? 'text' : 'vision'}${p.embedInJs ? ' <span class="muted">(token lookup in JS)</span>' : ''}`,
-      s(p.downloadMs), p.megabytes ? `${p.megabytes}&nbsp;MB` : '–', s(p.compileMs)
-    ])))
+    html += card(
+      'Model load',
+      table(
+        ['Part', 'Download', 'Size', 'Compile'],
+        r.parts.map((p) => [
+          `${p.name === 'model' ? 'text' : 'vision'}${p.embedInJs ? ' <span class="muted">(token lookup in JS)</span>' : ''}`,
+          s(p.downloadMs),
+          p.megabytes ? `${p.megabytes}&nbsp;MB` : '–',
+          s(p.compileMs)
+        ])
+      )
+    )
   }
   if (r.visionRuns.length) {
-    html += card('Vision part alone', table(['Run', 'Time', 'Tokens', 'Broken values'], r.visionRuns.map((v) => [
-      `#${v.rep}`, s(v.ms), v.tokens, v.nonFinite ? `<span class="bad">${v.nonFinite}</span>` : '<span class="ok">0</span>'
-    ])))
+    html += card(
+      'Vision part alone',
+      table(
+        ['Run', 'Time', 'Tokens', 'Broken values'],
+        r.visionRuns.map((v) => [
+          `#${v.rep}`,
+          s(v.ms),
+          v.tokens,
+          v.nonFinite ? `<span class="bad">${v.nonFinite}</span>` : '<span class="ok">0</span>'
+        ])
+      )
+    )
   }
   if (r.embeds.length) {
-    html += card('Full embeddings', table(['Picture', 'Total', 'Vision', 'Text', 'Norm', 'Broken'], r.embeds.map((e) => [
-      `${esc(e.image)} #${e.rep}`, s(e.ms), s(e.visionMs), s(e.textMs), e.norm.toFixed(3),
-      e.nonFinite ? `<span class="bad">${e.nonFinite}</span>` : '<span class="ok">0</span>'
-    ])))
+    html += card(
+      'Full embeddings',
+      table(
+        ['Picture', 'Total', 'Vision', 'Text', 'Norm', 'Broken'],
+        r.embeds.map((e) => [
+          `${esc(e.image)} #${e.rep}`,
+          s(e.ms),
+          s(e.visionMs),
+          s(e.textMs),
+          e.norm.toFixed(3),
+          e.nonFinite ? `<span class="bad">${e.nonFinite}</span>` : '<span class="ok">0</span>'
+        ])
+      )
+    )
   }
   const sim = r.similarity
   if (sim.aVsB !== undefined) {
-    const good = (sim.aVsAShifted ?? 0) > (sim.aVsB ?? 1) && (sim.queryVsA ?? 0) > (sim.queryVsB ?? 1)
-    html += card('Sanity', table(['Comparison', 'Cosine'], [
-      ['A vs near-copy of A', sim.aVsAShifted!.toFixed(4)],
-      ['A vs different picture B', sim.aVsB.toFixed(4)],
-      ['A vs same picture, portrait', sim.aVsPortrait?.toFixed(4) ?? '–'],
-      [`query “${QUERY}” vs A`, sim.queryVsA?.toFixed(4) ?? '–'],
-      ['same query vs B', sim.queryVsB?.toFixed(4) ?? '–'],
-      ...Object.entries(sim.vsOtherRuns).map(([k, v]) => [`A vs earlier run on <code>${esc(k)}</code>`, `<span class="${v > 0.99 ? 'ok' : 'bad'}">${v.toFixed(4)}</span>`])
-    ]) + `<p class="${good ? 'ok' : 'bad'}">${good ? 'Near-copy and matching query score higher, as expected.' : 'Near-copy or matching query does not score higher: the output looks broken.'}</p>`)
+    const good =
+      (sim.aVsAShifted ?? 0) > (sim.aVsB ?? 1) && (sim.queryVsA ?? 0) > (sim.queryVsB ?? 1)
+    html += card(
+      'Sanity',
+      table(
+        ['Comparison', 'Cosine'],
+        [
+          ['A vs near-copy of A', sim.aVsAShifted!.toFixed(4)],
+          ['A vs different picture B', sim.aVsB.toFixed(4)],
+          ['A vs same picture, portrait', sim.aVsPortrait?.toFixed(4) ?? '–'],
+          [`query “${QUERY}” vs A`, sim.queryVsA?.toFixed(4) ?? '–'],
+          ['same query vs B', sim.queryVsB?.toFixed(4) ?? '–'],
+          ...Object.entries(sim.vsOtherRuns).map(([k, v]) => [
+            `A vs earlier run on <code>${esc(k)}</code>`,
+            `<span class="${v > 0.99 ? 'ok' : 'bad'}">${v.toFixed(4)}</span>`
+          ])
+        ]
+      ) +
+        `<p class="${good ? 'ok' : 'bad'}">${good ? 'Near-copy and matching query score higher, as expected.' : 'Near-copy or matching query does not score higher: the output looks broken.'}</p>`
+    )
   }
   if (r.warnings.length) html += card('Warnings', `<pre>${esc(r.warnings.join('\n'))}</pre>`)
   $('report').innerHTML = html
@@ -278,8 +437,13 @@ const flash = (btn: HTMLElement, text: string) => {
   setTimeout(() => (btn.textContent = old), 1500)
 }
 $('copy-json').onclick = (e) =>
-  void navigator.clipboard?.writeText(JSON.stringify({ schema: REPORT_SCHEMA, report }, null, 2)).then(() => flash(e.target as HTMLElement, 'Copied'))
-$('copy-log').onclick = (e) => void navigator.clipboard?.writeText(logEl.textContent ?? '').then(() => flash(e.target as HTMLElement, 'Copied'))
+  void navigator.clipboard
+    ?.writeText(JSON.stringify({ schema: REPORT_SCHEMA, report }, null, 2))
+    .then(() => flash(e.target as HTMLElement, 'Copied'))
+$('copy-log').onclick = (e) =>
+  void navigator.clipboard
+    ?.writeText(logEl.textContent ?? '')
+    .then(() => flash(e.target as HTMLElement, 'Copied'))
 
 function log(msg: string): void {
   console.log(`NPUTEST ${msg}`)
@@ -294,7 +458,11 @@ for (const level of ['warn', 'error'] as const) {
   console[level] = (...args: unknown[]) => {
     orig(...args)
     // eslint-disable-next-line no-control-regex
-    const text = args.map(String).join(' ').replace(/\x1b\[[0-9;]*m/g, '').slice(0, 500)
+    const text = args
+      .map(String)
+      .join(' ')
+      .replace(/\x1b\[[0-9;]*m/g, '')
+      .slice(0, 500)
     logEl.textContent += `[${level}] ${text}\n`
     report.warnings.push(text)
     render()
@@ -336,7 +504,9 @@ async function cachedFetch(file: string): Promise<Uint8Array> {
 async function ownGraph(file: string): Promise<Uint8Array> {
   const res = await fetch(`${import.meta.env.BASE_URL}models/embeddinggemma2-webnn/${file}`)
   if (!res.ok || res.headers.get('content-type')?.includes('text/html')) {
-    throw new Error(`${file} is not deployed (HTTP ${res.status}, ${res.headers.get('content-type')})`)
+    throw new Error(
+      `${file} is not deployed (HTTP ${res.status}, ${res.headers.get('content-type')})`
+    )
   }
   return new Uint8Array(await res.arrayBuffer())
 }
@@ -350,10 +520,44 @@ type ML = { createContext: (o: { deviceType: string }) => Promise<MLContext> }
 // WebNN op names for every ONNX op in vision_encoder_fp16 + model_fp16
 // (contrib ops listed by what ORT lowers them to).
 const NEEDED_OPS = [
-  'matmul', 'gemm', 'add', 'sub', 'mul', 'div', 'max', 'abs', 'neg', 'cos', 'sin', 'gelu', 'softmax',
-  'cast', 'reshape', 'transpose', 'concat', 'slice', 'split', 'expand', 'pad', 'gather', 'gatherND',
-  'scatterElements', 'where', 'equal', 'greater', 'lesserOrEqual', 'logicalAnd', 'logicalNot', 'clamp',
-  'reduceSum', 'reduceMax', 'reduceL2', 'cumulativeSum', 'layerNormalization', 'sqrt', 'pow'
+  'matmul',
+  'gemm',
+  'add',
+  'sub',
+  'mul',
+  'div',
+  'max',
+  'abs',
+  'neg',
+  'cos',
+  'sin',
+  'gelu',
+  'softmax',
+  'cast',
+  'reshape',
+  'transpose',
+  'concat',
+  'slice',
+  'split',
+  'expand',
+  'pad',
+  'gather',
+  'gatherND',
+  'scatterElements',
+  'where',
+  'equal',
+  'greater',
+  'lesserOrEqual',
+  'logicalAnd',
+  'logicalNot',
+  'clamp',
+  'reduceSum',
+  'reduceMax',
+  'reduceL2',
+  'cumulativeSum',
+  'layerNormalization',
+  'sqrt',
+  'pow'
 ]
 
 async function diagnostics(): Promise<void> {
@@ -362,8 +566,11 @@ async function diagnostics(): Promise<void> {
   if (adapter) {
     const i = adapter.info
     report.gpu = {
-      vendor: i.vendor, architecture: i.architecture, isFallbackAdapter: i.isFallbackAdapter,
-      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, shaderF16: adapter.features.has('shader-f16')
+      vendor: i.vendor,
+      architecture: i.architecture,
+      isFallbackAdapter: i.isFallbackAdapter,
+      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+      shaderF16: adapter.features.has('shader-f16')
     }
   }
   log(`gpu ${JSON.stringify(report.gpu)}`)
@@ -375,7 +582,9 @@ async function diagnostics(): Promise<void> {
       c.ok = true
       if (limits) {
         c.missingOps = NEEDED_OPS.filter((op) => !(op in limits))
-        c.matmulTypes = (limits.matmul as { a?: { dataTypes?: string[] } } | undefined)?.a?.dataTypes
+        c.matmulTypes = (
+          limits.matmul as { a?: { dataTypes?: string[] } } | undefined
+        )?.a?.dataTypes
         c.maxTensorByteLength = Number(limits.maxTensorByteLength) || undefined
       }
     } catch (e) {
@@ -408,13 +617,22 @@ async function picture(hue: number, label: string, shift = 0, w = 640, h = 480):
 }
 
 const cos = (a: Float32Array, b: Float32Array) => {
-  let dot = 0, na = 0, nb = 0
-  for (let i = 0; i < a.length; i++) (dot += a[i] * b[i]), (na += a[i] * a[i]), (nb += b[i] * b[i])
+  let dot = 0,
+    na = 0,
+    nb = 0
+  for (let i = 0; i < a.length; i++)
+    ((dot += a[i] * b[i]), (na += a[i] * a[i]), (nb += b[i] * b[i]))
   return dot / Math.sqrt(na * nb)
 }
 const nonFinite = (v: Float32Array) => v.filter((x) => !Number.isFinite(x)).length
 
-type Proc = ((t: string[] | null, i: RawImage[][] | null, a: null, v: null, o: Record<string, unknown>) => Promise<Record<string, { dims: number[] }>>) & {
+type Proc = ((
+  t: string[] | null,
+  i: RawImage[][] | null,
+  a: null,
+  v: null,
+  o: Record<string, unknown>
+) => Promise<Record<string, { dims: number[] }>>) & {
   image_processor: { max_soft_tokens: number }
 }
 
@@ -424,7 +642,10 @@ async function run(): Promise<void> {
     report.phase = phase
     render()
   }
-  const beat = setInterval(() => log(`… still in ${report.phase} (${((performance.now() - t0) / 1000).toFixed(0)}s)`), 30_000)
+  const beat = setInterval(
+    () => log(`… still in ${report.phase} (${((performance.now() - t0) / 1000).toFixed(0)}s)`),
+    30_000
+  )
   try {
     await diagnostics()
     if (params.has('diag')) {
@@ -437,11 +658,14 @@ async function run(): Promise<void> {
     proc.image_processor.max_soft_tokens = IMAGE_TOKENS
     const opts = { padding: 'max_length', max_length: SEQ_LEN, truncation: true }
     const pics = {
-      A: await picture(0, 'A'), 'A shifted': await picture(0, 'A', 12), B: await picture(200, 'B'),
+      A: await picture(0, 'A'),
+      'A shifted': await picture(0, 'A', 12),
+      B: await picture(200, 'B'),
       'A portrait': await picture(0, 'A', 0, 480, 640)
     }
     const inputs: Record<string, Record<string, { dims: number[] }>> = {}
-    for (const [name, img] of Object.entries(pics)) inputs[name] = await proc(null, [[img]], null, null, opts)
+    for (const [name, img] of Object.entries(pics))
+      inputs[name] = await proc(null, [[img]], null, null, opts)
     // A search query: text only, so zero image tokens.
     inputs.query = await proc(['task: search result | query: ' + QUERY], null, null, null, opts)
     for (const [k, v] of Object.entries(inputs.A)) if (v?.dims) report.inputShapes[k] = v.dims
@@ -452,7 +676,11 @@ async function run(): Promise<void> {
     // falls back to CPU, and the layers after it see a fixed [1, 296, 512].
     const overrides = report.freeDimensionOverrides
     Object.assign(overrides, {
-      s11: 1, s35: inputs.A.pixel_values.dims[1], batch_size: 1, sequence_length: SEQ_LEN, num_audio_tokens: 0
+      s11: 1,
+      s35: inputs.A.pixel_values.dims[1],
+      batch_size: 1,
+      sequence_length: SEQ_LEN,
+      num_audio_tokens: 0
     })
     log(`shapes ${JSON.stringify(report.inputShapes)}`)
 
@@ -464,7 +692,10 @@ async function run(): Promise<void> {
       return new ort.Tensor(x.type, x.data, x.dims)
     }
     const vision = (inp: Record<string, unknown>) =>
-      sessions.vision_encoder.run({ pixel_values: t(inp, 'pixel_values'), pixel_position_ids: t(inp, 'image_position_ids') })
+      sessions.vision_encoder.run({
+        pixel_values: t(inp, 'pixel_values'),
+        pixel_position_ids: t(inp, 'image_position_ids')
+      })
 
     for (const name of ['vision_encoder', 'model'] as const) {
       const part: ModelPart = { name }
@@ -475,9 +706,16 @@ async function run(): Promise<void> {
       // fp16 text model on WebNN: our graph without the 268 MB embedding table
       // (scripts/webnn_split_embed.py), which WebNN refuses to build.
       part.embedInJs = name === 'model' && dtype === 'fp16' && device.startsWith('webnn')
-      const graph = part.embedInJs ? await ownGraph('model_fp16_noembed.onnx') : await cachedFetch(`${name}${suffix}.onnx`)
+      const graph = part.embedInJs
+        ? await ownGraph('model_fp16_noembed.onnx')
+        : await cachedFetch(`${name}${suffix}.onnx`)
       const data = await cachedFetch(`${name}${suffix}.onnx_data`)
-      if (part.embedInJs) embedTable = new Uint16Array(data.buffer, data.byteOffset + EMBED_OFFSET, EMBED_ROWS * EMBED_WIDTH)
+      if (part.embedInJs)
+        embedTable = new Uint16Array(
+          data.buffer,
+          data.byteOffset + EMBED_OFFSET,
+          EMBED_ROWS * EMBED_WIDTH
+        )
       part.downloadMs = performance.now() - tDl
       part.megabytes = Math.round((graph.byteLength + data.byteLength) / 1e6)
 
@@ -501,7 +739,12 @@ async function run(): Promise<void> {
           step(`vision run #${rep}`)
           const tV = performance.now()
           const out = await vision(inputs.A)
-          const run: VisionRun = { rep, ms: performance.now() - tV, tokens: out.image_features.dims[0], nonFinite: nonFinite(out.image_features.data as Float32Array) }
+          const run: VisionRun = {
+            rep,
+            ms: performance.now() - tV,
+            tokens: out.image_features.dims[0],
+            nonFinite: nonFinite(out.image_features.data as Float32Array)
+          }
           report.visionRuns.push(run)
           log(`vision ${JSON.stringify(run)}`)
         }
@@ -522,17 +765,33 @@ async function run(): Promise<void> {
           // The lookup the graph no longer does: one fp16 row per token.
           const idData = ids.data as BigInt64Array
           const rows = new Uint16Array(idData.length * EMBED_WIDTH)
-          idData.forEach((id, i) => rows.set(embedTable!.subarray(Number(id) * EMBED_WIDTH, (Number(id) + 1) * EMBED_WIDTH), i * EMBED_WIDTH))
+          idData.forEach((id, i) =>
+            rows.set(
+              embedTable!.subarray(Number(id) * EMBED_WIDTH, (Number(id) + 1) * EMBED_WIDTH),
+              i * EMBED_WIDTH
+            )
+          )
           feeds.inputs_embeds = new ort.Tensor('float16', rows, [...ids.dims, EMBED_WIDTH])
         }
         const out = await sessions.model.run({
           ...feeds,
-          input_ids: ids, attention_mask: t(inp, 'attention_mask'),
-          image_features: imageFeatures, video_features: empty, audio_features: empty
+          input_ids: ids,
+          attention_mask: t(inp, 'attention_mask'),
+          image_features: imageFeatures,
+          video_features: empty,
+          audio_features: empty
         })
         const ms = performance.now() - tE
         const v = Float32Array.from(out.sentence_embedding.data as Float32Array)
-        const e: EmbedRun = { image, rep, ms, visionMs, textMs: ms - visionMs, norm: Math.sqrt(v.reduce((a, x) => a + x * x, 0)), nonFinite: nonFinite(v) }
+        const e: EmbedRun = {
+          image,
+          rep,
+          ms,
+          visionMs,
+          textMs: ms - visionMs,
+          norm: Math.sqrt(v.reduce((a, x) => a + x * x, 0)),
+          nonFinite: nonFinite(v)
+        }
         report.embeds.push(e)
         log(`embed ${JSON.stringify(e)}`)
         vecs[image] = v
@@ -551,7 +810,10 @@ async function run(): Promise<void> {
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i)!
         if (k.startsWith('npuTest:') && k !== key) {
-          report.similarity.vsOtherRuns[k.slice(8)] = cos(vecs.A, Float32Array.from(JSON.parse(localStorage.getItem(k)!)))
+          report.similarity.vsOtherRuns[k.slice(8)] = cos(
+            vecs.A,
+            Float32Array.from(JSON.parse(localStorage.getItem(k)!))
+          )
         }
       }
       localStorage.setItem(key, JSON.stringify(Array.from(vecs.A)))
@@ -564,14 +826,17 @@ async function run(): Promise<void> {
   } finally {
     clearInterval(beat)
     report.totalMs = performance.now() - t0
-    log(`DONE ${report.status}${report.error ? ` in ${report.phase}: ${report.error}` : ''} total=${(report.totalMs / 1000).toFixed(1)}s`)
+    log(
+      `DONE ${report.status}${report.error ? ` in ${report.phase}: ${report.error}` : ''} total=${(report.totalMs / 1000).toFixed(1)}s`
+    )
     render()
   }
 }
 
 // Self-check: the schema shipped with the copy must cover every report field.
 const unschemed = Object.keys(report).filter((k) => !(k in REPORT_SCHEMA.properties))
-if (unschemed.length) report.warnings.push(`schema is missing report fields: ${unschemed.join(', ')}`)
+if (unschemed.length)
+  report.warnings.push(`schema is missing report fields: ${unschemed.join(', ')}`)
 
 render()
 void run()

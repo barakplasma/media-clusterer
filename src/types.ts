@@ -81,6 +81,9 @@ export interface VlmTier {
   // new GPU pipelines per sequence length; a phone ran out of device memory on
   // the second length it saw. One fixed length means one pipeline set.
   fixedSeqLen?: number
+  // Run on WebNN (raw onnxruntime-web sessions, fp16, token lookup in JS)
+  // instead of transformers.js on WebGPU. See WEBNN_OVERRIDES in vlmTiers.ts.
+  backend?: 'webnn'
 }
 
 /** Request sent from the main thread to the VLM worker. */
@@ -100,7 +103,7 @@ export type VlmResponse =
   | { type: 'error'; id: number; message: string; name: string }
 
 /** Backend the worker actually got, after the webgpu→wasm fallback. */
-export type VlmDevice = 'webgpu' | 'wasm'
+export type VlmDevice = 'webgpu' | 'wasm' | 'webnn'
 
 /**
  * Remote OpenAI-compatible endpoint settings.
