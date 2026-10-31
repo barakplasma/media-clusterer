@@ -18,6 +18,7 @@ import * as ort from 'onnxruntime-web'
 const REPO = 'onnx-community/embeddinggemma-2-ONNX'
 const IMAGE_TOKENS = 70 // phone profile (src/vlmTiers.ts PHONE_OVERRIDES)
 const SEQ_LEN = 296
+const QUERY = 'a white circle on a red background' // matches picture A (hue 0), not B
 // model.embed_tokens.weight inside model_fp16.onnx_data (printed by scripts/webnn_split_embed.py).
 const EMBED_OFFSET = 1024
 const EMBED_ROWS = 262144
@@ -66,7 +67,15 @@ interface NpuReport {
   visionRuns: VisionRun[]
   embeds: EmbedRun[]
   /** Cosine similarities: a near-copy should score far above a different picture. */
-  similarity: { aVsAShifted?: number; aVsB?: number; vsOtherRuns: Record<string, number> }
+  similarity: {
+    aVsAShifted?: number
+    aVsB?: number
+    /** Same picture at 3:4 instead of 4:3: a different image-token count. */
+    aVsPortrait?: number
+    queryVsA?: number
+    queryVsB?: number
+    vsOtherRuns: Record<string, number>
+  }
   warnings: string[]
 }
 
@@ -147,6 +156,9 @@ const REPORT_SCHEMA = {
       properties: {
         aVsAShifted: { ...num, description: 'cosine, near-copy; expect ≫ aVsB' },
         aVsB: { ...num, description: 'cosine, different picture' },
+        aVsPortrait: { ...num, description: 'cosine, same picture at 3:4 (different image-token count)' },
+        queryVsA: { ...num, description: 'cosine, text query describing A; expect > queryVsB' },
+        queryVsB: num,
         vsOtherRuns: { type: 'object', additionalProperties: num, description: 'cosine of picture A vs earlier runs on other devices in this browser' }
       }
     },
@@ -193,12 +205,14 @@ function render(): void {
   status.textContent = r.status === 'running' ? `running · ${r.phase}` : r.status === 'fail' ? `failed in ${r.phase}` : 'pass'
 
   // Steady state: skip the first run of picture A (it pays one-time warm-up).
-  const steady = r.embeds.filter((e) => !(e.image === 'A' && e.rep === 1))
+  const steady = r.embeds.filter((e) => !(e.image === 'A' && e.rep === 1) && e.image !== 'query')
+  const query = r.embeds.find((e) => e.image === 'query')
   const vision = r.visionRuns.slice(1)
   const tiles = [
     ['per photo', s(avg(steady.map((e) => e.ms)))],
     ['vision part', s(avg(steady.length ? steady.map((e) => e.visionMs) : vision.map((v) => v.ms)))],
     ['text part', s(avg(steady.map((e) => e.textMs)))],
+    ['search query', s(query?.ms)],
     ['compile (both)', s(r.parts.reduce((a, p) => a + (p.compileMs ?? 0), 0) || undefined)]
   ]
   let html = card('Result', `<div class="tiles">${tiles.map(([k, v]) => `<div class="tile"><b>${v}</b><span>${k}</span></div>`).join('')}</div>` +
@@ -240,12 +254,15 @@ function render(): void {
   }
   const sim = r.similarity
   if (sim.aVsB !== undefined) {
-    const good = (sim.aVsAShifted ?? 0) > (sim.aVsB ?? 1)
+    const good = (sim.aVsAShifted ?? 0) > (sim.aVsB ?? 1) && (sim.queryVsA ?? 0) > (sim.queryVsB ?? 1)
     html += card('Sanity', table(['Comparison', 'Cosine'], [
       ['A vs near-copy of A', sim.aVsAShifted!.toFixed(4)],
       ['A vs different picture B', sim.aVsB.toFixed(4)],
+      ['A vs same picture, portrait', sim.aVsPortrait?.toFixed(4) ?? '–'],
+      [`query “${QUERY}” vs A`, sim.queryVsA?.toFixed(4) ?? '–'],
+      ['same query vs B', sim.queryVsB?.toFixed(4) ?? '–'],
       ...Object.entries(sim.vsOtherRuns).map(([k, v]) => [`A vs earlier run on <code>${esc(k)}</code>`, `<span class="${v > 0.99 ? 'ok' : 'bad'}">${v.toFixed(4)}</span>`])
-    ]) + `<p class="${good ? 'ok' : 'bad'}">${good ? 'Near-copy scores higher, as expected.' : 'Near-copy does not score higher: the output looks broken.'}</p>`)
+    ]) + `<p class="${good ? 'ok' : 'bad'}">${good ? 'Near-copy and matching query score higher, as expected.' : 'Near-copy or matching query does not score higher: the output looks broken.'}</p>`)
   }
   if (r.warnings.length) html += card('Warnings', `<pre>${esc(r.warnings.join('\n'))}</pre>`)
   $('report').innerHTML = html
@@ -370,24 +387,24 @@ async function diagnostics(): Promise<void> {
   }
 }
 
-/** Synthetic 640×480 picture; same size every time so the shapes stay static. */
-async function picture(hue: number, label: string, shift = 0): Promise<RawImage> {
-  const c = new OffscreenCanvas(640, 480)
+/** Synthetic picture; 640×480 unless given, a different size gives a different image-token count. */
+async function picture(hue: number, label: string, shift = 0, w = 640, h = 480): Promise<RawImage> {
+  const c = new OffscreenCanvas(w, h)
   const g = c.getContext('2d')!
-  const grad = g.createLinearGradient(0, 0, 640, 480)
+  const grad = g.createLinearGradient(0, 0, w, h)
   grad.addColorStop(0, `hsl(${hue} 80% 55%)`)
   grad.addColorStop(1, `hsl(${(hue + 120) % 360} 70% 30%)`)
   g.fillStyle = grad
-  g.fillRect(0, 0, 640, 480)
+  g.fillRect(0, 0, w, h)
   g.fillStyle = 'white'
   g.beginPath()
-  g.arc(320 + shift, 240, 120, 0, Math.PI * 2)
+  g.arc(w / 2 + shift, h / 2, 120, 0, Math.PI * 2)
   g.fill()
   g.fillStyle = 'black'
   g.font = '60px sans-serif'
   g.fillText(label, 64, 96)
-  const d = g.getImageData(0, 0, 640, 480)
-  return new RawImage(new Uint8ClampedArray(d.data), 640, 480, 4)
+  const d = g.getImageData(0, 0, w, h)
+  return new RawImage(new Uint8ClampedArray(d.data), w, h, 4)
 }
 
 const cos = (a: Float32Array, b: Float32Array) => {
@@ -397,7 +414,7 @@ const cos = (a: Float32Array, b: Float32Array) => {
 }
 const nonFinite = (v: Float32Array) => v.filter((x) => !Number.isFinite(x)).length
 
-type Proc = ((t: null, i: RawImage[][], a: null, v: null, o: Record<string, unknown>) => Promise<Record<string, { dims: number[] }>>) & {
+type Proc = ((t: string[] | null, i: RawImage[][] | null, a: null, v: null, o: Record<string, unknown>) => Promise<Record<string, { dims: number[] }>>) & {
   image_processor: { max_soft_tokens: number }
 }
 
@@ -419,17 +436,23 @@ async function run(): Promise<void> {
     const proc = (await AutoProcessor.from_pretrained(REPO)) as unknown as Proc
     proc.image_processor.max_soft_tokens = IMAGE_TOKENS
     const opts = { padding: 'max_length', max_length: SEQ_LEN, truncation: true }
-    const pics = { A: await picture(0, 'A'), 'A shifted': await picture(0, 'A', 12), B: await picture(200, 'B') }
+    const pics = {
+      A: await picture(0, 'A'), 'A shifted': await picture(0, 'A', 12), B: await picture(200, 'B'),
+      'A portrait': await picture(0, 'A', 0, 480, 640)
+    }
     const inputs: Record<string, Record<string, { dims: number[] }>> = {}
     for (const [name, img] of Object.entries(pics)) inputs[name] = await proc(null, [[img]], null, null, opts)
+    // A search query: text only, so zero image tokens.
+    inputs.query = await proc(['task: search result | query: ' + QUERY], null, null, null, opts)
     for (const [k, v] of Object.entries(inputs.A)) if (v?.dims) report.inputShapes[k] = v.dims
 
-    // Pin every free dimension (names from the ONNX graphs); num_image_tokens
-    // comes from the vision output, since it depends on the aspect ratio.
+    // Pin the free dimensions that stay fixed (names from the ONNX graphs).
+    // Image/video token counts depend on the aspect ratio and are 0 for a
+    // query, so they stay free: only the small merge step that consumes them
+    // falls back to CPU, and the layers after it see a fixed [1, 296, 512].
     const overrides = report.freeDimensionOverrides
     Object.assign(overrides, {
-      s11: 1, s35: inputs.A.pixel_values.dims[1], batch_size: 1, sequence_length: SEQ_LEN,
-      num_image_tokens: 0, num_video_tokens: 0, num_audio_tokens: 0
+      s11: 1, s35: inputs.A.pixel_values.dims[1], batch_size: 1, sequence_length: SEQ_LEN, num_audio_tokens: 0
     })
     log(`shapes ${JSON.stringify(report.inputShapes)}`)
 
@@ -481,7 +504,6 @@ async function run(): Promise<void> {
           const run: VisionRun = { rep, ms: performance.now() - tV, tokens: out.image_features.dims[0], nonFinite: nonFinite(out.image_features.data as Float32Array) }
           report.visionRuns.push(run)
           log(`vision ${JSON.stringify(run)}`)
-          overrides.num_image_tokens = run.tokens
         }
       }
     }
@@ -492,7 +514,7 @@ async function run(): Promise<void> {
       for (let rep = 1; rep <= (image === 'A' ? 3 : 1); rep++) {
         step(`embed ${image} #${rep}`)
         const tE = performance.now()
-        const vis = await vision(inp)
+        const imageFeatures = image === 'query' ? empty : (await vision(inp)).image_features
         const visionMs = performance.now() - tE
         const ids = t(inp, 'input_ids')
         const feeds: Record<string, ort.Tensor> = {}
@@ -506,7 +528,7 @@ async function run(): Promise<void> {
         const out = await sessions.model.run({
           ...feeds,
           input_ids: ids, attention_mask: t(inp, 'attention_mask'),
-          image_features: vis.image_features, video_features: empty, audio_features: empty
+          image_features: imageFeatures, video_features: empty, audio_features: empty
         })
         const ms = performance.now() - tE
         const v = Float32Array.from(out.sentence_embedding.data as Float32Array)
@@ -519,6 +541,9 @@ async function run(): Promise<void> {
     // fp16 overflow (why the app skips q4f16) shows up as NaN or collapsed scores.
     report.similarity.aVsAShifted = cos(vecs.A, vecs['A shifted'])
     report.similarity.aVsB = cos(vecs.A, vecs.B)
+    report.similarity.aVsPortrait = cos(vecs.A, vecs['A portrait'])
+    report.similarity.queryVsA = cos(vecs.query, vecs.A)
+    report.similarity.queryVsB = cos(vecs.query, vecs.B)
 
     // Compare with earlier runs on other devices in this browser.
     const key = `npuTest:${device}:${dtype}`
