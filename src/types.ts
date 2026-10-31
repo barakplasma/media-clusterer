@@ -127,6 +127,7 @@ export interface Settings {
   density: number // 1.0 = default, smaller = tighter, larger = sparse
   loopVideos: boolean
   drawBudget: number // MAX_DRAW_PER_FRAME
+  searchPercent: number // % of all photos kept bright (sized by rank) in a text search
   slideshowSeconds: number // seconds each photo stays up in a slideshow
   slideshowCutVideos: boolean // advance on the timer mid-video instead of waiting for it to end
   enableTextSearch: boolean
@@ -201,6 +202,8 @@ export interface DOMElements {
   slideshowModal: HTMLDialogElement
   slideshowClose: HTMLButtonElement
   slideshowSimilarBtn: HTMLButtonElement
+  searchPercentSlider: HTMLInputElement
+  searchPercentLabel: HTMLSpanElement
   slideshowSecondsSlider: HTMLInputElement
   slideshowSecondsLabel: HTMLSpanElement
   slideshowCutVideosToggle: HTMLInputElement
