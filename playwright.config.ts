@@ -47,7 +47,7 @@ export default defineConfig({
       },
     },
     // No GPU needed: `npm test`, the pre-commit hook and the Linux deploy job.
-    { name: 'cpu', testMatch: 'cpu.spec.ts', timeout: 60_000 },
+    { name: 'cpu', testMatch: ['cpu.spec.ts', 'cull.spec.ts'], timeout: 60_000 },
     // Chrome's built-in Gemini Nano; the spec launches its own persistent
     // Chrome profile, since the Prompt API is off in Playwright's default
     // (incognito-like) contexts.

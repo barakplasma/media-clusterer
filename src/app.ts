@@ -1100,6 +1100,7 @@ function resetAll() {
   refreshCacheSize()
 }
 
+let rankBuf = new Int32Array(0)
 function render() {
   const ctx = dom.canvas.getContext('2d')
   if (!ctx) return
@@ -1123,8 +1124,11 @@ function render() {
   const thumbs = state.thumbnails
   if (!pts.length) return
 
-  const rank = new Int32Array(pts.length).fill(pts.length)
+  // Search-rank scratch buffer, reused across frames and only filled while a search is active.
+  if (rankBuf.length !== pts.length) rankBuf = new Int32Array(pts.length)
+  const rank = rankBuf
   if (state.searchResults) {
+    rank.fill(pts.length)
     for (let i = 0; i < state.searchResults.length; i++) {
       rank[state.searchResults[i]] = i
     }
@@ -1138,20 +1142,7 @@ function render() {
   const useFull = drawSize > FULL_LOD_SIZE
   const drawnFull = useFull ? new Set<number>() : null
 
-  // Find index closest to center for highlighting if nothing viewed yet
   let currentActive = state.lastViewedIndex
-  if (currentActive === null && pts.length > 0) {
-    let minD = Infinity
-    for (let i = 0; i < pts.length; i++) {
-      const dx = pts[i][0] - camera.x
-      const dy = pts[i][1] - camera.y
-      const d = dx * dx + dy * dy
-      if (d < minD) {
-        minD = d
-        currentActive = i
-      }
-    }
-  }
 
   // Frustum culling + draw prioritization (search results first, then center distance)
   const visibleIndices = cullAndPrioritize(
@@ -1161,8 +1152,24 @@ function render() {
     dom.canvas.height,
     half,
     state.searchResults ? rank : null,
-    state.settings.drawBudget
+    state.settings.drawBudget,
+    pts === state.points // the grid is cached per array; a tween's per-frame copy would rebuild it every frame
   )
+
+  // Nothing viewed yet: highlight the drawn photo nearest the center (visibleIndices is the prioritized set,
+  // so this replaces a scan over every point).
+  if (currentActive === null) {
+    let minD = Infinity
+    for (const i of visibleIndices) {
+      const dx = pts[i][0] - camera.x
+      const dy = pts[i][1] - camera.y
+      const d = dx * dx + dy * dy
+      if (d < minD) {
+        minD = d
+        currentActive = i
+      }
+    }
+  }
 
   // Matches inside the cutoff shrink from full size (best) to 35% (last kept);
   // everything past it is small and dim.

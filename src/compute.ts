@@ -337,10 +337,63 @@ export interface ViewCamera {
 }
 
 /**
+ * Uniform grid over `pts`, built once per points array (identity-cached) so culling visits only the
+ * cells under the viewport instead of every point. Cell size grows for sparse/huge extents so the
+ * cell count stays O(n).
+ */
+interface Grid {
+  minX: number
+  minY: number
+  cell: number
+  gw: number
+  gh: number
+  start: Int32Array
+  items: Int32Array
+}
+const gridCache = new WeakMap<readonly Point[], Grid | null>()
+function gridFor(pts: readonly Point[]): Grid | null {
+  let g = gridCache.get(pts)
+  if (g !== undefined) return g
+  const n = pts.length
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity
+  for (let i = 0; i < n; i++) {
+    const [x, y] = pts[i]
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  const w = maxX - minX,
+    h = maxY - minY
+  if (!Number.isFinite(w) || !Number.isFinite(h)) {
+    gridCache.set(pts, null) // NaN/Infinity coordinates: no grid, callers fall back to the linear scan
+    return null
+  }
+  const cell = Math.max(128, Math.sqrt((w * h * 2) / Math.max(n, 1)))
+  const gw = Math.floor(w / cell) + 1,
+    gh = Math.floor(h / cell) + 1
+  const cellOf = (x: number, y: number) => Math.floor((y - minY) / cell) * gw + Math.floor((x - minX) / cell)
+  const start = new Int32Array(gw * gh + 1)
+  for (let i = 0; i < n; i++) start[cellOf(pts[i][0], pts[i][1]) + 1]++
+  for (let c = 0; c < gw * gh; c++) start[c + 1] += start[c]
+  const fill = start.slice(0, -1)
+  const items = new Int32Array(n)
+  for (let i = 0; i < n; i++) items[fill[cellOf(pts[i][0], pts[i][1])]++] = i
+  g = { minX, minY, cell, gw, gh, start, items }
+  gridCache.set(pts, g)
+  return g
+}
+
+/**
  * Frustum-cull points against the viewport and, when more are visible than
  * the draw budget, prioritize: search results first, then distance to the
  * camera center. Returns the indices to draw, at most `budget` of them.
  * `rank` is the search-result rank per index (or null when no search active).
+ * `indexed` uses the cached grid; pass it only for a stable points array (not a per-frame tween copy),
+ * or the grid is rebuilt every call. Output matches the linear scan, including draw order.
  */
 export function cullAndPrioritize(
   pts: readonly Point[],
@@ -349,19 +402,47 @@ export function cullAndPrioritize(
   viewportH: number,
   half: number,
   rank: Int32Array | null,
-  budget: number
+  budget: number,
+  indexed = false
 ): number[] {
   const s = camera.scale
   const cxW = viewportW / 2
   const cyW = viewportH / 2
 
-  const visibleIndices: number[] = []
-  for (let i = 0; i < pts.length; i++) {
-    const sx = (pts[i][0] - camera.x) * s + cxW
-    const sy = (pts[i][1] - camera.y) * s + cyW
+  let visibleIndices: number[] = []
+  const g = indexed && pts.length > 0 ? gridFor(pts) : null
+  if (g) {
+    // Same predicate as the linear scan, rearranged into world space.
+    const x0 = camera.x - (cxW + half) / s,
+      x1 = camera.x + (viewportW - cxW + half) / s
+    const y0 = camera.y - (cyW + half) / s,
+      y1 = camera.y + (viewportH - cyW + half) / s
+    const cx0 = Math.max(0, Math.floor((x0 - g.minX) / g.cell)),
+      cx1 = Math.min(g.gw - 1, Math.floor((x1 - g.minX) / g.cell))
+    const cy0 = Math.max(0, Math.floor((y0 - g.minY) / g.cell)),
+      cy1 = Math.min(g.gh - 1, Math.floor((y1 - g.minY) / g.cell))
+    for (let cy = cy0; cy <= cy1; cy++)
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const c = cy * g.gw + cx
+        for (let p = g.start[c]; p < g.start[c + 1]; p++) {
+          const i = g.items[p]
+          const sx = (pts[i][0] - camera.x) * s + cxW
+          const sy = (pts[i][1] - camera.y) * s + cyW
+          if (sx + half >= 0 && sx - half <= viewportW && sy + half >= 0 && sy - half <= viewportH) {
+            visibleIndices.push(i)
+          }
+        }
+      }
+    // Cell order -> index order so draw order matches the linear scan. Over budget the order is re-derived below.
+    if (visibleIndices.length <= budget) visibleIndices.sort((a, b) => a - b)
+  } else {
+    for (let i = 0; i < pts.length; i++) {
+      const sx = (pts[i][0] - camera.x) * s + cxW
+      const sy = (pts[i][1] - camera.y) * s + cyW
 
-    if (sx + half >= 0 && sx - half <= viewportW && sy + half >= 0 && sy - half <= viewportH) {
-      visibleIndices.push(i)
+      if (sx + half >= 0 && sx - half <= viewportW && sy + half >= 0 && sy - half <= viewportH) {
+        visibleIndices.push(i)
+      }
     }
   }
 
