@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Canvas renderer benchmark for real phones: baseline vs optimized 2D vs OffscreenCanvas worker vs PixiJS." />
   <title>Canvas bench</title>
   <style>
     :root { color-scheme: light dark; font: 14px/1.4 system-ui, sans-serif }
@@ -26,7 +27,7 @@
     <label><input type="checkbox" id="flush" checked> include raster (forces GPU/CPU raster each frame; recommended)</label><br>
     <label><input type="checkbox" id="heavy"> add no-budget runs (thousands of photos; can freeze weak phones)</label>
   </p>
-  <button id="run">Run</button><button id="copy" disabled>Copy results</button>
+  <button type="button" id="run">Run</button><button type="button" id="copy" disabled>Copy results</button>
   <div id="status"></div>
   <div id="stage"></div>
   <table id="out"></table>
