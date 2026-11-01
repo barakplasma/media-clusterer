@@ -47,7 +47,7 @@ export default defineConfig({
       // device-test.html: headless EmbeddingGemma 2 smoke test for Firebase Test Lab.
       // npu-test.html: EmbeddingGemma 2 on WebNN (NPU) with diagnostics, opened by hand on a phone.
       // chrome-ai-bench.html: the Chrome AI half of the embedding benchmark (bench/).
-      input: { main: 'index.html', deviceTest: 'device-test.html', npuTest: 'npu-test.html', chromeAiBench: 'chrome-ai-bench.html' },
+      input: { main: 'index.html', deviceTest: 'device-test.html', npuTest: 'npu-test.html', chromeAiBench: 'chrome-ai-bench.html', canvasBench: 'canvas-bench.html' },
     },
   }
 });

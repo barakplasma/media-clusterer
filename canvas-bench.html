@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Canvas bench</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px/1.4 system-ui, sans-serif }
+    body { margin: 0; padding: 16px }
+    label { display: inline-block; margin: 0 12px 8px 0 }
+    button { font: inherit; padding: 10px 16px; margin: 4px 8px 12px 0 }
+    #stage canvas { width: 100%; max-width: 320px; height: auto; border: 1px solid; display: block; margin-bottom: 12px }
+    table { border-collapse: collapse; font: 12px monospace; display: block; overflow-x: auto }
+    td, th { padding: 3px 8px; border-bottom: 1px solid #8884; text-align: right; white-space: nowrap }
+    td:nth-child(-n+2), th:nth-child(-n+2) { text-align: left }
+    #info, #status { font: 12px monospace; white-space: pre-wrap }
+  </style>
+</head>
+<body>
+  <h3>Canvas renderer bench</h3>
+  <div id="info"></div>
+  <p>
+    <label><input type="checkbox" name="n" value="5000"> 5k</label>
+    <label><input type="checkbox" name="n" value="20000" checked> 20k</label>
+    <label><input type="checkbox" name="n" value="50000"> 50k</label><br>
+    <label><input type="checkbox" id="flush" checked> include raster (forces GPU/CPU raster each frame; recommended)</label><br>
+    <label><input type="checkbox" id="heavy"> add no-budget runs (thousands of photos; can freeze weak phones)</label>
+  </p>
+  <button id="run">Run</button><button id="copy" disabled>Copy results</button>
+  <div id="status"></div>
+  <div id="stage"></div>
+  <table id="out"></table>
+  <script type="module" src="/bench/canvas/phone.ts"></script>
+</body>
+</html>

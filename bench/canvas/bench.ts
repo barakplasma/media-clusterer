@@ -5,7 +5,11 @@ import { createPixi } from './pixi'
 import { createCuller } from './cull'
 import { cullAndPrioritize } from '../../src/compute'
 
-const mk = (): HTMLCanvasElement => { const c = document.createElement('canvas'); c.width = VIEW_W; c.height = VIEW_H; document.body.appendChild(c); return c }
+const mk = (): HTMLCanvasElement => {
+  document.querySelectorAll('canvas').forEach((c) => c.remove()) // one live canvas at a time
+  const c = document.createElement('canvas'); c.width = VIEW_W; c.height = VIEW_H
+  ;(document.getElementById('stage') ?? document.body).appendChild(c); return c
+}
 
 /** Main-thread jank probe: a 4ms timer; its lateness shows how long the main thread was blocked. */
 function probe() {
