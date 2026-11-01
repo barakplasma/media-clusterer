@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { defineConfig } from 'vite';
+import solid from 'vite-plugin-solid';
 import { execSync } from 'child_process';
 
 const getGitInfo = (cmd: string, envVar?: string) => {
@@ -39,14 +40,14 @@ export default defineConfig({
     __GIT_COMMIT__: JSON.stringify(gitCommit),
     __APP_VERSION__: JSON.stringify(appVersion),
   },
-  plugins: [excludeOrtWasm],
+  plugins: [solid(), excludeOrtWasm],
   build: {
     sourcemap: true,
     rollupOptions: {
       // device-test.html: headless EmbeddingGemma 2 smoke test for Firebase Test Lab.
       // npu-test.html: EmbeddingGemma 2 on WebNN (NPU) with diagnostics, opened by hand on a phone.
       // chrome-ai-bench.html: the Chrome AI half of the embedding benchmark (bench/).
-      input: { main: 'index.html', deviceTest: 'device-test.html', npuTest: 'npu-test.html', chromeAiBench: 'chrome-ai-bench.html' },
+      input: { main: 'index.html', deviceTest: 'device-test.html', npuTest: 'npu-test.html', chromeAiBench: 'chrome-ai-bench.html', canvasBench: 'canvas-bench.html' },
     },
   }
 });

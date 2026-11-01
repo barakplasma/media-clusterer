@@ -80,6 +80,7 @@ import {
 import '@picocss/pico/css/pico.conditional.min.css'
 import { computeOptimalBatchSize, getMemoryPressure } from './hardware'
 import { embedBatchAdaptive, createAdaptiveBatcher } from './batching'
+import { mountChrome, setStatus, setProgress, showToast } from './ui/chrome'
 import type {
   AppState,
   Camera,
@@ -161,14 +162,13 @@ const DEMO_CATEGORIES = [
 ]
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
+mountChrome()
 const dom: DOMElements = {
   loadModelBtn: document.getElementById('load-model-btn') as HTMLButtonElement,
   resumeBtn: document.getElementById('resume-btn') as HTMLButtonElement,
   openBtn: document.getElementById('open-btn') as HTMLButtonElement,
   recenterBtn: document.getElementById('recenter-btn') as HTMLButtonElement,
   resetBtn: document.getElementById('reset-btn') as HTMLButtonElement,
-  progressBar: document.getElementById('progress-bar') as HTMLDivElement,
-  statusEl: document.getElementById('status') as HTMLDivElement,
   canvas: document.getElementById('canvas') as HTMLCanvasElement,
   modal: document.getElementById('modal') as HTMLDialogElement,
   modalClose: document.getElementById('modal-close') as HTMLButtonElement,
@@ -448,15 +448,6 @@ let cameraFollow = true
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const welcomeEl = document.getElementById('welcome')!
-const setStatus = (msg: string) => {
-  dom.statusEl.textContent = msg
-  document.getElementById('welcome-status')!.textContent = msg
-}
-const setProgress = (pct: number) => {
-  const w = `${Math.min(100, Math.max(0, pct))}%`
-  dom.progressBar.style.width = w
-  document.getElementById('welcome-bar')!.style.width = w
-}
 /** The first-load card stands in for the empty map until files load. */
 function showWelcome(show: boolean) {
   welcomeEl.hidden = !show
@@ -464,17 +455,6 @@ function showWelcome(show: boolean) {
 }
 const yieldMain = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-let toastTimer: ReturnType<typeof setTimeout> | null = null
-function showToast(message: string, level: 'info' | 'warn' | 'error' = 'info', durationMs = 5000) {
-  const el = document.getElementById('toast')!
-  el.textContent = message
-  el.className = `visible ${level === 'info' ? '' : level}`.trim()
-  if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => {
-    el.classList.remove('visible')
-    toastTimer = null
-  }, durationMs)
-}
 
 const cacheSizeEl = document.getElementById('cache-size')
 const deviceBadgeEl = document.getElementById('device-badge')
@@ -1120,6 +1100,7 @@ function resetAll() {
   refreshCacheSize()
 }
 
+let rankBuf = new Int32Array(0)
 function render() {
   const ctx = dom.canvas.getContext('2d')
   if (!ctx) return
@@ -1143,8 +1124,11 @@ function render() {
   const thumbs = state.thumbnails
   if (!pts.length) return
 
-  const rank = new Int32Array(pts.length).fill(pts.length)
+  // Search-rank scratch buffer, reused across frames and only filled while a search is active.
+  if (rankBuf.length !== pts.length) rankBuf = new Int32Array(pts.length)
+  const rank = rankBuf
   if (state.searchResults) {
+    rank.fill(pts.length)
     for (let i = 0; i < state.searchResults.length; i++) {
       rank[state.searchResults[i]] = i
     }
@@ -1158,20 +1142,7 @@ function render() {
   const useFull = drawSize > FULL_LOD_SIZE
   const drawnFull = useFull ? new Set<number>() : null
 
-  // Find index closest to center for highlighting if nothing viewed yet
   let currentActive = state.lastViewedIndex
-  if (currentActive === null && pts.length > 0) {
-    let minD = Infinity
-    for (let i = 0; i < pts.length; i++) {
-      const dx = pts[i][0] - camera.x
-      const dy = pts[i][1] - camera.y
-      const d = dx * dx + dy * dy
-      if (d < minD) {
-        minD = d
-        currentActive = i
-      }
-    }
-  }
 
   // Frustum culling + draw prioritization (search results first, then center distance)
   const visibleIndices = cullAndPrioritize(
@@ -1181,8 +1152,24 @@ function render() {
     dom.canvas.height,
     half,
     state.searchResults ? rank : null,
-    state.settings.drawBudget
+    state.settings.drawBudget,
+    pts === state.points // the grid is cached per array; a tween's per-frame copy would rebuild it every frame
   )
+
+  // Nothing viewed yet: highlight the drawn photo nearest the center (visibleIndices is the prioritized set,
+  // so this replaces a scan over every point).
+  if (currentActive === null) {
+    let minD = Infinity
+    for (const i of visibleIndices) {
+      const dx = pts[i][0] - camera.x
+      const dy = pts[i][1] - camera.y
+      const d = dx * dx + dy * dy
+      if (d < minD) {
+        minD = d
+        currentActive = i
+      }
+    }
+  }
 
   // Matches inside the cutoff shrink from full size (best) to 35% (last kept);
   // everything past it is small and dim.

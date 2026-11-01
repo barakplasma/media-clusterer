@@ -769,7 +769,7 @@
     <button id="wizard-go" class="primary" hidden></button>
     <div id="wizard-current" hidden>AI model: <b id="welcome-model"></b></div>
     <div id="welcome-status"></div>
-    <div class="welcome-bar"><div id="welcome-bar"></div></div>
+    <div class="welcome-bar" id="welcome-bar-wrap"></div>
   </div>
   <div class="welcome-actions">
     <button id="welcome-open" class="primary" disabled>📂 Open a folder</button>
@@ -801,7 +801,7 @@
 </div>
 
 <!-- Debug overlay -->
-<div id="toast"></div>
+<div id="toast-root"></div>
 
 <div id="debug-overlay" style="display:none; position:fixed; top:8px; right:8px; z-index:9999; background:rgba(0,0,0,0.88); color:#0f0; font:12px/1.6 monospace; padding:12px 16px; border-radius:8px; border:1px solid #0f04; max-width:340px; max-height:80vh; overflow-y:auto; white-space:pre;">
   <button id="debug-copy-btn" style="position:sticky;top:0;float:right;font-size:11px;padding:2px 8px;background:#0f02;border:1px solid #0f06;color:#0f0;border-radius:4px;cursor:pointer;margin-bottom:6px;">Copy</button>
