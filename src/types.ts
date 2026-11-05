@@ -14,6 +14,8 @@ export interface PhotoFile {
   objectURL: string | null
   gps?: { latitude: number; longitude: number } | null // null = parsed but no data
   exifData?: Record<string, unknown> | null // null = parsed but no data
+  created?: number // EXIF Date Taken in ms, or lastModified when absent; read lazily by fileFilter
+  duration?: number // video seconds, NaN when unknown; read lazily by fileFilter
 }
 
 /** 2D point in world space */
