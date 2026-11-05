@@ -171,6 +171,16 @@ export async function cacheStats(prefix?: string): Promise<{ count: number; byte
   })
 }
 
+/** Every embedding key, all models. One getAllKeys call; keys are small strings. */
+export async function cacheKeys(): Promise<string[]> {
+  const database = await openDB()
+  return new Promise((resolve, reject) => {
+    const req = database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAllKeys()
+    req.onsuccess = () => resolve(req.result.map(String))
+    req.onerror = () => reject(req.error)
+  })
+}
+
 // ── Captions ────────────────────────────────────────────────────────────────
 // Same key shape as embeddings (`name:size:lastModified`, folder-independent)
 // but a separate store, because captions are model-agnostic text while

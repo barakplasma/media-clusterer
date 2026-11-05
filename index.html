@@ -638,6 +638,19 @@
       margin-bottom: 8px;
     }
 
+    /* Folder filter dialog */
+    #filter-modal .filter-pair { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--text-dim); }
+    #filter-modal .filter-pair input { flex: 1; min-width: 0; }
+    #filter-modal article.pico input:not([type=checkbox]), #filter-modal article.pico select {
+      height: auto; margin: 0; padding: 6px 8px; background: var(--bg); border: 1px solid var(--border);
+      color: var(--text-main); border-radius: 6px; font-size: 13px; box-sizing: border-box;
+    }
+    #filter-modal .setting-item { margin-bottom: 14px; }
+    #filter-modal select { width: 100%; }
+    #filter-modal .filter-types { display: flex; gap: 18px; font-size: 13px; }
+    #filter-modal .filter-types label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+    #filter-count { font-size: 13px; font-weight: 600; }
+
     .setting-hint {
       font-size: 11px;
       color: var(--text-dim);
@@ -1132,6 +1145,57 @@
 </dialog>
 
 <!-- ── Model download fallback dialog (offline / corporate proxy) ─────────── -->
+<!-- ── Folder filter dialog: shown after every folder scan ─────────────────── -->
+<dialog id="filter-modal">
+  <article class="pico">
+    <header>
+      <p><strong>🔎 Filter folder</strong></p>
+    </header>
+    <form id="filter-form" method="dialog">
+      <div class="setting-item">
+        <label>Type</label>
+        <div class="filter-types">
+          <label><input type="checkbox" name="images"> 📷 Photos</label>
+          <label><input type="checkbox" name="videos"> ▶ Videos</label>
+        </div>
+      </div>
+      <div class="setting-item">
+        <label>Date taken</label>
+        <div class="filter-pair"><input type="date" name="createdFrom" aria-label="Taken from"> to <input type="date" name="createdTo" aria-label="Taken to"></div>
+        <div class="setting-hint">From EXIF; files without it use the modified date. Reads the start of each photo, so it is slower on big folders.</div>
+      </div>
+      <div class="setting-item">
+        <label>Date modified</label>
+        <div class="filter-pair"><input type="date" name="modifiedFrom" aria-label="Modified from"> to <input type="date" name="modifiedTo" aria-label="Modified to"></div>
+      </div>
+      <div class="setting-item">
+        <label>File size (MB)</label>
+        <div class="filter-pair"><input type="number" name="minSizeMB" min="0" step="any" placeholder="min" aria-label="Minimum size MB"> to <input type="number" name="maxSizeMB" min="0" step="any" placeholder="max" aria-label="Maximum size MB"></div>
+      </div>
+      <div class="setting-item">
+        <label>Video length (seconds)</label>
+        <div class="filter-pair"><input type="number" name="minDurationSec" min="0" step="any" placeholder="min" aria-label="Minimum video seconds"> to <input type="number" name="maxDurationSec" min="0" step="any" placeholder="max" aria-label="Maximum video seconds"></div>
+        <div class="setting-hint">Applies to videos only; photos are not affected. Videos whose length can't be read are left out.</div>
+      </div>
+      <div class="setting-item">
+        <label for="filter-embedded">Already embedded</label>
+        <select id="filter-embedded" name="embedded">
+          <option value="any">Don't care</option>
+          <option value="current">Yes, by the current model</option>
+          <option value="some-model">Yes, by any model</option>
+          <option value="none">No, by no model</option>
+        </select>
+      </div>
+      <footer>
+        <div id="filter-count" aria-live="polite" style="margin-bottom:10px;"></div>
+        <button type="button" id="filter-reset" class="secondary">Reset</button>
+        <button type="button" id="filter-cancel" class="secondary">Cancel</button>
+        <button type="submit" id="filter-load">Load</button>
+      </footer>
+    </form>
+  </article>
+</dialog>
+
 <dialog id="openai-consent-modal">
   <article class="pico">
     <header>

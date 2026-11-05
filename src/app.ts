@@ -63,8 +63,17 @@ import {
   cachePutBatch,
   cacheStats,
   captionGetBatch,
-  captionPutBatch
+  captionPutBatch,
+  cacheKeys
 } from './db'
+import {
+  DEFAULT_FILTER,
+  applyFileFilter,
+  buildEmbeddedSets,
+  isVideoName,
+  type EmbeddedSets,
+  type FileFilter
+} from './fileFilter'
 import { getNextImageInDirection } from './spatial'
 import {
   THUMB_WORLD,
@@ -649,6 +658,7 @@ async function collectImages(
   // Phase 2: fetch File objects only for the selected refs.
   const files: PhotoFile[] = []
   for (const ref of refs) {
+    if (files.length % 1000 === 999) setStatus(`Reading file info… ${files.length + 1}/${refs.length}`)
     const file = await ref.handle.getFile()
     files.push({
       name: ref.name,
@@ -1196,6 +1206,8 @@ function render() {
     let alphaMultiplier = 1.0
     let highlightBorder = null
     let isSelected = i === currentActive
+    let imgW = 0 // drawn image box, for the type badge
+    let imgH = 0
     let sizeMul = 1
 
     if (state.searchResults) {
@@ -1271,6 +1283,8 @@ function render() {
           ? Math.max(3, 4 * Math.min(s, 1))
           : Math.max(1.5, 2 * Math.min(s, 1))
         ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh)
+        imgW = dw
+        imgH = dh
         drawn = true
       }
     }
@@ -1294,6 +1308,8 @@ function render() {
           ? Math.max(3, 4 * Math.min(s, 1))
           : Math.max(1.5, 2 * Math.min(s, 1))
         ctx.strokeRect(sx - dw / 2, sy - dh / 2, dw, dh)
+        imgW = dw
+        imgH = dh
       } else {
         const r = isSelected ? Math.max(5, half * 0.4) : Math.max(3, half * 0.3)
         ctx.beginPath()
@@ -1309,6 +1325,9 @@ function render() {
         }
       }
     }
+
+    if (Math.min(imgW, imgH) >= 20)
+      drawTypeBadge(ctx, sx - imgW / 2, sy + imgH / 2, Math.min(imgW, imgH), isVideoName(state.files[i]?.name ?? ''))
 
     // When every file failed a badge on each says nothing; the chip and toast do.
     if (embedFailed.has(i) && embedFailed.size < pts.length && drawSize >= 12)
@@ -1461,6 +1480,39 @@ function zoomToCluster(cluster: number) {
 }
 
 /** Red "!" disc on a thumbnail's top-right corner: its embedding failed. */
+/** Small, translucent corner mark: ▶ for a video, a picture frame for a photo. */
+function drawTypeBadge(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, video: boolean) {
+  const r = Math.min(8, Math.max(4, size * 0.09))
+  const cx = x + r + 2
+  const cy = y - r - 2
+  ctx.globalAlpha = 0.55
+  ctx.fillStyle = '#000'
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.globalAlpha = 0.85
+  ctx.fillStyle = '#fff'
+  ctx.strokeStyle = '#fff'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  if (video) {
+    ctx.moveTo(cx - r * 0.3, cy - r * 0.45)
+    ctx.lineTo(cx + r * 0.5, cy)
+    ctx.lineTo(cx - r * 0.3, cy + r * 0.45)
+    ctx.closePath()
+    ctx.fill()
+  } else {
+    // a frame with a mountain line
+    ctx.strokeRect(cx - r * 0.5, cy - r * 0.4, r, r * 0.8)
+    ctx.moveTo(cx - r * 0.5, cy + r * 0.4)
+    ctx.lineTo(cx - r * 0.1, cy)
+    ctx.lineTo(cx + r * 0.5, cy + r * 0.4)
+    ctx.closePath()
+    ctx.fill()
+  }
+  ctx.globalAlpha = 1
+}
+
 function drawFailedBadge(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
   const r = Math.min(10, Math.max(5, size * 0.12))
   ctx.beginPath()
@@ -2762,6 +2814,155 @@ async function processFiles(files: PhotoFile[]) {
   }
 }
 
+/** Random `n` of `files` (reservoir sampling); all of them when n <= 0 or there are fewer. */
+function sampleFiles(files: PhotoFile[], n: number): PhotoFile[] {
+  if (n <= 0 || files.length <= n) return files
+  const sampled = files.slice(0, n)
+  for (let i = n; i < files.length; i++) {
+    const j = Math.floor(Math.random() * (i + 1))
+    if (j < n) sampled[j] = files[i]
+  }
+  return sampled
+}
+
+// ── Folder filter dialog ────────────────────────────────────────────────────
+const FILTER_STORAGE = 'mc_fileFilter'
+const filterModal = document.getElementById('filter-modal') as HTMLDialogElement
+const filterForm = document.getElementById('filter-form') as HTMLFormElement
+const filterCount = document.getElementById('filter-count') as HTMLDivElement
+const filterLoadBtn = document.getElementById('filter-load') as HTMLButtonElement
+
+function loadFileFilter(): FileFilter {
+  try {
+    return { ...DEFAULT_FILTER, ...JSON.parse(localStorage.getItem(FILTER_STORAGE) ?? '{}') }
+  } catch {
+    return { ...DEFAULT_FILTER }
+  }
+}
+
+async function loadEmbeddedSets(): Promise<EmbeddedSets> {
+  try {
+    return buildEmbeddedSets(await cacheKeys(), currentCachePrefix())
+  } catch (err) {
+    console.warn('Embedding cache unreadable; treating every file as not embedded:', err)
+    return { current: new Set(), anyModel: new Set() }
+  }
+}
+
+function filterField(name: string) {
+  return filterForm.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement
+}
+
+function readFilterForm(): FileFilter {
+  const num = (n: string) => {
+    const v = filterField(n).value
+    return v === '' || !Number.isFinite(Number(v)) ? null : Number(v)
+  }
+  return {
+    images: (filterField('images') as HTMLInputElement).checked,
+    videos: (filterField('videos') as HTMLInputElement).checked,
+    modifiedFrom: filterField('modifiedFrom').value,
+    modifiedTo: filterField('modifiedTo').value,
+    createdFrom: filterField('createdFrom').value,
+    createdTo: filterField('createdTo').value,
+    minSizeMB: num('minSizeMB'),
+    maxSizeMB: num('maxSizeMB'),
+    minDurationSec: num('minDurationSec'),
+    maxDurationSec: num('maxDurationSec'),
+    embedded: filterField('embedded').value as FileFilter['embedded']
+  }
+}
+
+function writeFilterForm(f: FileFilter) {
+  ;(filterField('images') as HTMLInputElement).checked = f.images
+  ;(filterField('videos') as HTMLInputElement).checked = f.videos
+  for (const k of ['modifiedFrom', 'modifiedTo', 'createdFrom', 'createdTo', 'embedded'] as const)
+    filterField(k).value = f[k]
+  for (const k of ['minSizeMB', 'maxSizeMB', 'minDurationSec', 'maxDurationSec'] as const)
+    filterField(k).value = f[k] == null ? '' : String(f[k])
+}
+
+/** Let the user narrow a scanned folder. Resolves to the matches, or null on cancel. */
+async function openFilterDialog(files: PhotoFile[]): Promise<PhotoFile[] | null> {
+  const embedded = await loadEmbeddedSets()
+  writeFilterForm(loadFileFilter())
+  const sample = state.settings.randomSampleSize
+  const ac = new AbortController()
+  let gen = 0
+  let matched: PhotoFile[] = []
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  const recount = async () => {
+    const my = ++gen
+    const f = readFilterForm()
+    try {
+      localStorage.setItem(FILTER_STORAGE, JSON.stringify(f))
+    } catch (_) {
+      // storage full: the filter still works for this load
+    }
+    filterLoadBtn.disabled = true
+    filterCount.textContent = 'Counting…'
+    const res = await applyFileFilter(
+      files,
+      f,
+      embedded,
+      (d, t) => {
+        if (my === gen && (d % 25 === 0 || d === t)) filterCount.textContent = `Reading metadata… ${d}/${t}`
+      },
+      () => my !== gen
+    )
+    if (!res || my !== gen) return
+    matched = res
+    const note = sample > 0 && res.length > sample ? ` · a random ${sample} will load (Random Sample Size in Settings)` : ''
+    filterCount.textContent = `${res.length} of ${files.length} files match${note}`
+    filterLoadBtn.disabled = res.length === 0
+  }
+  const schedule = () => {
+    clearTimeout(timer)
+    timer = setTimeout(recount, 250)
+  }
+
+  return new Promise((resolve) => {
+    const finish = (result: PhotoFile[] | null) => {
+      gen++ // stops any in-flight count
+      clearTimeout(timer)
+      ac.abort()
+      filterModal.close()
+      resolve(result)
+    }
+    const opts = { signal: ac.signal }
+    filterForm.addEventListener('input', schedule, opts)
+    filterForm.addEventListener('change', schedule, opts)
+    filterForm.addEventListener(
+      'submit',
+      (e) => {
+        e.preventDefault()
+        if (!filterLoadBtn.disabled) finish(matched)
+      },
+      opts
+    )
+    document.getElementById('filter-cancel')!.addEventListener('click', () => finish(null), opts)
+    document.getElementById('filter-reset')!.addEventListener(
+      'click',
+      () => {
+        writeFilterForm(DEFAULT_FILTER)
+        schedule()
+      },
+      opts
+    )
+    filterModal.addEventListener(
+      'cancel',
+      (e) => {
+        e.preventDefault()
+        finish(null)
+      },
+      opts
+    )
+    filterModal.showModal()
+    recount()
+  })
+}
+
 async function run(dirHandle: DirectoryHandle, basePath: string = '') {
   dom.openBtn.disabled = true
   setProgress(0)
@@ -2770,8 +2971,15 @@ async function run(dirHandle: DirectoryHandle, basePath: string = '') {
     state.currentDirHandle = dirHandle
     state.currentBasePath = basePath
     setStatus('Scanning folder…')
-    const files = await collectImages(dirHandle, state.settings.randomSampleSize, basePath)
-    await processFiles(files)
+    // Scan everything so the filters see the whole folder; sampling happens after.
+    const all = await collectImages(dirHandle, 0, basePath)
+    const files = await openFilterDialog(all)
+    if (!files) {
+      setStatus('Cancelled.')
+      dom.openBtn.disabled = false
+      return
+    }
+    await processFiles(sampleFiles(files, state.settings.randomSampleSize))
 
     // Update URL to show current folder (clears any filter state)
     updateURL({ type: 'folder', path: basePath })
@@ -2815,7 +3023,13 @@ async function filterByDateTime(
   const allFiles = await collectImages(state.currentDirHandle, 0, state.currentBasePath)
 
   // Filter by datetime range
-  const filtered = allFiles.filter((f) => {
+  // The saved folder filter still applies; the date link narrows it further.
+  const saved = loadFileFilter()
+  const base =
+    (await applyFileFilter(allFiles, saved, await loadEmbeddedSets(), (d, t) =>
+      setStatus(`Reading metadata… ${d}/${t}`)
+    )) ?? allFiles
+  const filtered = base.filter((f) => {
     const d = new Date(f.lastModified)
     if (d.getFullYear() !== year) return false
     if (month !== undefined && d.getMonth() !== month) return false
@@ -2831,17 +3045,7 @@ async function filterByDateTime(
   }
 
   // Apply random sample limit if configured and filtered results exceed it
-  let finalFiles = filtered
-  const sampleLimit = state.settings.randomSampleSize
-  if (sampleLimit > 0 && filtered.length > sampleLimit) {
-    // Reservoir sampling on filtered results
-    const sampled: PhotoFile[] = filtered.slice(0, sampleLimit)
-    for (let i = sampleLimit; i < filtered.length; i++) {
-      const j = Math.floor(Math.random() * (i + 1))
-      if (j < sampleLimit) sampled[j] = filtered[i]
-    }
-    finalFiles = sampled
-  }
+  const finalFiles = sampleFiles(filtered, state.settings.randomSampleSize)
 
   // Update display name for status
   const rangeDesc =
@@ -4373,7 +4577,13 @@ dom.fileInput.addEventListener('change', async () => {
     }
   }
 
-  await processFiles(files)
+  const filtered = await openFilterDialog(files)
+  if (!filtered) {
+    setStatus('Cancelled.')
+    dom.openBtn.disabled = false
+    return
+  }
+  await processFiles(sampleFiles(filtered, state.settings.randomSampleSize))
 })
 
 dom.demoBtn.addEventListener('click', async () => {
@@ -4984,6 +5194,7 @@ debugCopyBtn.addEventListener('click', async () => {
   },
   // Drive the real pipeline from a test page (device tests feed File objects).
   processFiles,
+  openFilterDialog,
   searchImages,
   extractVideoFrames,
   buildDebugInfo

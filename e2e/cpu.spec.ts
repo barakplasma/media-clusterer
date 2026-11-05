@@ -82,3 +82,75 @@ test('first visit: the setup wizard checks the device and waits before downloadi
   expect(modelFetches, 'no weights before the user starts').toEqual([])
   expect(await page.evaluate(() => localStorage.getItem('mc_settings')), 'first visit stays a first visit').toBeNull()
 })
+
+test('folder filter: type, size, video length, date taken and embedded status', async ({ page }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true, modelVariant: 'nomic', randomSampleSize: 0 }))
+  )
+  await page.goto('/')
+  // Two cached embeddings: cats.jpg by the current model (nomic, no prefix), tiger.png by another one.
+  await page.evaluate(async () => {
+    const names = ['cats.jpg', 'tiger.png', 'football.webp', 'butterfly.jpg', 'cats.mp4', 'tiger.webm']
+    const files = await Promise.all(
+      names.map(async (n, i) => {
+        const blob = await (await fetch(`/e2e/fixtures/${n}`)).blob()
+        const file = new File([blob], n, { type: blob.type, lastModified: 1e12 + i * 1000 })
+        return { name: `album/${n}`, size: file.size, lastModified: file.lastModified, file, objectURL: null }
+      })
+    )
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open('photo-organizer-v1', 2)
+      req.onerror = () => reject(req.error)
+      req.onsuccess = () => {
+        const tx = req.result.transaction('embeddings', 'readwrite')
+        const store = tx.objectStore('embeddings')
+        const key = (f: (typeof files)[number]) => `${f.name}:${f.size}:${f.lastModified}`
+        store.put(new Float32Array(4), key(files[0]))
+        store.put(new Float32Array(4), `@other-model/${key(files[1])}`)
+        tx.oncomplete = () => resolve()
+      }
+    })
+    ;(window as any).__picked = window.__debug.openFilterDialog(files)
+  })
+  const count = page.locator('#filter-count')
+  const field = (n: string) => page.locator(`#filter-form [name="${n}"]`)
+  await expect(count).toHaveText('6 of 6 files match')
+
+  await field('videos').uncheck()
+  await expect(count).toHaveText('4 of 6 files match')
+  await field('videos').check()
+
+  await field('embedded').selectOption('current')
+  await expect(count).toHaveText('1 of 6 files match')
+  await field('embedded').selectOption('some-model')
+  await expect(count).toHaveText('2 of 6 files match')
+  await field('embedded').selectOption('none')
+  await expect(count).toHaveText('4 of 6 files match')
+  await field('embedded').selectOption('any')
+
+  // Every fixture video lasts under an hour, so a one-hour minimum keeps only the photos.
+  await field('minDurationSec').fill('3600')
+  await expect(count).toHaveText('4 of 6 files match')
+  await field('minDurationSec').fill('')
+  await field('images').uncheck()
+  await field('maxDurationSec').fill('3600')
+  await expect(count).toHaveText('2 of 6 files match')
+  await page.locator('#filter-reset').click()
+
+  // No fixture was taken in 2100, and files without EXIF use their 2001 modified date.
+  await field('createdFrom').fill('2100-01-01')
+  await expect(count).toHaveText('0 of 6 files match')
+  await expect(page.locator('#filter-load')).toBeDisabled()
+  await page.locator('#filter-reset').click()
+
+  await field('maxSizeMB').fill('0.000001')
+  await expect(count).toHaveText('0 of 6 files match')
+  await field('maxSizeMB').fill('')
+  await field('videos').uncheck()
+  await expect(count).toHaveText('4 of 6 files match')
+  await page.locator('#filter-load').click()
+  const picked = await page.evaluate(async () => ((await (window as any).__picked) as { name: string }[]).map((f) => f.name))
+  expect(picked.sort()).toEqual(['album/butterfly.jpg', 'album/cats.jpg', 'album/football.webp', 'album/tiger.png'])
+  // The choice is remembered for the next folder.
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('mc_fileFilter')!).videos)).toBe(false)
+})
