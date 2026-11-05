@@ -638,6 +638,31 @@
       margin-bottom: 8px;
     }
 
+    /* Overnight embedding: near-black and dim, it runs for hours on a screen kept awake */
+    #overnight {
+      position: fixed; inset: 0; z-index: 1000; background: #000; color: #6e7681;
+      overflow-y: auto; font-size: 13px; line-height: 1.5;
+    }
+    #overnight[hidden] { display: none; }
+    #overnight .on-inner { max-width: 760px; margin: 0 auto; padding: 32px 16px; }
+    #overnight h2 { color: #8b949e; font-size: 18px; margin: 0 0 4px; }
+    #overnight button {
+      margin: 16px 8px 0 0; padding: 6px 16px; background: #161b22; color: #8b949e;
+      border: 1px solid #30363d; border-radius: 6px; cursor: pointer;
+    }
+    #overnight button:disabled { opacity: 0.5; cursor: default; }
+    #overnight .on-dim { color: #545d68; font-size: 12px; }
+    #overnight .on-pick { display: block; margin: 8px 0; color: #8b949e; cursor: pointer; }
+    #overnight .on-pick input { margin-right: 6px; }
+    #overnight-pct { font-size: 44px; font-weight: 600; color: #8b949e; font-variant-numeric: tabular-nums; }
+    #overnight .on-bar { height: 8px; background: #161b22; border-radius: 4px; overflow: hidden; margin: 6px 0; }
+    #overnight .on-bar > div { height: 100%; width: 0; background: #2f5c8a; transition: width 0.5s; }
+    #overnight .on-bar-small { height: 4px; }
+    #overnight .on-model { margin-top: 18px; }
+    #overnight .on-model-head { color: #8b949e; }
+    #overnight-line, #overnight-stats { font-variant-numeric: tabular-nums; }
+    #overnight-stats { margin-top: 24px; }
+
     /* Folder filter dialog */
     #filter-modal .filter-pair { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--text-dim); }
     #filter-modal .filter-pair input { flex: 1; min-width: 0; }
@@ -750,6 +775,7 @@
     <button id="resume-btn" hidden disabled>🔄 <span class="btn-label">Resume Session</span></button>
     <button id="open-btn" disabled title="Only compatible media files will be processed">📂 <span class="btn-label">Open Media</span></button>
     <button id="demo-btn" disabled title="Load 30 sample animal photos">🐾 <span class="btn-label">Try Demo</span></button>
+    <button id="overnight-btn" title="Embed a big folder unattended, with one or more models, without showing photos">🌙 <span class="btn-label">Overnight</span></button>
   </div>
   <div class="tb-meta" id="model-badge">
     <span id="device-badge">Local AI</span>
@@ -1145,6 +1171,27 @@
 </dialog>
 
 <!-- ── Model download fallback dialog (offline / corporate proxy) ─────────── -->
+<!-- ── Overnight embedding (src/overnight.ts) ──────────────────────────────── -->
+<div id="overnight" hidden role="dialog" aria-modal="true" aria-labelledby="overnight-title">
+  <div class="on-inner">
+    <h2 id="overnight-title">🌙 Overnight embedding</h2>
+    <div id="overnight-folder" class="on-dim"></div>
+    <section id="overnight-setup">
+      <p>Pick the models to run. Each one embeds every selected file it has not embedded yet, one model after another. Photos are not shown. Keep this tab open and in front; the screen is kept awake while it runs.</p>
+      <div id="overnight-models"></div>
+      <button id="overnight-start">Start</button><button id="overnight-cancel" class="secondary">Cancel</button>
+    </section>
+    <section id="overnight-run" hidden>
+      <div id="overnight-pct" aria-live="off">0%</div>
+      <div class="on-bar"><div id="overnight-bar"></div></div>
+      <div id="overnight-line" aria-live="polite"></div>
+      <div id="overnight-model-rows"></div>
+      <div id="overnight-stats" class="on-dim"></div>
+      <button id="overnight-stop" class="secondary">Stop</button><button id="overnight-close" hidden>Close</button>
+    </section>
+  </div>
+</div>
+
 <!-- ── Folder filter dialog: shown after every folder scan ─────────────────── -->
 <dialog id="filter-modal">
   <article class="pico">

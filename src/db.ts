@@ -55,8 +55,8 @@ export async function openDB(): Promise<IDBDatabase> {
  * rewrites gradually shrink the store.
  */
 export function asFloat32(value: unknown): Float32Array | null {
-  if (value instanceof Float32Array) return value
-  if (value instanceof Float64Array) return Float32Array.from(value)
+  // compactVector also trims any oversized buffer an older build stored.
+  if (value instanceof Float32Array || value instanceof Float64Array) return compactVector(value)
   return null
 }
 
@@ -97,6 +97,16 @@ export async function cacheGetBatch(keys: CacheKey[]): Promise<(Float32Array | n
 }
 
 /**
+ * The value as a Float32Array that owns exactly its bytes. IndexedDB clones the
+ * whole underlying ArrayBuffer, so storing a 768-float view into a batch tensor
+ * would store the entire tensor; any other numeric type is narrowed to Float32.
+ */
+export function compactVector(value: ArrayLike<number>): Float32Array {
+  if (value instanceof Float32Array && value.byteOffset === 0 && value.byteLength === value.buffer.byteLength) return value
+  return Float32Array.from(value)
+}
+
+/**
  * Put embedding in cache
  */
 export async function cachePut(key: CacheKey, value: Float32Array): Promise<void> {
@@ -105,7 +115,7 @@ export async function cachePut(key: CacheKey, value: Float32Array): Promise<void
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, 'readwrite')
     const store = transaction.objectStore(STORE_NAME)
-    store.put(value, key)
+    store.put(compactVector(value), key)
 
     transaction.oncomplete = () => {
       resolve()
@@ -121,6 +131,7 @@ export async function cachePut(key: CacheKey, value: Float32Array): Promise<void
  * Batch put embeddings (20 per transaction for performance)
  */
 export async function cachePutBatch(entries: [CacheKey, Float32Array][]): Promise<void> {
+  if (entries.length === 0) return
   const database = await openDB()
 
   return new Promise((resolve, reject) => {
@@ -128,7 +139,7 @@ export async function cachePutBatch(entries: [CacheKey, Float32Array][]): Promis
     const store = transaction.objectStore(STORE_NAME)
 
     for (const [key, value] of entries) {
-      store.put(value, key)
+      store.put(compactVector(value), key)
     }
 
     transaction.oncomplete = () => {
@@ -160,7 +171,8 @@ export async function cacheStats(prefix?: string): Promise<{ count: number; byte
         const key = String(cursor.key)
         if (!prefix || key.startsWith(prefix)) {
           count++
-          if (ArrayBuffer.isView(cursor.value)) bytes += cursor.value.byteLength
+          // The buffer, not the view: it is what IndexedDB actually stored.
+          if (ArrayBuffer.isView(cursor.value)) bytes += cursor.value.buffer.byteLength
         }
         cursor.continue()
       } else {
@@ -168,6 +180,24 @@ export async function cacheStats(prefix?: string): Promise<{ count: number; byte
       }
     }
     req.onerror = () => reject(req.error)
+  })
+}
+
+/** Which of `keys` are cached, positionally. Key-only lookups: no vector is read. */
+export async function cacheHasBatch(keys: CacheKey[]): Promise<boolean[]> {
+  const database = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction(STORE_NAME, 'readonly')
+    const store = tx.objectStore(STORE_NAME)
+    const out = new Array<boolean>(keys.length).fill(false)
+    keys.forEach((k, i) => {
+      const req = store.getKey(k)
+      req.onsuccess = () => {
+        out[i] = req.result !== undefined
+      }
+    })
+    tx.oncomplete = () => resolve(out)
+    tx.onerror = () => reject(tx.error)
   })
 }
 

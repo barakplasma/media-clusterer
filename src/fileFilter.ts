@@ -6,6 +6,7 @@
 
 import exifr from '@modernized/exifr'
 import pLimit from 'p-limit'
+import { makeCacheKey } from './embeddings'
 import type { PhotoFile } from './types'
 
 export type EmbeddedFilter = 'any' | 'current' | 'some-model' | 'none'
@@ -38,32 +39,33 @@ export const DEFAULT_FILTER: FileFilter = {
   embedded: 'any'
 }
 
-/** Keys (`name:size:lastModified`, no model prefix) already embedded. */
+/** Cache keys (`basename:size:lastModified`, no model prefix) already embedded. */
 export interface EmbeddedSets {
   current: Set<string>
   anyModel: Set<string>
 }
 
-export const fileKey = (f: PhotoFile) => `${f.name}:${f.size}:${f.lastModified}`
+// The embedding cache keys on the basename (makeCacheKey), not the folder path.
+export const fileKey = (f: PhotoFile) => makeCacheKey(f)
 
 export const isVideoName = (name: string) => /\.(mp4|webm)$/i.test(name)
 
+/** True when raw cache key `k` belongs to the model whose namespace is `prefix` ('' = nomic). */
+export const keyHasPrefix = (k: string, prefix: string) => (prefix ? k.startsWith(prefix) : !k.startsWith('@'))
+
 /**
  * Split raw cache keys into the current model's set and the any-model set.
- * Prefixes are '' (nomic) or '@…/'; an OpenAI model name can itself hold '/',
- * so every suffix after a '/' counts for the any-model set.
- * shortcut: a root file and a subfolder file with the same name, size and mtime alias; fine for photo libraries.
+ * A key is `prefix + name:size:mtime`. Prefixes end in '/', size and mtime hold
+ * none, so the text after the last '/' is the basename key. That also covers
+ * legacy keys that stored the folder path, which embedAll migrates on read.
  */
 export function buildEmbeddedSets(keys: string[], currentPrefix: string): EmbeddedSets {
   const current = new Set<string>()
   const anyModel = new Set<string>()
   for (const k of keys) {
-    if (currentPrefix ? k.startsWith(currentPrefix) : !k.startsWith('@')) current.add(k.slice(currentPrefix.length))
-    if (!k.startsWith('@')) {
-      anyModel.add(k)
-      continue
-    }
-    for (let i = k.indexOf('/'); i !== -1; i = k.indexOf('/', i + 1)) anyModel.add(k.slice(i + 1))
+    const base = k.slice(k.lastIndexOf('/') + 1)
+    anyModel.add(base)
+    if (keyHasPrefix(k, currentPrefix)) current.add(base)
   }
   return { current, anyModel }
 }

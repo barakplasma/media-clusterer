@@ -64,12 +64,15 @@ import {
   cacheStats,
   captionGetBatch,
   captionPutBatch,
-  cacheKeys
+  cacheKeys,
+  cacheHasBatch
 } from './db'
+import { runOvernight, formatDuration, type ChildMsg, type OvernightStats, type RunMsg } from './overnight'
 import {
   DEFAULT_FILTER,
   applyFileFilter,
   buildEmbeddedSets,
+  fileKey,
   isVideoName,
   type EmbeddedSets,
   type FileFilter
@@ -123,6 +126,11 @@ function applyModelEnv() {
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
+// A hidden overnight worker frame (src/overnight.ts): embeds the files its parent
+// posts, writes the cache, and never touches settings or shows the setup wizard.
+const OVERNIGHT_CHILD = new URLSearchParams(location.search).has('overnight-child')
+const postToParent = (m: ChildMsg) => window.parent.postMessage(m, location.origin)
+
 const IMAGE_EXTS = new Set([
   'jpg',
   'jpeg',
@@ -462,6 +470,7 @@ const setStatus = (msg: string) => {
   document.getElementById('welcome-status')!.textContent = msg
 }
 const setProgress = (pct: number) => {
+  if (OVERNIGHT_CHILD && state.phase === 'loading_model') postToParent({ type: 'loading', pct })
   const w = `${Math.min(100, Math.max(0, pct))}%`
   dom.progressBar.style.width = w
   document.getElementById('welcome-bar')!.style.width = w
@@ -543,8 +552,7 @@ function updateDeviceBadge() {
   }
 }
 
-function currentCachePrefix(): string {
-  const v = state.settings.modelVariant
+function currentCachePrefix(v: ModelVariant = state.settings.modelVariant): string {
   if (v === 'openai') {
     // Computed from settings, not from `remoteConfig`, so the settings panel
     // can show a cache count before the endpoint has ever been contacted.
@@ -2116,6 +2124,8 @@ async function loadModel(signal?: AbortSignal) {
       // which describes a failed *model download*. A remote endpoint rejecting
       // a key produces the same words, and offering to upload .onnx files in
       // response would be nonsense — this mode downloads no model at all.
+      // A worker frame has nobody to answer the fallback dialog; its parent retries or gives up.
+      if (OVERNIGHT_CHILD) throw err
       if (state.settings.modelVariant !== 'openai' && isDownloadError(err)) {
         const choice = await showModelFallbackModal(state.settings.modelVariant)
         if (choice) {
@@ -2229,7 +2239,20 @@ function fitInto(pts: Point[], ref: readonly Point[]): Point[] {
   return pts.map((p): Point => [b.cx + (p[0] - a.cx) * k, b.cy + (p[1] - a.cy) * k])
 }
 
-async function embedAll(files: PhotoFile[]) {
+type EmbedStop = 'ok' | 'gpu-lost' | 'low-memory'
+interface EmbedOptions {
+  /** Overnight worker frame: no map, no projection, nothing kept for display. */
+  headless?: boolean
+  onProgress?: (done: number, total: number) => void
+  /** Stop early once less than this share of the JS heap is free (default 0.2). */
+  minFreeRatio?: number
+}
+let lastEmbedStop: EmbedStop = 'ok'
+
+async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
+  const headless = opts.headless ?? false
+  const minFreeRatio = opts.minFreeRatio ?? 0.2
+  lastEmbedStop = 'ok'
   state.phase = 'embedding'
   const vectors = new Array<Float32Array>(files.length)
   let cacheHits = 0
@@ -2241,6 +2264,10 @@ async function embedAll(files: PhotoFile[]) {
   const grid = state.points
   let projecting = false
   let lastProjection = 0
+  // Grows with the projection's own cost, so a big folder isn't re-projected back to back.
+  let projectionEvery = 2500
+  // Batch-of-one models would otherwise pay one IndexedDB transaction per file.
+  let lastFlush = performance.now()
 
   const isSapiens2 = state.settings.modelVariant.startsWith('sapiens2')
   const isChromeAI = state.settings.modelVariant === 'chrome-ai'
@@ -2287,6 +2314,8 @@ async function embedAll(files: PhotoFile[]) {
     // ImageBitmap[] entries are VLM frame groups: several frames for a video,
     // one for a still, pooled to a single vector by the worker.
     const missInputs: (File | RawImage | ImageBitmap | ImageBitmap[] | string)[] = []
+    // Headless: video frames that would have been display thumbnails, closed after this batch.
+    const tempBitmaps: ImageBitmap[] = []
 
     await Promise.all(
       batch.map(async (f, bi) => {
@@ -2301,7 +2330,8 @@ async function embedAll(files: PhotoFile[]) {
             if (!thumb) thumbFailed.add(idx)
           }
           if (thumb) {
-            if (!state.thumbnails[idx]) {
+            if (headless) tempBitmaps.push(thumb)
+            else if (!state.thumbnails[idx]) {
               state.thumbnails[idx] = thumb
               thumbDecoding.delete(idx)
             }
@@ -2545,16 +2575,20 @@ async function embedAll(files: PhotoFile[]) {
       }
     }
 
-    if (writeQueue.length > 0) {
-      await cachePutBatch(writeQueue)
-      writeQueue.length = 0
-    }
+    for (const b of tempBitmaps) b.close()
 
     const done = i + batch.length
+    if (writeQueue.length >= 32 || performance.now() - lastFlush > 2000 || done >= files.length) {
+      await cachePutBatch(writeQueue)
+      writeQueue.length = 0
+      lastFlush = performance.now()
+    }
+    opts.onProgress?.(done, files.length)
 
-    if (done >= 3 && !projecting && performance.now() - lastProjection >= 2500) {
+    if (!headless && done >= 3 && !projecting && performance.now() - lastProjection >= projectionEvery) {
       projecting = true
       lastProjection = performance.now()
+      const started = performance.now()
       runProjection(
         vectors.slice(0, done),
         state.settings.projectionMethod,
@@ -2571,6 +2605,7 @@ async function embedAll(files: PhotoFile[]) {
         .catch((err) => console.error('Progressive projection failed:', err))
         .finally(() => {
           projecting = false
+          projectionEvery = Math.max(2500, 4 * (performance.now() - started))
         })
     }
 
@@ -2609,21 +2644,24 @@ async function embedAll(files: PhotoFile[]) {
       console.error(`GPU device lost while embedding: ${state.settings.modelVariant}, ${done}/${files.length} files`)
       await cachePutBatch(writeQueue)
       writeQueue.length = 0
+      lastEmbedStop = 'gpu-lost'
       return vectors.slice(0, done)
     }
 
     const pressure = getMemoryPressure()
-    if (pressure !== null && pressure.freeRatio < 0.2) {
+    if (pressure !== null && pressure.freeRatio < minFreeRatio) {
       setStatus(
         `Low memory (${(pressure.freeRatio * 100).toFixed(0)}% free) — stopping at ${done} / ${files.length} files…`
       )
       // console.error reaches Bugsink (src/sentry.ts); a status line on a phone does not.
-      console.error(
+      // Headless runs stop here on purpose to recycle their frame, which is no error.
+      ;(headless ? console.info : console.error)(
         `Embedding stopped for low memory: ${state.settings.modelVariant}, ${done}/${files.length} files, ` +
           `${(pressure.freeRatio * 100).toFixed(0)}% JS heap free`
       )
       await cachePutBatch(writeQueue)
       writeQueue.length = 0
+      lastEmbedStop = 'low-memory'
       return vectors.slice(0, done)
     }
 
@@ -3811,6 +3849,8 @@ exifDialog.addEventListener('click', (e) => {
 
 // ── Settings ────────────────────────────────────────────────────────────────
 const saveSettings = () => {
+  // A worker frame shares localStorage but runs a model of its parent's choosing.
+  if (OVERNIGHT_CHILD) return
   const s =
     modelStandIn?.used === state.settings.modelVariant
       ? { ...state.settings, modelVariant: modelStandIn.saved }
@@ -4750,7 +4790,269 @@ function autoLoadModel() {
   })()
 }
 
-if (!state.settings.viewerOnly) {
+// ── Overnight embedding ─────────────────────────────────────────────────────
+/** Worker-frame side: load one model, embed the posted files, report, done. */
+function runOvernightChild() {
+  type TestEmbedder = (model: ModelVariant, file: PhotoFile) => Promise<Float32Array | null>
+  const fail = (message: string) => postToParent({ type: 'done', reason: 'error', message })
+  window.addEventListener('error', (e) => fail(String(e.message)))
+  window.addEventListener('unhandledrejection', (e) => fail(String((e.reason as Error)?.message ?? e.reason)))
+  window.addEventListener('message', async (e) => {
+    if (e.source !== window.parent || e.origin !== location.origin) return
+    const msg = e.data as RunMsg
+    if (msg?.type !== 'run') return
+    try {
+      state.settings.viewerOnly = false
+      state.settings.modelVariant = msg.model
+      // e2e seam: stands in for the model so the controller can be tested without a GPU or a download.
+      const test = (window as Window & { __mcTestEmbedder?: TestEmbedder }).__mcTestEmbedder
+      if (test) {
+        postToParent({ type: 'loaded' })
+        const prefix = currentCachePrefix(msg.model)
+        for (let i = 0; i < msg.files.length; i++) {
+          const v = await test(msg.model, msg.files[i])
+          if (v) await cachePutBatch([[`${prefix}${makeCacheKey(msg.files[i])}` as CacheKey, v]])
+          postToParent({ type: 'progress', done: i + 1, total: msg.files.length })
+        }
+        postToParent({ type: 'done', reason: 'ok' })
+        return
+      }
+      await loadModel()
+      // loadModelOnce swaps in a CPU model when the GPU one can't run; that would embed under the wrong model.
+      if (state.settings.modelVariant !== msg.model || state.phase === 'idle') {
+        postToParent({ type: 'done', reason: 'unsupported', message: `${msg.model} can't run on this device.` })
+        return
+      }
+      postToParent({ type: 'loaded' })
+      await embedAll(msg.files, {
+        headless: true,
+        // Recycle the frame well before the heap gets tight.
+        minFreeRatio: 0.3,
+        onProgress: (done, total) => postToParent({ type: 'progress', done, total })
+      })
+      postToParent({ type: 'done', reason: lastEmbedStop })
+    } catch (err) {
+      fail((err as Error)?.message ?? String(err))
+    }
+  })
+  postToParent({ type: 'ready' })
+}
+
+const OVERNIGHT_JOB = 'mc_overnight_job'
+const overnightBtn = document.getElementById('overnight-btn') as HTMLButtonElement
+const overnightEl = document.getElementById('overnight') as HTMLDivElement
+const $on = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
+
+function savedOvernightJob(): { models: ModelVariant[] } | null {
+  try {
+    return JSON.parse(localStorage.getItem(OVERNIGHT_JOB) ?? 'null')
+  } catch {
+    return null
+  }
+}
+if (savedOvernightJob()) {
+  overnightBtn.querySelector('.btn-label')!.textContent = 'Resume overnight'
+  overnightBtn.title = 'An overnight job did not finish. Pick the same folder to embed what is left.'
+}
+
+/** Models offered for overnight runs: what this device can run, minus ones that need a person. */
+function overnightModelChoices() {
+  return [...dom.modelSelect.querySelectorAll('option')]
+    .filter((o) => o.value !== 'chrome-ai') // its download and sessions need a click
+    .filter((o) => {
+      if (o.value !== 'openai') return true
+      const base = normalizeBaseUrl(state.settings.openai.baseUrl)
+      return !!base && !!state.settings.openai.model && hasOpenAIConsent(base)
+    })
+    .map((o) => ({ id: o.value as ModelVariant, label: o.textContent ?? o.value, disabled: o.disabled }))
+}
+
+function renderOvernight(st: OvernightStats) {
+  const pct = Math.min(100, st.pct)
+  $on('overnight-pct').textContent = `${pct.toFixed(1)}%`
+  $on('overnight-bar').style.width = `${pct}%`
+  $on('overnight-line').textContent =
+    `${st.processed.toLocaleString()} / ${st.work.toLocaleString()} files · ` +
+    `${st.rate.toFixed(2)} files/s · ETA ${st.finished ? '—' : formatDuration(st.etaSec)} · elapsed ${formatDuration(st.elapsedSec)}`
+  $on('overnight-model-rows').replaceChildren(
+    ...st.models.map((m) => {
+      const row = document.createElement('div')
+      row.className = 'on-model'
+      const done = m.cachedAtStart + m.embedded + m.failed
+      const mPct = m.total ? (100 * done) / m.total : 100
+      const state =
+        m.state === 'loading' ? `loading ${m.loadPct.toFixed(0)}%` : m.state === 'running' ? 'embedding' : m.state
+      const head = document.createElement('div')
+      head.className = 'on-model-head'
+      head.textContent = `${m.label} — ${state} · ${mPct.toFixed(1)}%`
+      const bar = document.createElement('div')
+      bar.className = 'on-bar on-bar-small'
+      bar.innerHTML = '<div></div>'
+      ;(bar.firstChild as HTMLElement).style.width = `${mPct}%`
+      const line = document.createElement('div')
+      line.className = 'on-dim'
+      const active = m.state === 'loading' || m.state === 'running'
+      line.textContent =
+        `embedded ${m.embedded.toLocaleString()} · already cached ${m.cachedAtStart.toLocaleString()} · ` +
+        `failed ${m.failed.toLocaleString()} · left ${m.remaining.toLocaleString()}` +
+        (active ? ` · ${m.rate.toFixed(2)} files/s · ETA ${formatDuration(m.etaSec)}` : '') +
+        (m.message ? ` · ${m.message}` : '')
+      row.append(head, bar, line)
+      return row
+    })
+  )
+  const mem = st.heapMB != null ? `${st.heapMB.toFixed(0)} / ${st.heapLimitMB!.toFixed(0)} MB` : 'n/a'
+  $on('overnight-stats').textContent =
+    `JS heap ${mem} · worker frames used ${st.recycles} · restarts ${st.restarts} · chunk ${st.chunkSize} files · ` +
+    `screen ${overnightWakeLock ? 'kept awake' : 'may sleep — keep this tab in front'}`
+}
+
+let overnightWakeLock: WakeLockSentinel | null = null
+let overnightRunning = false
+async function keepAwake() {
+  try {
+    overnightWakeLock = (await navigator.wakeLock?.request('screen')) ?? null
+    overnightWakeLock?.addEventListener('release', () => (overnightWakeLock = null))
+  } catch {
+    overnightWakeLock = null // denied or unsupported; the stats line says so
+  }
+}
+// The browser drops the lock whenever the tab is hidden.
+document.addEventListener('visibilitychange', () => {
+  if (overnightRunning && document.visibilityState === 'visible' && !overnightWakeLock) void keepAwake()
+})
+
+async function startOvernightFlow() {
+  if (!window.showDirectoryPicker) {
+    showToast('Overnight embedding needs folder access, which this browser lacks. Use Chrome or Edge.', 'warn')
+    return
+  }
+  let dir: DirectoryHandle
+  try {
+    dir = await window.showDirectoryPicker({ mode: 'read' })
+  } catch (err) {
+    if ((err as Error).name !== 'AbortError') setStatus(`Error: ${(err as Error).message}`)
+    return
+  }
+  setStatus('Scanning folder…')
+  const files = await openFilterDialog(await collectImages(dir, 0, ''))
+  if (!files) {
+    setStatus('Cancelled.')
+    return
+  }
+  setStatus(`${files.length} files selected for overnight embedding.`)
+
+  const keys = await cacheKeys().catch(() => [] as string[])
+  const saved = savedOvernightJob()?.models ?? [state.settings.modelVariant]
+  const list = $on('overnight-models')
+  list.replaceChildren(
+    ...overnightModelChoices().map((m) => {
+      const done = buildEmbeddedSets(keys, currentCachePrefix(m.id)).current
+      const todo = files.filter((f) => !done.has(fileKey(f))).length
+      const label = document.createElement('label')
+      label.className = 'on-pick'
+      const box = document.createElement('input')
+      box.type = 'checkbox'
+      box.value = m.id
+      box.disabled = m.disabled
+      box.checked = !m.disabled && saved.includes(m.id)
+      label.append(box, ` ${m.label} `)
+      const n = document.createElement('span')
+      n.className = 'on-dim'
+      n.textContent = todo === 0 ? '— all embedded' : `— ${todo.toLocaleString()} of ${files.length.toLocaleString()} to embed`
+      label.append(n)
+      return label
+    })
+  )
+  $on('overnight-folder').textContent = `${dir.name} · ${files.length.toLocaleString()} files after filters`
+  $on('overnight-setup').hidden = false
+  $on('overnight-run').hidden = true
+  overnightEl.hidden = false
+
+  const picked = await new Promise<ModelVariant[] | null>((resolve) => {
+    const ac = new AbortController()
+    $on('overnight-start').addEventListener(
+      'click',
+      () => {
+        const ids = [...list.querySelectorAll<HTMLInputElement>('input:checked')].map((b) => b.value as ModelVariant)
+        if (ids.length === 0) return showToast('Pick at least one model.', 'warn')
+        ac.abort()
+        resolve(ids)
+      },
+      { signal: ac.signal }
+    )
+    $on('overnight-cancel').addEventListener(
+      'click',
+      () => {
+        ac.abort()
+        resolve(null)
+      },
+      { signal: ac.signal }
+    )
+  })
+  if (!picked) {
+    overnightEl.hidden = true
+    return
+  }
+
+  localStorage.setItem(OVERNIGHT_JOB, JSON.stringify({ models: picked }))
+  $on('overnight-setup').hidden = true
+  $on('overnight-run').hidden = false
+  const stopBtn = $on<HTMLButtonElement>('overnight-stop')
+  const closeBtn = $on<HTMLButtonElement>('overnight-close')
+  stopBtn.hidden = false
+  stopBtn.disabled = false
+  closeBtn.hidden = true
+  const ac = new AbortController()
+  const onStop = () => {
+    stopBtn.disabled = true
+    stopBtn.textContent = 'Stopping…'
+    ac.abort()
+  }
+  stopBtn.addEventListener('click', onStop)
+  overnightRunning = true
+  await keepAwake()
+  const labels = new Map(overnightModelChoices().map((m) => [m.id, m.label]))
+  const test = window as Window & { __mcOvernightTest?: { chunkSize?: number; stallMs?: number; loadStallMs?: number } }
+  let final: OvernightStats | null = null
+  try {
+    final = await runOvernight({
+      files,
+      models: picked.map((id) => ({ id, label: labels.get(id) ?? id, prefix: currentCachePrefix(id) })),
+      cacheKeys,
+      cacheHasBatch: (k) => cacheHasBatch(k as CacheKey[]),
+      onUpdate: renderOvernight,
+      signal: ac.signal,
+      chunkSize: test.__mcOvernightTest?.chunkSize,
+      stallMs: test.__mcOvernightTest?.stallMs,
+      loadStallMs: test.__mcOvernightTest?.loadStallMs
+    })
+  } catch (err) {
+    showToast(`Overnight embedding stopped: ${(err as Error).message}`, 'error', 15000)
+  } finally {
+    overnightRunning = false
+    await overnightWakeLock?.release().catch(() => {})
+    stopBtn.removeEventListener('click', onStop)
+    stopBtn.textContent = 'Stop'
+    stopBtn.hidden = true
+    closeBtn.hidden = false
+  }
+  // Kept only while work is left, so the button offers to resume it.
+  const unfinished = !final || final.models.some((m) => m.state === 'stopped' || m.remaining > 0)
+  if (unfinished) localStorage.setItem(OVERNIGHT_JOB, JSON.stringify({ models: picked }))
+  else localStorage.removeItem(OVERNIGHT_JOB)
+  overnightBtn.querySelector('.btn-label')!.textContent = unfinished ? 'Resume overnight' : 'Overnight'
+  refreshCacheSize()
+}
+
+overnightBtn.addEventListener('click', () => void startOvernightFlow())
+$on('overnight-close').addEventListener('click', () => {
+  overnightEl.hidden = true
+})
+
+if (OVERNIGHT_CHILD) {
+  runOvernightChild()
+} else if (!state.settings.viewerOnly) {
   void runSetupWizard()
 } else {
   // Viewer mode: update UI to reflect no AI needed
