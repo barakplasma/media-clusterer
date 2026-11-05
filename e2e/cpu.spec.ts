@@ -115,6 +115,10 @@ test('folder filter: type, size, video length, date taken and embedded status', 
   const count = page.locator('#filter-count')
   const field = (n: string) => page.locator(`#filter-form [name="${n}"]`)
   await expect(count).toHaveText('6 of 6 files match')
+  // "To" dates default to today in the native picker, and that counts as open-ended.
+  const today = await page.evaluate(() => new Date().toLocaleDateString('en-CA'))
+  await expect(field('modifiedTo')).toHaveValue(today)
+  await expect(field('createdTo')).toHaveValue(today)
 
   await field('videos').uncheck()
   await expect(count).toHaveText('4 of 6 files match')
@@ -152,5 +156,6 @@ test('folder filter: type, size, video length, date taken and embedded status', 
   const picked = await page.evaluate(async () => ((await (window as any).__picked) as { name: string }[]).map((f) => f.name))
   expect(picked.sort()).toEqual(['album/butterfly.jpg', 'album/cats.jpg', 'album/football.webp', 'album/tiger.png'])
   // The choice is remembered for the next folder.
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('mc_fileFilter')!).videos)).toBe(false)
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('mc_fileFilter')!))
+  expect(saved).toMatchObject({ videos: false, modifiedTo: '', createdTo: '' })
 })

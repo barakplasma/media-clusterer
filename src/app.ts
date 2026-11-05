@@ -656,19 +656,18 @@ async function collectImages(
   await walk(currentHandle, '')
 
   // Phase 2: fetch File objects only for the selected refs.
-  const files: PhotoFile[] = []
-  for (const ref of refs) {
-    if (files.length % 1000 === 999) setStatus(`Reading file info… ${files.length + 1}/${refs.length}`)
-    const file = await ref.handle.getFile()
-    files.push({
-      name: ref.name,
-      size: file.size,
-      lastModified: file.lastModified,
-      file,
-      objectURL: null
-    })
-  }
-  return files
+  // In parallel: one at a time took ~22 s for 100k files, since each call is a browser IPC round trip.
+  const limit = pLimit(64)
+  let done = 0
+  return Promise.all(
+    refs.map((ref) =>
+      limit(async () => {
+        const file = await (ref.handle as FileSystemFileHandle).getFile()
+        if (++done % 2000 === 0) setStatus(`Reading file info… ${done}/${refs.length}`)
+        return { name: ref.name, size: file.size, lastModified: file.lastModified, file, objectURL: null }
+      })
+    )
+  )
 }
 
 // ── Demo images loader ──────────────────────────────────────────────────────
@@ -2858,19 +2857,27 @@ function readFilterForm(): FileFilter {
     const v = filterField(n).value
     return v === '' || !Number.isFinite(Number(v)) ? null : Number(v)
   }
+  // "To today" is the default, so it means open-ended: no EXIF reads, no stale date saved for tomorrow.
+  const upTo = (n: string) => (filterField(n).value === todayISO() ? '' : filterField(n).value)
   return {
     images: (filterField('images') as HTMLInputElement).checked,
     videos: (filterField('videos') as HTMLInputElement).checked,
     modifiedFrom: filterField('modifiedFrom').value,
-    modifiedTo: filterField('modifiedTo').value,
+    modifiedTo: upTo('modifiedTo'),
     createdFrom: filterField('createdFrom').value,
-    createdTo: filterField('createdTo').value,
+    createdTo: upTo('createdTo'),
     minSizeMB: num('minSizeMB'),
     maxSizeMB: num('maxSizeMB'),
     minDurationSec: num('minDurationSec'),
     maxDurationSec: num('maxDurationSec'),
     embedded: filterField('embedded').value as FileFilter['embedded']
   }
+}
+
+/** Today as the date input's 'YYYY-MM-DD', in local time. */
+function todayISO() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 function writeFilterForm(f: FileFilter) {
@@ -2880,6 +2887,12 @@ function writeFilterForm(f: FileFilter) {
     filterField(k).value = f[k]
   for (const k of ['minSizeMB', 'maxSizeMB', 'minDurationSec', 'maxDurationSec'] as const)
     filterField(k).value = f[k] == null ? '' : String(f[k])
+  // Open-ended "to" dates show as today.
+  const today = todayISO()
+  for (const k of ['modifiedTo', 'createdTo'] as const) {
+    filterField(k).value ||= today
+    ;(filterField(k) as HTMLInputElement).max = today
+  }
 }
 
 /** Let the user narrow a scanned folder. Resolves to the matches, or null on cancel. */
@@ -5194,6 +5207,7 @@ debugCopyBtn.addEventListener('click', async () => {
   },
   // Drive the real pipeline from a test page (device tests feed File objects).
   processFiles,
+  collectImages,
   openFilterDialog,
   searchImages,
   extractVideoFrames,
