@@ -294,8 +294,9 @@ export async function runOvernight(deps: OvernightDeps): Promise<OvernightStats>
         st.remaining = pending.length
         stats.chunkSize = size
         if (st.state === 'stopped' || st.state === 'failed') break
-        // Let the removed frame's memory be collected before the next one loads.
-        await new Promise((r) => setTimeout(r, 300))
+        // Let the removed frame's memory be collected before the next one loads: with 300 ms
+        // the soak test showed both frames' memory at once (2.5 GB → 3.5 GB peak on nomic/CPU).
+        await new Promise((r) => setTimeout(r, 2000))
       }
       if (st.state !== 'stopped' && st.state !== 'failed') st.state = 'done'
       st.remaining = pending.length
