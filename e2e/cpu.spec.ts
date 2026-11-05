@@ -104,9 +104,10 @@ test('folder filter: type, size, video length, date taken and embedded status', 
       req.onsuccess = () => {
         const tx = req.result.transaction('embeddings', 'readwrite')
         const store = tx.objectStore('embeddings')
-        const key = (f: (typeof files)[number]) => `${f.name}:${f.size}:${f.lastModified}`
+        // Cache keys use the basename; older builds stored the folder path, which still counts.
+        const key = (f: (typeof files)[number]) => `${f.name.split('/').pop()}:${f.size}:${f.lastModified}`
         store.put(new Float32Array(4), key(files[0]))
-        store.put(new Float32Array(4), `@other-model/${key(files[1])}`)
+        store.put(new Float32Array(4), `@other-model/${files[1].name}:${files[1].size}:${files[1].lastModified}`)
         tx.oncomplete = () => resolve()
       }
     })
@@ -158,4 +159,95 @@ test('folder filter: type, size, video length, date taken and embedded status', 
   // The choice is remembered for the next folder.
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('mc_fileFilter')!))
   expect(saved).toMatchObject({ videos: false, modifiedTo: '', createdTo: '' })
+})
+
+test('overnight: two models, a crashing file and a hanging file, then resume', async ({ page }) => {
+  test.setTimeout(240_000) // each worker frame loads the whole app from the dev server
+  // Init scripts run in every frame, so the hidden worker frames get the stand-in model too.
+  await page.addInitScript(() => {
+    if (window === window.top && !sessionStorage.getItem('mc_test_seeded')) {
+      sessionStorage.setItem('mc_test_seeded', '1')
+      localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true, modelVariant: 'nomic', randomSampleSize: 0 }))
+    }
+    const w = window as any
+    w.__mcOvernightTest = { chunkSize: 2, stallMs: 2000, loadStallMs: 30000 }
+    w.__mcTestEmbedder = async (model: string, f: { name: string }) => {
+      if (f.name.endsWith('butterfly.jpg')) return new Promise(() => {}) // hangs the frame every time
+      if (f.name.endsWith('football.webp') && !localStorage.getItem(`crashed:${model}`)) {
+        localStorage.setItem(`crashed:${model}`, '1')
+        throw new Error('simulated crash') // once per model
+      }
+      return new Float32Array(8).fill(model.length)
+    }
+    // The folder picker returns an OPFS folder holding the fixtures.
+    w.showDirectoryPicker = async () => {
+      const root = await navigator.storage.getDirectory()
+      const dir = await root.getDirectoryHandle('overnight-fixtures', { create: true })
+      for (const n of ['cats.jpg', 'tiger.png', 'football.webp', 'butterfly.jpg', 'cats.mp4', 'tiger.webm']) {
+        const h = await dir.getFileHandle(n, { create: true })
+        if ((await h.getFile()).size === 0) {
+          const wr = await h.createWritable()
+          await wr.write(await (await fetch(`/e2e/fixtures/${n}`)).blob())
+          await wr.close()
+        }
+      }
+      return dir
+    }
+  })
+  await page.goto('/')
+
+  const pickModels = async () => {
+    await page.locator('#overnight-btn').click()
+    await expect(page.locator('#filter-count')).toHaveText('6 of 6 files match')
+    await page.locator('#filter-load').click()
+    await expect(page.locator('#overnight-setup')).toBeVisible()
+  }
+  await pickModels()
+  const boxes = page.locator('#overnight-models input:not(:disabled)')
+  const ids = [await boxes.nth(0).inputValue(), await boxes.nth(1).inputValue()]
+  for (const box of await page.locator('#overnight-models input:checked').all()) await box.uncheck()
+  for (const id of ids) await page.locator(`#overnight-models input[value="${id}"]`).check()
+  await page.locator('#overnight-start').click()
+
+  await expect(page.locator('#overnight-close')).toBeVisible({ timeout: 200_000 })
+  await expect(page.locator('#overnight-pct')).toHaveText('100.0%')
+  const rows = page.locator('.on-model')
+  for (let i = 0; i < 2; i++) {
+    await expect(rows.nth(i)).toContainText('done')
+    await expect(rows.nth(i)).toContainText('embedded 5 ')
+    await expect(rows.nth(i)).toContainText('failed 1 ')
+  }
+  // Both the crash and the hang cost a fresh frame; the hanging file was narrowed down and skipped.
+  const restarts = Number((await page.locator('#overnight-stats').textContent())!.match(/restarts (\d+)/)![1])
+  expect(restarts).toBeGreaterThanOrEqual(4)
+  // Every vector landed compact and under its model's namespace; the hanging file has none.
+  const stored = await page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((res, rej) => {
+      const r = indexedDB.open('photo-organizer-v1', 2)
+      r.onsuccess = () => res(r.result)
+      r.onerror = () => rej(r.error)
+    })
+    const store = db.transaction('embeddings').objectStore('embeddings')
+    const keys: string[] = await new Promise((res) => {
+      const r = store.getAllKeys()
+      r.onsuccess = () => res(r.result.map(String))
+    })
+    const first: Float32Array = await new Promise((res) => {
+      const r = store.get(keys[0])
+      r.onsuccess = () => res(r.result)
+    })
+    return { keys, bytes: first.buffer.byteLength }
+  })
+  expect(stored.bytes).toBe(32)
+  expect(stored.keys.filter((k) => k.includes('butterfly'))).toEqual([])
+  expect(stored.keys.length).toBe(10)
+  // Nothing left but a file that hangs, so there is no job to resume.
+  expect(await page.evaluate(() => localStorage.getItem('mc_overnight_job'))).toBeNull()
+
+  // A second run finds everything cached except the file that never embeds.
+  await page.locator('#overnight-close').click()
+  await pickModels()
+  for (const id of ids) {
+    await expect(page.locator('#overnight-models label', { has: page.locator(`input[value="${id}"]`) })).toContainText('1 of 6 to embed')
+  }
 })

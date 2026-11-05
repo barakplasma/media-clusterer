@@ -96,3 +96,62 @@ test('EmbeddingGemma 2 embeds photos and videos and finds them by text', async (
     expect(top[0], `top hit for "${q}"`).toContain(`e2e/${want}`)
   }
 })
+
+test('overnight embedding runs the real model in recycled worker frames', async ({ page }) => {
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  await page.addInitScript((fixtures) => {
+    // Viewer mode keeps the visible page from loading a model of its own.
+    if (window === window.top)
+      localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true, modelVariant: 'embeddinggemma2', randomSampleSize: 0 }))
+    const w = window as any
+    w.__mcOvernightTest = { chunkSize: 3 } // six fixtures, so two frames
+    w.showDirectoryPicker = async () => {
+      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('overnight-gpu', { create: true })
+      for (const n of fixtures) {
+        const h = await dir.getFileHandle(n, { create: true })
+        if ((await h.getFile()).size === 0) {
+          const wr = await h.createWritable()
+          await wr.write(await (await fetch(`/e2e/fixtures/${n}`)).blob())
+          await wr.close()
+        }
+      }
+      return dir
+    }
+  }, FIXTURES)
+  await page.goto('/')
+  await page.locator('#overnight-btn').click()
+  await page.locator('#filter-load').click()
+  for (const box of await page.locator('#overnight-models input:checked').all()) await box.uncheck()
+  await page.locator('#overnight-models input[value="embeddinggemma2"]').check()
+  await page.locator('#overnight-start').click()
+  await expect(page.locator('#overnight-close')).toBeVisible({ timeout: 20 * 60_000 })
+  console.log(await page.locator('#overnight-run').innerText())
+  await expect(page.locator('.on-model').first()).toContainText('embedded 6 ')
+
+  const vecs = await page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((res, rej) => {
+      const r = indexedDB.open('photo-organizer-v1', 2)
+      r.onsuccess = () => res(r.result)
+      r.onerror = () => rej(r.error)
+    })
+    const store = db.transaction('embeddings').objectStore('embeddings')
+    const all: { key: string; v: Float32Array }[] = await new Promise((res) => {
+      const out: { key: string; v: Float32Array }[] = []
+      const r = store.openCursor()
+      r.onsuccess = () => {
+        const c = r.result
+        if (!c) return res(out)
+        out.push({ key: String(c.key), v: c.value })
+        c.continue()
+      }
+    })
+    return all
+      .filter((e) => e.key.startsWith('@embeddinggemma2'))
+      .map((e) => ({ len: e.v.length, owns: e.v.byteLength === e.v.buffer.byteLength, norm: Math.hypot(...e.v) }))
+  })
+  expect(vecs).toHaveLength(6)
+  for (const v of vecs) {
+    expect(v).toMatchObject({ len: 768, owns: true })
+    expect(v.norm).toBeGreaterThan(0.99)
+  }
+})
