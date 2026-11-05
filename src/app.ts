@@ -5014,7 +5014,8 @@ async function startOvernightFlow() {
   await keepAwake()
   // Unpersisted storage can be evicted under pressure overnight, and every fresh
   // worker frame reloads the model from the browser cache, so ask to keep it.
-  await navigator.storage?.persist?.().catch(() => false)
+  // Not awaited: some browsers prompt for it, and nobody may be there to answer.
+  void navigator.storage?.persist?.().catch(() => false)
   const labels = new Map(overnightModelChoices().map((m) => [m.id, m.label]))
   const test = window as Window & { __mcOvernightTest?: { chunkSize?: number; stallMs?: number; loadStallMs?: number } }
   let final: OvernightStats | null = null
