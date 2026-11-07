@@ -311,3 +311,78 @@ test('saved embeddings: a bundle in the folder is imported and matched by sha256
   await page.locator('#overnight-cancel').click()
   await expect(page.locator('#overnight-remote #openai-base-url')).not.toBeAttached()
 })
+
+test('AI provenance: a PNG with A1111/Civitai parameters shows generator, model and prompt in the viewer', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true })))
+  await page.goto('/')
+  await page.evaluate(async () => {
+    // A real PNG from a canvas, with a tEXt "parameters" chunk inserted after IHDR, as A1111 writes it.
+    const c = new OffscreenCanvas(64, 64)
+    c.getContext('2d')!.fillRect(0, 0, 32, 32)
+    const png = new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer())
+    const text = 'a cat in a hat\nNegative prompt: blurry\nSteps: 30, Sampler: Euler a, Model hash: abc, Model: dreamshaper_8, Civitai resources: []'
+    const data = new TextEncoder().encode(`parameters\0${text}`)
+    const chunk = new Uint8Array(12 + data.length)
+    new DataView(chunk.buffer).setUint32(0, data.length)
+    chunk.set(new TextEncoder().encode('tEXt'), 4)
+    chunk.set(data, 8)
+    const at = 8 + 25 // signature + IHDR chunk
+    const file = new File([png.subarray(0, at), chunk, png.subarray(at)], 'gen.png', { type: 'image/png', lastModified: 1e12 })
+    const plain = new File([png], 'plain.png', { type: 'image/png', lastModified: 1e12 })
+    const d = window.__debug
+    await d.processFiles([file, plain].map((f) => ({ name: f.name, size: f.size, lastModified: f.lastModified, file: f, objectURL: null })))
+    d.openFileModal(d.state.files.findIndex((f: { name: string }) => f.name === 'gen.png'))
+  })
+  const badge = page.locator('#modal-ai-btn')
+  await expect(badge).toHaveText('✨ AI · Civitai · dreamshaper_8 ▸')
+  await badge.click()
+  await expect(page.locator('#exif-dialog-body')).toContainText('a cat in a hat')
+  await expect(page.locator('#exif-dialog-body')).toContainText('blurry')
+  await expect(page.locator('#exif-dialog-body')).toContainText('PNG text chunk "parameters"')
+  await page.locator('#exif-dialog-close').click()
+  // An ordinary PNG gets no badge.
+  await page.evaluate(() => window.__debug.openFileModal(window.__debug.state.files.findIndex((f: { name: string }) => f.name === 'plain.png')))
+  await page.waitForTimeout(300)
+  await expect(badge).toBeHidden()
+})
+
+test('AI provenance parsers: ComfyUI graph in compressed iTXt, A1111 in a UTF-16 UserComment, a C2PA manifest', async ({ page }) => {
+  await page.goto('/device-test.html')
+  const r = await page.evaluate(async () => {
+    const { readProvenance } = await import('/src/aiProvenance.ts' as string)
+    const enc = new TextEncoder()
+    const cat = (...a: Uint8Array[]) => new Uint8Array(a.reduce((n: number[], x) => [...n, ...x], []))
+    const chunk = (type: string, data: Uint8Array) => {
+      const head = new Uint8Array(8)
+      new DataView(head.buffer).setUint32(0, data.length)
+      head.set(enc.encode(type), 4)
+      return cat(head, data, new Uint8Array(4))
+    }
+    const deflate = async (s: string) =>
+      new Uint8Array(await new Response(new Blob([enc.encode(s)]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer())
+    const sig = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
+    const comfy = JSON.stringify({
+      '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'sdxl_base.safetensors' } },
+      '6': { class_type: 'CLIPTextEncode', inputs: { text: 'a red fox, ünïcödé' } },
+      '7': { class_type: 'CLIPTextEncode', inputs: { text: 'ugly' } },
+      '3': { class_type: 'KSampler', inputs: { positive: ['6', 0], negative: ['7', 0] } }
+    })
+    const itxt = chunk('iTXt', cat(enc.encode('prompt\0'), Uint8Array.of(1, 0, 0, 0), await deflate(comfy)))
+    const comfyR = await readProvenance(cat(sig, itxt, chunk('IEND', new Uint8Array())), null)
+
+    const params = 'a cat\nNegative prompt: blurry\nSteps: 20, Model: juggernaut'
+    const be = new Uint8Array(params.length * 2)
+    for (let i = 0; i < params.length; i++) be[2 * i + 1] = params.charCodeAt(i)
+    const ucR = await readProvenance(new Uint8Array(64), { UserComment: cat(enc.encode('UNICODE\0'), be) })
+
+    const gen = 'Google Gemini 1.0'
+    const c2pa = cat(enc.encode('..jumb..jumdc2pa..c2pa.claim..claim_generator'), Uint8Array.of(0x60 + gen.length), enc.encode(gen),
+      enc.encode('..c2pa.actions..http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia'))
+    const c2paR = await readProvenance(c2pa, null)
+    return { comfyR, ucR, c2paR }
+  })
+  expect(r.comfyR).toMatchObject({ generator: 'ComfyUI', prompt: 'a red fox, ünïcödé', negative: 'ugly', model: 'sdxl_base.safetensors' })
+  expect(r.ucR).toMatchObject({ generator: 'Stable Diffusion WebUI', prompt: 'a cat', negative: 'blurry', model: 'juggernaut' })
+  expect(r.c2paR.generator).toBe('Google')
+  expect(r.c2paR.evidence.join(' ')).toContain('C2PA manifest by Google Gemini 1.0, declares AI generation (signature not verified)')
+})

@@ -68,6 +68,7 @@ import {
   cacheHasBatch,
   exportAll
 } from './db'
+import { readProvenance, type Provenance } from './aiProvenance'
 import { loadFaceModels, findFaces, groupFaces, FACE_PREFIX, FACE_STRIDE, type FaceModels } from './faces'
 import { BUNDLE_FILE, encodeBundle, decodeBundle, rekeyBundle, sha256Hex, fileKeyOf } from './embeddingBundle'
 import { runOvernight, formatDuration, type ChildMsg, type OvernightStats, type RunMsg } from './overnight'
@@ -3859,6 +3860,18 @@ const openFileModal = (index: number) => {
       })
   }
 
+  // AI provenance: read lazily from the file's own bytes, once per file.
+  const aiBtn = document.getElementById('modal-ai-btn') as HTMLButtonElement
+  const showAi = (ai: Provenance | null | undefined) => {
+    aiBtn.hidden = !ai
+    ;(document.getElementById('modal-ai-sep') as HTMLElement).hidden = !ai
+    if (ai) aiBtn.textContent = `✨ AI · ${ai.generator}${ai.model ? ` · ${ai.model}` : ''} ▸`
+  }
+  showAi(f.ai)
+  if (f.ai === undefined && !VIDEO_EXTS.has(f.name.split('.').pop()?.toLowerCase() ?? '')) {
+    void readFileProvenance(f).then(() => state.activeFileIndex === index && showAi(f.ai))
+  }
+
   // Cancel any in-flight lazy caption and pending debounce from a previous modal open
   captionAbortController?.abort()
   captionAbortController = null
@@ -4032,12 +4045,52 @@ function formatExifValue(key: string, val: unknown): string {
   return String(val)
 }
 
+/** Fill f.ai from the file. shortcut: reads the whole file, so files over 64 MB are skipped; read only the header regions if huge PNGs matter. */
+async function readFileProvenance(f: PhotoFile) {
+  try {
+    if (f.size > 64 << 20) return void (f.ai = null)
+    const exif = await exifr.parse(f.file, { pick: ['UserComment', 'Software', 'ImageDescription'] }).catch(() => null)
+    f.ai = await readProvenance(new Uint8Array(await f.file.arrayBuffer()), exif ?? null)
+  } catch (err) {
+    console.warn('AI provenance read failed:', (err as Error).message)
+    f.ai = null
+  }
+}
+
+document.getElementById('modal-ai-btn')!.addEventListener('click', () => {
+  const ai = state.activeFileIndex === null ? null : state.files[state.activeFileIndex]?.ai
+  if (!ai) return
+  ;(document.getElementById('exif-dialog-title') as HTMLElement).textContent = 'AI-generated'
+  exifDialogBody.innerHTML = ''
+  const dl = document.createElement('dl')
+  dl.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0;'
+  const row = (label: string, value: string | undefined) => {
+    if (!value) return
+    const dt = document.createElement('dt')
+    dt.style.cssText = 'color:var(--text-dim);white-space:nowrap;'
+    dt.textContent = label
+    const dd = document.createElement('dd')
+    dd.style.cssText = 'margin:0;color:var(--text-main);white-space:pre-wrap;word-break:break-word;'
+    dd.textContent = value
+    dl.append(dt, dd)
+  }
+  row('Generator', ai.generator)
+  row('Model', ai.model)
+  row('Prompt', ai.prompt)
+  row('Negative prompt', ai.negative)
+  row('Settings', ai.settings)
+  row('Evidence', ai.evidence.map((e) => `• ${e}`).join('\n'))
+  exifDialogBody.appendChild(dl)
+  exifDialog.showModal()
+})
+
 dom.modalExifBtn.addEventListener('click', () => {
   const idx = state.activeFileIndex
   if (idx === null) return
   const exif = state.files[idx]?.exifData
   if (!exif) return
 
+  ;(document.getElementById('exif-dialog-title') as HTMLElement).textContent = 'EXIF Data'
   exifDialogBody.innerHTML = ''
   const dl = document.createElement('dl')
   dl.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0;'
@@ -5928,6 +5981,7 @@ debugCopyBtn.addEventListener('click', async () => {
   processFiles,
   collectImages,
   openFilterDialog,
+  openFileModal,
   searchImages,
   extractVideoFrames,
   buildDebugInfo

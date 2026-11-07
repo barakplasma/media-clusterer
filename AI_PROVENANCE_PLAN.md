@@ -1,6 +1,13 @@
 # Plan: show proof that an image is AI-generated
 
-Requested 2026-11-07, for later. When a photo was AI-generated, the photo modal should show what proves
+Requested 2026-11-07.
+
+**Status:** built in `src/aiProvenance.ts`. The photo viewer shows "✨ AI · generator · model ▸",
+which opens the prompt, negative prompt, settings and the evidence list. Covered: PNG text chunks
+(A1111/Forge/Civitai, ComfyUI incl. tensor.art, NovelAI, InvokeAI, Midjourney), EXIF UserComment
+and Software, XMP CreatorTool, IPTC DigitalSourceType, and C2PA (generator and AI flag read from the
+manifest bytes, signature **not** verified; checked against c2pa-rs's signed fixtures). Not built:
+signature verification, the folder filter, and embedding prompts for search. When a photo was AI-generated, the photo modal should show what proves
 it, plus the **prompt** and **model** whenever the file carries them.
 
 ## Where the evidence lives

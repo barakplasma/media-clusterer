@@ -1,3 +1,4 @@
+import type { Provenance } from './aiProvenance'
 /**
  * Core type definitions for Photo Organizer
  */
@@ -14,6 +15,7 @@ export interface PhotoFile {
   objectURL: string | null
   gps?: { latitude: number; longitude: number } | null // null = parsed but no data
   exifData?: Record<string, unknown> | null // null = parsed but no data
+  ai?: Provenance | null // AI-generation evidence the file carries; null = read, none found
   created?: number // EXIF Date Taken in ms, or lastModified when absent; read lazily by fileFilter
   duration?: number // video seconds, NaN when unknown; read lazily by fileFilter
 }
