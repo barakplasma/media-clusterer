@@ -414,6 +414,7 @@
     }
 
     #cache-size { font-size: 11px; color: var(--text-dim); }
+    .bundle-btn { font-size:12px;padding:6px 12px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;cursor:pointer; }
     #stats { font-size: 11px; color: var(--text-dim); margin-left: auto; }
 
     /* ── File viewer dialog ────────────────────────────────────────────────── */
@@ -1036,10 +1037,12 @@
     <div class="setting-item" id="openai-setting">
       <label>Remote Endpoint</label>
       <input type="text" id="openai-base-url" placeholder="http://localhost:11434/v1" autocomplete="off" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;box-sizing:border-box;">
-      <div class="setting-hint">Any OpenAI-compatible API root. Examples: <code>http://localhost:11434/v1</code> (Ollama), <code>https://openrouter.ai/api/v1</code>. A bare host works — <code>/v1</code> is added for you.</div>
+      <div class="setting-hint">Any OpenAI-compatible API root. Examples: <code>http://localhost:11434/v1</code> (Ollama), <code>https://openrouter.ai/api/v1</code>. A bare host works — <code>/v1</code> is added for you. From the https site, a remote server must be https too (plain http only works for localhost): on a rented GPU, <code>cloudflared tunnel --url http://localhost:8000</code> gives you an https URL.</div>
 
       <label style="margin-top:10px;display:block;">API Key</label>
-      <input type="password" id="openai-key" placeholder="Leave blank for local servers" autocomplete="off" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;box-sizing:border-box;">
+      <form id="openai-key-form" style="margin:0">
+        <input type="password" id="openai-key" placeholder="Leave blank for local servers" autocomplete="off" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;box-sizing:border-box;">
+      </form>
       <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:var(--text-dim);">
         <input type="checkbox" id="openai-remember"> Remember key on this device
       </label>
@@ -1143,6 +1146,23 @@
     </div>
 
     <div class="setting-item">
+      <label>Saved Embeddings</label>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        <button id="bundle-export" class="bundle-btn">Export file</button>
+        <button id="bundle-import" class="bundle-btn">Import file</button>
+        <button id="bundle-folder" class="bundle-btn" title="Pick your photo folder; its embeddings are written into it as media-clusterer.mcemb">Save into folder…</button>
+      </div>
+      <input type="file" id="bundle-file" accept=".mcemb" hidden>
+      <input type="url" id="bundle-url" placeholder="https://… (presigned S3 URL, WebDAV, your own server)" autocomplete="off" style="width:100%;margin-top:8px;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;box-sizing:border-box;">
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        <button id="bundle-put" class="bundle-btn">Upload (PUT)</button>
+        <button id="bundle-get" class="bundle-btn">Download (GET)</button>
+      </div>
+      <div id="bundle-result" class="setting-hint"></div>
+      <div class="setting-hint">Moves embeddings and captions between devices, e.g. an overnight run on a desktop to your phone. Importing adds to what is here. A folder that holds a <code>media-clusterer.mcemb</code> is imported when you open it. Files are matched by name and size, so copies with a new modified date still match. The URL's server must allow this page in CORS, including the preflight for PUT. A presigned URL carries its own auth; no other credentials are sent.</div>
+    </div>
+
+    <div class="setting-item">
       <label>Projection Method</label>
       <select id="projection-select" style="width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;">
         <option value="UMAP">UMAP</option>
@@ -1179,6 +1199,9 @@
     <section id="overnight-setup">
       <p>Pick the models to run. Each one embeds every selected file it has not embedded yet, one model after another. Photos are not shown. Keep this tab open and in front; the screen is kept awake while it runs.</p>
       <div id="overnight-models"></div>
+      <label id="overnight-sample-row" class="on-pick" hidden><input type="checkbox" id="overnight-sample"> <span id="overnight-sample-label"></span></label>
+      <label class="on-pick"><input type="checkbox" id="overnight-save-bundle"> When done, save the embeddings into this folder (media-clusterer.mcemb), for another device to import</label>
+      <details id="overnight-remote"><summary class="on-dim">Remote endpoint settings</summary></details>
       <button id="overnight-start">Start</button><button id="overnight-cancel" class="secondary">Cancel</button>
     </section>
     <section id="overnight-run" hidden>

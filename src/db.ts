@@ -262,3 +262,72 @@ export async function captionPutBatch(entries: [CacheKey, string][]): Promise<vo
     transaction.onerror = () => reject(transaction.error)
   })
 }
+
+// ── Bundle export / import ──────────────────────────────────────────────────
+
+/**
+ * Every embedding and caption, optionally only those of the given file keys (`name:size:lastModified`).
+ * shortcut: holds the whole cache in memory at once (≈3 KB per vector); stream through a cursor if exports reach GBs.
+ */
+export async function exportAll(onlyFileKeys?: Set<string>): Promise<{
+  entries: [string, Float32Array][]
+  captions: [string, string][]
+}> {
+  const database = await openDB()
+  const keep = (k: string) => !onlyFileKeys || onlyFileKeys.has(k.slice(k.lastIndexOf('/') + 1))
+  const readStore = <T>(name: string, map: (v: unknown) => T | null) =>
+    new Promise<[string, T][]>((resolve, reject) => {
+      const out: [string, T][] = []
+      const req = database.transaction(name, 'readonly').objectStore(name).openCursor()
+      req.onsuccess = () => {
+        const c = req.result
+        if (!c) return resolve(out)
+        const v = keep(String(c.key)) ? map(c.value) : null
+        if (v !== null) out.push([String(c.key), v])
+        c.continue()
+      }
+      req.onerror = () => reject(req.error)
+    })
+  return {
+    entries: await readStore(STORE_NAME, asFloat32),
+    captions: await readStore(CAPTION_STORE, (v) => (typeof v === 'string' ? v : null))
+  }
+}
+
+/**
+ * Copy vectors stored under another device's key for the same file (same basename and size,
+ * different lastModified — copies and phone galleries rewrite it) to this device's key.
+ * Returns how many were adopted.
+ */
+export async function adoptByNameSize(fileKeys: string[]): Promise<number> {
+  const all = await cacheKeys()
+  const have = new Set(all)
+  const byNameSize = new Map<string, string>() // `${prefix}${name}:${size}` → stored key
+  const prefixes = new Set<string>()
+  for (const k of all) {
+    const cut = k.lastIndexOf(':')
+    const p = k.slice(0, k.lastIndexOf('/', cut) + 1)
+    if (p !== '' && !/^@[^/]+\/$/.test(p)) continue // legacy full-path keys, not a model prefix
+    byNameSize.set(k.slice(0, cut), k)
+    prefixes.add(p)
+  }
+  const pairs: [from: CacheKey, to: CacheKey][] = []
+  for (const fk of fileKeys) {
+    const ns = fk.slice(0, fk.lastIndexOf(':'))
+    for (const p of prefixes) {
+      const from = byNameSize.get(p + ns)
+      if (from && !have.has(p + fk)) pairs.push([from as CacheKey, (p + fk) as CacheKey])
+    }
+  }
+  if (pairs.length === 0) return 0
+  const vectors = await cacheGetBatch(pairs.map((p) => p[0]))
+  await cachePutBatch(pairs.flatMap(([, to], i) => (vectors[i] ? [[to, vectors[i]!] as [CacheKey, Float32Array]] : [])))
+  // Captions are keyed without a model prefix.
+  const capFrom = pairs.filter(([f]) => !f.includes('/')).map(([f]) => f)
+  if (capFrom.length) {
+    const caps = await captionGetBatch(capFrom)
+    const toOf = new Map(pairs)
+    await captionPutBatch(capFrom.flatMap((f, i) => (caps[i] ? [[toOf.get(f)!, caps[i]!] as [CacheKey, string]] : [])))
+  }
+  return pairs.length
+}

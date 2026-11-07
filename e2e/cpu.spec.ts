@@ -260,3 +260,51 @@ test('overnight: two models, a crashing file and a hanging file, then resume', a
     await expect(page.locator('#overnight-models label', { has: page.locator(`input[value="${id}"]`) })).toContainText('1 of 6 to embed')
   }
 })
+
+test('saved embeddings: a bundle in the folder is imported and matched by name and size; overnight sample toggle', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (window === window.top && !sessionStorage.getItem('mc_test_seeded')) {
+      sessionStorage.setItem('mc_test_seeded', '1')
+      localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true, modelVariant: 'nomic', randomSampleSize: 2 }))
+    }
+    ;(window as any).showDirectoryPicker = async () => {
+      const root = await navigator.storage.getDirectory()
+      const dir = await root.getDirectoryHandle('bundle-fixtures', { create: true })
+      const sizes: Record<string, number> = {}
+      for (const n of ['cats.jpg', 'tiger.png', 'football.webp']) {
+        const h = await dir.getFileHandle(n, { create: true })
+        if ((await h.getFile()).size === 0) {
+          const wr = await h.createWritable()
+          await wr.write(await (await fetch(`/e2e/fixtures/${n}`)).blob())
+          await wr.close()
+        }
+        sizes[n] = (await h.getFile()).size
+      }
+      // Written "on another device": right names and sizes, a different lastModified.
+      const { encodeBundle } = await import('/src/embeddingBundle.ts' as string)
+      const blob = encodeBundle(
+        [[`cats.jpg:${sizes['cats.jpg']}:1`, new Float32Array(8).fill(1)], [`tiger.png:${sizes['tiger.png']}:1`, new Float32Array(8).fill(2)]],
+        []
+      )
+      const wr = await (await dir.getFileHandle('media-clusterer.mcemb', { create: true })).createWritable()
+      await wr.write(blob)
+      await wr.close()
+      return dir
+    }
+  })
+  await page.goto('/')
+  await page.locator('#overnight-btn').click()
+  await expect(page.locator('#filter-count')).toContainText('3 of 3 files match')
+  await page.locator('#filter-load').click()
+  const nomic = page.locator('#overnight-models label', { has: page.locator('input[value="nomic"]') })
+  // Sampled 2 of 3: 0, 1 or 2 of the sampled files are among the imported ones, but never 3 to embed.
+  await expect(page.locator('#overnight-sample')).toBeChecked()
+  await expect(nomic).toContainText(/of 2 to embed|all embedded/)
+  await page.locator('#overnight-sample').uncheck()
+  await expect(nomic).toContainText('1 of 3 to embed')
+  // The remote endpoint is offered even before it is configured, with its form right here.
+  await expect(page.locator('#overnight-models input[value="openai"]')).toBeDisabled()
+  await expect(page.locator('#overnight-remote #openai-base-url')).toBeAttached()
+  await page.locator('#overnight-cancel').click()
+  await expect(page.locator('#overnight-remote #openai-base-url')).not.toBeAttached()
+})
