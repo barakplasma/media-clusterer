@@ -6,14 +6,14 @@ Nothing here is built yet.
 
 ## Candidates
 
-| Model | Task | Size | License | Browser path | Notes |
-|-------|------|------|---------|--------------|-------|
-| **YuNet** (OpenCV zoo) | face detection + 5 landmarks | ~0.3 MB ONNX | MIT | raw onnxruntime-web, like `src/sapiens2.ts` | Very fast; landmarks are what face alignment needs |
-| **SFace** (OpenCV zoo) | face embedding, 128-d | ~37 MB fp32 ONNX (int8 ~10 MB) | Apache-2.0 | raw onnxruntime-web | Takes the aligned 112×112 crop from YuNet |
-| **EdgeFace-XS** | face embedding, 512-d | ~7 MB | check the repo (research release) | needs our own ONNX export | Better accuracy per MB than SFace; licence must be checked before use |
-| **MediaPipe Pose Landmarker (lite)** | 33-keypoint pose | ~3–6 MB | Apache-2.0 | `@mediapipe/tasks-vision` (WASM + GPU delegate) | Best licence and size for pose |
-| **YOLO26n / YOLO26n-pose** | detection / pose | ~5–10 MB | **AGPL-3.0** (Ultralytics) | Transformers.js 3.8+ on WebGPU (`onnx-community/yolo26n-pose-ONNX`) | Fastest general detector. AGPL is fine for this open source app but it binds anyone who forks and hosts it |
-| **Cactus Mirage** | detection, OCR, segmentation, classification, embedding in one | ~22 MB (2-bit) | Apache-2.0 | **none yet**: ships for the Cactus engine (native, `pip install cactus-compute`) | Interesting for the remote path, not for the tab |
+| Model                                | Task                                                           | Size                           | License                           | Browser path                                                                     | Notes                                                                                                      |
+|--------------------------------------|----------------------------------------------------------------|--------------------------------|-----------------------------------|----------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|
+| **YuNet** (OpenCV zoo)               | face detection + 5 landmarks                                   | ~0.3 MB ONNX                   | MIT                               | raw onnxruntime-web, like `src/sapiens2.ts`                                      | Very fast; landmarks are what face alignment needs                                                         |
+| **SFace** (OpenCV zoo)               | face embedding, 128-d                                          | ~37 MB fp32 ONNX (int8 ~10 MB) | Apache-2.0                        | raw onnxruntime-web                                                              | Takes the aligned 112×112 crop from YuNet                                                                  |
+| **EdgeFace-XS**                      | face embedding, 512-d                                          | ~7 MB                          | check the repo (research release) | needs our own ONNX export                                                        | Better accuracy per MB than SFace; licence must be checked before use                                      |
+| **MediaPipe Pose Landmarker (lite)** | 33-keypoint pose                                               | ~3–6 MB                        | Apache-2.0                        | `@mediapipe/tasks-vision` (WASM + GPU delegate)                                  | Best licence and size for pose                                                                             |
+| **YOLO26n / YOLO26n-pose**           | detection / pose                                               | ~5–10 MB                       | **AGPL-3.0** (Ultralytics)        | Transformers.js 3.8+ on WebGPU (`onnx-community/yolo26n-pose-ONNX`)              | Fastest general detector. AGPL is fine for this open source app but it binds anyone who forks and hosts it |
+| **Cactus Mirage**                    | detection, OCR, segmentation, classification, embedding in one | ~22 MB (2-bit)                 | Apache-2.0                        | **none yet**: ships for the Cactus engine (native, `pip install cactus-compute`) | Interesting for the remote path, not for the tab                                                           |
 
 ### Cactus Mirage, in more detail
 

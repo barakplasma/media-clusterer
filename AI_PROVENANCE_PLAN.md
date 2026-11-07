@@ -5,15 +5,15 @@ it, plus the **prompt** and **model** whenever the file carries them.
 
 ## Where the evidence lives
 
-| Source | Where it is in the file | What it holds |
-|--------|-------------------------|---------------|
-| Automatic1111 / Forge / **Civitai** downloads | PNG `tEXt` chunk `parameters` | prompt, negative prompt, steps, sampler, seed, `Model:`, `Model hash:`, Civitai resource hashes |
-| ComfyUI (also many **tensor.art** exports) | PNG `tEXt` chunks `prompt` and `workflow` (JSON) | full node graph: checkpoint name, positive/negative text nodes |
-| NovelAI | PNG `tEXt` `Comment` (JSON) + `Software` | prompt, model |
-| **Gemini / Imagen**, ChatGPT/DALL·E, Adobe Firefly, Microsoft Designer | C2PA manifest (JUMBF in a JPEG APP11 / PNG `caBX` box) | signed claim: generator, actions ("created by AI"), sometimes the model |
-| Google (all generators) | **SynthID** invisible watermark | can't be read on-device; only Google's detector can |
-| **Replicate**, Midjourney, others | usually EXIF/XMP `Software`, `ImageDescription`, `UserComment`, XMP `dc:description`; IPTC `DigitalSourceType = trainedAlgorithmicMedia` | varies by tool; the IPTC field is the standard "this is AI" flag |
-| WebP / JPEG from A1111 | EXIF `UserComment` | same `parameters` text as the PNG chunk |
+| Source                                                                 | Where it is in the file                                                                                                                  | What it holds                                                                                   |
+|------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| Automatic1111 / Forge / **Civitai** downloads                          | PNG `tEXt` chunk `parameters`                                                                                                            | prompt, negative prompt, steps, sampler, seed, `Model:`, `Model hash:`, Civitai resource hashes |
+| ComfyUI (also many **tensor.art** exports)                             | PNG `tEXt` chunks `prompt` and `workflow` (JSON)                                                                                         | full node graph: checkpoint name, positive/negative text nodes                                  |
+| NovelAI                                                                | PNG `tEXt` `Comment` (JSON) + `Software`                                                                                                 | prompt, model                                                                                   |
+| **Gemini / Imagen**, ChatGPT/DALL·E, Adobe Firefly, Microsoft Designer | C2PA manifest (JUMBF in a JPEG APP11 / PNG `caBX` box)                                                                                   | signed claim: generator, actions ("created by AI"), sometimes the model                         |
+| Google (all generators)                                                | **SynthID** invisible watermark                                                                                                          | can't be read on-device; only Google's detector can                                             |
+| **Replicate**, Midjourney, others                                      | usually EXIF/XMP `Software`, `ImageDescription`, `UserComment`, XMP `dc:description`; IPTC `DigitalSourceType = trainedAlgorithmicMedia` | varies by tool; the IPTC field is the standard "this is AI" flag                                |
+| WebP / JPEG from A1111                                                 | EXIF `UserComment`                                                                                                                       | same `parameters` text as the PNG chunk                                                         |
 
 ## Approach
 
