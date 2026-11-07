@@ -261,7 +261,7 @@ test('overnight: two models, a crashing file and a hanging file, then resume', a
   }
 })
 
-test('saved embeddings: a bundle in the folder is imported and matched by name and size; overnight sample toggle', async ({ page }) => {
+test('saved embeddings: a bundle in the folder is imported and matched by sha256; overnight sample toggle', async ({ page }) => {
   await page.addInitScript(() => {
     if (window === window.top && !sessionStorage.getItem('mc_test_seeded')) {
       sessionStorage.setItem('mc_test_seeded', '1')
@@ -280,12 +280,15 @@ test('saved embeddings: a bundle in the folder is imported and matched by name a
         }
         sizes[n] = (await h.getFile()).size
       }
-      // Written "on another device": right names and sizes, a different lastModified.
-      const { encodeBundle } = await import('/src/embeddingBundle.ts' as string)
-      const blob = encodeBundle(
-        [[`cats.jpg:${sizes['cats.jpg']}:1`, new Float32Array(8).fill(1)], [`tiger.png:${sizes['tiger.png']}:1`, new Float32Array(8).fill(2)]],
-        []
-      )
+      // Written "on another device": same content (sha256), a different lastModified.
+      const { encodeBundle, sha256Hex } = await import('/src/embeddingBundle.ts' as string)
+      const key = (n: string) => `${n}:${sizes[n]}:1`
+      const sha = async (n: string) => sha256Hex(await (await dir.getFileHandle(n)).getFile())
+      const blob = encodeBundle({
+        entries: [[key('cats.jpg'), new Float32Array(8).fill(1)], [key('tiger.png'), new Float32Array(8).fill(2)], ['@faces/' + key('cats.jpg'), new Float32Array(0)]],
+        captions: [],
+        sha256: { [key('cats.jpg')]: await sha('cats.jpg'), [key('tiger.png')]: await sha('tiger.png') }
+      })
       const wr = await (await dir.getFileHandle('media-clusterer.mcemb', { create: true })).createWritable()
       await wr.write(blob)
       await wr.close()

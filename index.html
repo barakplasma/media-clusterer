@@ -1153,13 +1153,8 @@
         <button id="bundle-folder" class="bundle-btn" title="Pick your photo folder; its embeddings are written into it as media-clusterer.mcemb">Save into folder…</button>
       </div>
       <input type="file" id="bundle-file" accept=".mcemb" hidden>
-      <input type="url" id="bundle-url" placeholder="https://… (presigned S3 URL, WebDAV, your own server)" autocomplete="off" style="width:100%;margin-top:8px;padding:9px 10px;background:var(--bg);border:1px solid var(--border);color:var(--text-main);border-radius:6px;outline:none;font-size:13px;box-sizing:border-box;">
-      <div style="display:flex;gap:6px;margin-top:6px;">
-        <button id="bundle-put" class="bundle-btn">Upload (PUT)</button>
-        <button id="bundle-get" class="bundle-btn">Download (GET)</button>
-      </div>
       <div id="bundle-result" class="setting-hint"></div>
-      <div class="setting-hint">Moves embeddings and captions between devices, e.g. an overnight run on a desktop to your phone. Importing adds to what is here. A folder that holds a <code>media-clusterer.mcemb</code> is imported when you open it. Files are matched by name and size, so copies with a new modified date still match. The URL's server must allow this page in CORS, including the preflight for PUT. A presigned URL carries its own auth; no other credentials are sent.</div>
+      <div class="setting-hint">Moves embeddings and captions between devices, e.g. an overnight run on a desktop to your phone. Importing adds to what is here. A folder that holds a <code>media-clusterer.mcemb</code> is imported when you open it. Files are matched by SHA-256, so copies with a new modified date (phones, sync tools) still match.</div>
     </div>
 
     <div class="setting-item">

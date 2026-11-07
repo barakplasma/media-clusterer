@@ -53,7 +53,6 @@ import {
   recordOpenAIConsent,
   openaiHost,
   describeOpenAIError,
-  mixedContentHint,
   type OpenAICompatConfig
 } from './openaiCompat'
 import { l2normalize, extractVector, extractBatchedVectors, makeCacheKey } from './embeddings'
@@ -67,10 +66,9 @@ import {
   captionPutBatch,
   cacheKeys,
   cacheHasBatch,
-  exportAll,
-  adoptByNameSize
+  exportAll
 } from './db'
-import { BUNDLE_FILE, encodeBundle, decodeBundle } from './embeddingBundle'
+import { BUNDLE_FILE, encodeBundle, decodeBundle, rekeyBundle, sha256Hex, fileKeyOf } from './embeddingBundle'
 import { runOvernight, formatDuration, type ChildMsg, type OvernightStats, type RunMsg } from './overnight'
 import {
   DEFAULT_FILTER,
@@ -2945,8 +2943,18 @@ function writeFilterForm(f: FileFilter) {
 // ── Saved-embeddings bundles (export / import / next to the photos) ──────────
 const BUNDLE_SEEN = 'mc_bundleSeen' // size:lastModified of bundle files already imported from folders
 
-async function importBundle(buf: ArrayBuffer): Promise<number> {
-  const { entries, captions } = decodeBundle(buf)
+/** Store a bundle's entries. With `files`, entries of another device's copies are moved onto them by sha256. */
+async function importBundle(buf: ArrayBuffer, files?: PhotoFile[]): Promise<number> {
+  let bundle = decodeBundle(buf)
+  if (files) {
+    const byKey = new Map(files.map((f) => [makeCacheKey(f), f]))
+    let hashed = 0
+    ;({ bundle } = await rekeyBundle(bundle, [...byKey.keys()], (k) => {
+      if (++hashed % 50 === 0) setStatus(`Matching saved embeddings to this folder's files… ${hashed} hashed`)
+      return sha256Hex(byKey.get(k)!.file)
+    }))
+  }
+  const { entries, captions } = bundle
   for (let i = 0; i < entries.length; i += 1000) {
     await cachePutBatch(entries.slice(i, i + 1000) as [CacheKey, Float32Array][])
   }
@@ -2955,9 +2963,18 @@ async function importBundle(buf: ArrayBuffer): Promise<number> {
   return entries.length
 }
 
+/** With `onlyFiles`, just their entries, plus each file's sha256 so other devices can match them. */
 async function bundleBlob(onlyFiles?: PhotoFile[]): Promise<{ blob: Blob; count: number }> {
-  const { entries, captions } = await exportAll(onlyFiles && new Set(onlyFiles.map(makeCacheKey)))
-  return { blob: encodeBundle(entries, captions), count: entries.length }
+  const byKey = new Map((onlyFiles ?? []).map((f) => [makeCacheKey(f), f]))
+  const { entries, captions } = await exportAll(onlyFiles && new Set(byKey.keys()))
+  const sha256: Record<string, string> = {}
+  for (const fk of new Set(entries.map(([k]) => fileKeyOf(k)))) {
+    const f = byKey.get(fk)
+    const h = f && (await sha256Hex(f.file))
+    if (h) sha256[fk] = h
+    if (Object.keys(sha256).length % 50 === 0) setStatus(`Hashing files for the embeddings file… ${Object.keys(sha256).length}`)
+  }
+  return { blob: encodeBundle({ entries, captions, sha256 }), count: entries.length }
 }
 
 /** Write the folder's own embeddings into it as BUNDLE_FILE. Needs readwrite permission on `dir`. */
@@ -2983,13 +3000,13 @@ function rememberBundle(f: File) {
 }
 
 /** Import a BUNDLE_FILE found in an opened folder, once per version of that file. */
-async function importFolderBundle(f: File | null | undefined) {
+async function importFolderBundle(f: File | null | undefined, files: PhotoFile[]) {
   if (!f) return
   try {
     const seen = JSON.parse(localStorage.getItem(BUNDLE_SEEN) ?? '[]') as string[]
     if (seen.includes(`${f.size}:${f.lastModified}`)) return
     setStatus(`Importing saved embeddings from ${BUNDLE_FILE}…`)
-    const n = await importBundle(await f.arrayBuffer())
+    const n = await importBundle(await f.arrayBuffer(), files)
     rememberBundle(f)
     showToast(`Imported ${n.toLocaleString()} saved embeddings from this folder.`, 'info')
   } catch (err) {
@@ -3001,10 +3018,7 @@ const bundleInFolder = (dir: DirectoryHandle) =>
   dir.getFileHandle(BUNDLE_FILE).then((h) => h.getFile(), () => null)
 
 async function openFilterDialog(files: PhotoFile[], bundle?: File | null): Promise<PhotoFile[] | null> {
-  await importFolderBundle(bundle)
-  // Vectors from another device are stored under that device's lastModified; claim them for these files.
-  const adopted = await adoptByNameSize(files.map(makeCacheKey)).catch(() => 0)
-  if (adopted) refreshCacheSize()
+  await importFolderBundle(bundle, files)
   const embedded = await loadEmbeddedSets()
   writeFilterForm(loadFileFilter())
   const sample = state.settings.randomSampleSize
@@ -5255,10 +5269,6 @@ async function projectOvernightResult(files: PhotoFile[], final: OvernightStats)
 // ── Saved-embeddings controls (Settings) ────────────────────────────────────
 {
   const out = $on('bundle-result')
-  const urlInput = $on<HTMLInputElement>('bundle-url')
-  const BUNDLE_URL = 'mc_bundleUrl'
-  urlInput.value = localStorage.getItem(BUNDLE_URL) ?? ''
-  urlInput.addEventListener('change', () => localStorage.setItem(BUNDLE_URL, urlInput.value.trim()))
   const guard = (btn: string, fn: () => Promise<string>) =>
     $on<HTMLButtonElement>(btn).addEventListener('click', async (e) => {
       const b = e.currentTarget as HTMLButtonElement
@@ -5273,14 +5283,6 @@ async function projectOvernightResult(files: PhotoFile[], final: OvernightStats)
         b.disabled = false
       }
     })
-  const url = () => {
-    const u = urlInput.value.trim()
-    if (!/^https?:\/\//.test(u)) throw new Error('Enter an http(s) URL first.')
-    const mixed = mixedContentHint(u)
-    if (mixed) throw new Error(mixed)
-    return u
-  }
-
   guard('bundle-export', async () => {
     const { blob, count } = await bundleBlob()
     const a = document.createElement('a')
@@ -5308,18 +5310,6 @@ async function projectOvernightResult(files: PhotoFile[], final: OvernightStats)
     setStatus('Scanning folder…')
     const n = await saveBundleToFolder(dir, await collectImages(dir))
     return `✅ Saved ${n.toLocaleString()} embeddings of this folder's files into ${dir.name}/${BUNDLE_FILE}.`
-  })
-  guard('bundle-put', async () => {
-    const target = url()
-    const { blob, count } = await bundleBlob()
-    const res = await fetch(target, { method: 'PUT', body: blob, headers: { 'Content-Type': 'application/octet-stream' } })
-    if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`)
-    return `✅ Uploaded ${count.toLocaleString()} embeddings (${(blob.size / 1048576).toFixed(1)} MB).`
-  })
-  guard('bundle-get', async () => {
-    const res = await fetch(url())
-    if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`)
-    return `✅ Imported ${(await importBundle(await res.arrayBuffer())).toLocaleString()} embeddings.`
   })
 }
 
