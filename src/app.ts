@@ -1040,7 +1040,7 @@ async function runFaces() {
       vecs.push(p.subarray(o + 5, o + FACE_STRIDE))
     }
   })
-  const ids = groupFaces(vecs)
+  const ids = groupFaces(vecs, owner)
   const byPerson = new Map<number, number[]>()
   ids.forEach((p, f) => byPerson.set(p, [...(byPerson.get(p) ?? []), f]))
   const list = [...byPerson.values()]
@@ -1048,13 +1048,18 @@ async function runFaces() {
       files: [...new Set(faces.map((f) => owner[f]))],
       best: faces.reduce((b, f) => (boxes[f][4] * boxes[f][2] > boxes[b][4] * boxes[b][2] ? f : b))
     }))
-    .filter((p) => p.files.length >= 2)
     .sort((a, b) => b.files.length - a.files.length)
     .slice(0, 60)
     .map((p) => ({ files: p.files, best: { file: owner[p.best], box: boxes[p.best] } }))
   if (run !== facesRun) return
   showPeople(list)
-  setStatus(`${files.length} media files · ${list.length} ${list.length === 1 ? 'person' : 'people'} found`)
+  const inPhotos = found.filter((p) => p && p.length).length
+  const repeat = list.filter((p) => p.files.length >= 2).length
+  setStatus(
+    vecs.length === 0
+      ? `No faces found in ${todo.length ? 'the' : 'these'} ${files.length.toLocaleString()} files`
+      : `${vecs.length.toLocaleString()} faces in ${inPhotos.toLocaleString()} photos · ${byPerson.size.toLocaleString()} people, ${repeat.toLocaleString()} in more than one photo`
+  )
 }
 
 function showPeople(list: typeof people) {
@@ -4992,6 +4997,8 @@ dom.resumeBtn.addEventListener('click', async () => {
     fitCamera()
     scheduleRender()
     setProgress(100)
+    showPeople([])
+    void runFaces()
     const modeSuffix = wasViewerMode ? 'viewer mode' : 'restored'
     const finalMsg = `${matched.length} media files · ${modeSuffix}`
     setStatus(`${matched.length} media files — resumed from session`)

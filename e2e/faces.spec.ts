@@ -20,10 +20,13 @@ test('faces: YuNet + SFace reproduce the OpenCV zoo reference match', async ({ p
       const v = vec(right, i)
       return { x: right[i * S], cos: v.reduce((s: number, a: number, d: number) => s + a * q[d], 0) }
     }).sort((a, b) => a.x - b.x)
-    return { leftFaces: left.length / S, sims, same: faces.SAME_PERSON }
+    // A close-up: the face fills most of the frame (YuNet alone only sees faces up to ~300 px of its 640 input).
+    const closeUp = (await faces.findFaces(m, await createImageBitmap(img, 220, 60, 200, 220, { resizeWidth: 1000, resizeHeight: 1100 }))).length / S
+    return { leftFaces: left.length / S, sims, same: faces.SAME_PERSON, closeUp }
   })
   console.log(JSON.stringify(r))
   expect(r.leftFaces).toBe(1)
+  expect(r.closeUp).toBe(1)
   expect(r.sims.length).toBeGreaterThanOrEqual(5)
   const rightMost = r.sims.at(-1)!
   expect(rightMost.cos).toBeGreaterThan(r.same)
@@ -55,9 +58,11 @@ test('faces: opening a folder finds the same person in two photos and the People
   await page.goto('/')
   await page.locator('#open-btn').click()
   await page.locator('#filter-load').click()
-  const chip = page.locator('#people-strip button')
-  await expect(chip).toHaveCount(1, { timeout: 120_000 })
+  // Five people; the one in both photos comes first.
+  await expect(page.locator('#people-strip button')).toHaveCount(5, { timeout: 120_000 })
+  const chip = page.locator('#people-strip button').first()
   await expect(chip).toHaveAttribute('aria-label', 'Person 1, 2 photos')
+  await expect(page.locator('#status')).toContainText('6 faces in 2 photos · 5 people, 1 in more than one photo')
   await chip.click()
   await expect(chip).toHaveAttribute('aria-pressed', 'true')
   // Cached: a second open finds the same person without running the models again.

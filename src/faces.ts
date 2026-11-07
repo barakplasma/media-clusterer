@@ -103,37 +103,49 @@ export function similarity(src: [number, number][], dst: [number, number][] = TE
 }
 
 /**
- * Group face vectors into people: each face joins the closest person whose mean vector is within
- * SAME_PERSON, else starts a new one. Returns a person id per face.
- * shortcut: one greedy pass, order-dependent and O(faces × people); switch to HDBSCAN if groups split or merge badly on big libraries.
+ * Group face vectors into people: a face joins the person it matches best, but only if it is within
+ * SAME_PERSON of every face already in that person (complete linkage), and that person has no face
+ * yet from the same photo (`photo[i]`): nobody appears twice in one picture. Matching a person's average
+ * instead merged strangers: one small, blurry face is often close to two different people.
+ * shortcut: one greedy pass, order-dependent; compares against at most 64 members per person, so big groups loosen; switch to HDBSCAN if people split or merge badly on large libraries.
  */
-export function groupFaces(vectors: Float32Array[], threshold = SAME_PERSON): Int32Array {
+export function groupFaces(vectors: Float32Array[], photo: ArrayLike<number>, threshold = SAME_PERSON): Int32Array {
   const ids = new Int32Array(vectors.length)
-  const sums: Float32Array[] = []
+  const members: Float32Array[][] = []
+  const photos: Set<number>[] = []
   for (let i = 0; i < vectors.length; i++) {
     const v = vectors[i]
     let best = -1
-    let bestCos = threshold
-    for (let p = 0; p < sums.length; p++) {
-      const c = cosine(v, sums[p])
-      if (c >= bestCos) (best = p), (bestCos = c)
+    let bestMean = -Infinity
+    for (let p = 0; p < members.length; p++) {
+      if (photos[p].has(photo[i])) continue
+      let min = Infinity
+      let sum = 0
+      const m = members[p]
+      for (const u of m) {
+        const c = dot(v, u)
+        min = Math.min(min, c)
+        sum += c
+      }
+      if (min >= threshold && sum / m.length > bestMean) (best = p), (bestMean = sum / m.length)
     }
     if (best < 0) {
-      best = sums.length
-      sums.push(new Float32Array(v.length))
+      best = members.length
+      members.push([])
+      photos.push(new Set())
     }
-    const s = sums[best]
-    for (let d = 0; d < v.length; d++) s[d] += v[d]
+    if (members[best].length < 64) members[best].push(v)
+    photos[best].add(photo[i])
     ids[i] = best
   }
   return ids
 }
 
-function cosine(a: Float32Array, b: Float32Array): number {
-  let dot = 0
-  let nb = 0
-  for (let i = 0; i < a.length; i++) (dot += a[i] * b[i]), (nb += b[i] * b[i])
-  return dot / Math.sqrt(nb || 1) // a is unit length
+/** Both vectors are unit length, so this is their cosine. */
+function dot(a: Float32Array, b: Float32Array): number {
+  let d = 0
+  for (let i = 0; i < a.length; i++) d += a[i] * b[i]
+  return d
 }
 
 // ── Models ──────────────────────────────────────────────────────────────────
@@ -155,7 +167,8 @@ export interface FaceModels {
 }
 
 export async function loadFaceModels(host?: string): Promise<FaceModels> {
-  ort.env.wasm.wasmPaths ||= 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/'
+  // Pinned: an unversioned CDN path serves the latest WASM, which need not match this JS.
+  ort.env.wasm.wasmPaths ||= `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ort.env.versions.web}/dist/`
   const at = (u: string) => (host ? u.replace('https://huggingface.co', host.replace(/\/+$/, '')) : u)
   const opts: ort.InferenceSession.SessionOptions = { executionProviders: ['wasm'], logSeverityLevel: 3 }
   const [det, rec] = await Promise.all([
