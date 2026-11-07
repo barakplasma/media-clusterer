@@ -2,7 +2,11 @@
 
 Research notes for a second per-photo signal next to the whole-image embedding: who is in the photo
 (faces), what people are doing (pose), or what objects are in it (detection). Written 2026-11-07.
-Nothing here is built yet.
+**Status:** faces are built (`src/faces.ts`, Settings → "Find faces"): YuNet + SFace int8 on WASM,
+cached per photo under `@faces/` (so they travel in the `.mcemb` bundle), grouped greedily at SFace's
+0.363 cosine threshold, and shown as a People strip that highlights a person's photos. On the
+OpenCV zoo reference image our pipeline scores the matching pair 0.55 (OpenCV: 0.79) and every
+non-match below 0.33 (`npx playwright test --project=faces`). Pose and naming people are not built.
 
 ## Candidates
 

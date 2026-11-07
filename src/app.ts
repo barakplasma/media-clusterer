@@ -68,6 +68,7 @@ import {
   cacheHasBatch,
   exportAll
 } from './db'
+import { loadFaceModels, findFaces, groupFaces, FACE_PREFIX, FACE_STRIDE, type FaceModels } from './faces'
 import { BUNDLE_FILE, encodeBundle, decodeBundle, rekeyBundle, sha256Hex, fileKeyOf } from './embeddingBundle'
 import { runOvernight, formatDuration, type ChildMsg, type OvernightStats, type RunMsg } from './overnight'
 import {
@@ -316,6 +317,7 @@ const DEFAULT_SETTINGS: Settings = {
   modelVariant: 'gpu' in navigator || USE_WEBNN ? 'embeddinggemma2' : NO_WEBGPU_MODEL,
   embedProfile: 'auto',
   enableLazyCaption: false,
+  findFaces: false,
   doNotTrack: false,
   customModelHost: '',
   openai: { baseUrl: '', model: '', maxImageWidth: 384 }
@@ -949,6 +951,7 @@ async function embedText(text: string): Promise<Float32Array> {
 
 // ── Text search (exact cosine scan over normalized vectors) ─────────────────
 async function searchImages(query: string) {
+  selectPerson(null)
   if (!query.trim() || !state.vectors.length) {
     state.searchResults = null
     state.searchQuery = ''
@@ -980,6 +983,127 @@ async function searchImages(query: string) {
   } finally {
     dom.searchWrap.classList.remove('loading')
   }
+}
+
+// ── Faces: find, group into people, highlight a person ──────────────────────
+let faceModels: Promise<FaceModels> | null = null
+let activePerson: number | null = null
+let people: { files: number[]; best: { file: number; box: Float32Array } }[] = []
+let facesRun = 0
+
+/** Find faces in the open folder's photos (cached under FACE_PREFIX), then show the People strip. */
+async function runFaces() {
+  if (!state.settings.findFaces) return
+  const run = ++facesRun
+  const files = state.files
+  const keys = files.map((f) => `${FACE_PREFIX}${makeCacheKey(f)}` as CacheKey)
+  const found = await cacheGetBatch(keys)
+  const todo = files.flatMap((f, i) => (found[i] || VIDEO_EXTS.has(f.name.split('.').pop()?.toLowerCase() ?? '') ? [] : [i]))
+  if (todo.length) {
+    try {
+      setStatus('Loading face models…')
+      faceModels ??= loadFaceModels(state.settings.customModelHost || undefined)
+      const m = await faceModels
+      const batch: [CacheKey, Float32Array][] = []
+      for (let n = 0; n < todo.length; n++) {
+        if (run !== facesRun || state.files !== files) return // another folder opened meanwhile
+        const i = todo[n]
+        try {
+          const full = await createImageBitmap(files[i].file)
+          const k = Math.min(1, 1280 / Math.max(full.width, full.height))
+          const bmp = await createImageBitmap(full, { resizeWidth: Math.round(full.width * k), resizeHeight: Math.round(full.height * k) })
+          full.close()
+          found[i] = await findFaces(m, bmp)
+          bmp.close()
+          batch.push([keys[i], found[i]!])
+        } catch (err) {
+          console.warn('Face detection failed for one file:', files[i].name, (err as Error).message)
+        }
+        if (batch.length >= 20 || n === todo.length - 1) await cachePutBatch(batch.splice(0))
+        if (n % 10 === 0) setStatus(`Finding faces… ${n + 1} / ${todo.length}`)
+        await yieldMain()
+      }
+    } catch (err) {
+      faceModels = null
+      showToast(`Face detection unavailable: ${(err as Error).message}`, 'warn', 10000)
+      return
+    }
+  }
+  // One entry per face, then people with faces in at least two photos, biggest first.
+  const owner: number[] = []
+  const vecs: Float32Array[] = []
+  const boxes: Float32Array[] = []
+  found.forEach((p, i) => {
+    for (let o = 0; p && o + FACE_STRIDE <= p.length; o += FACE_STRIDE) {
+      owner.push(i)
+      boxes.push(p.subarray(o, o + 5))
+      vecs.push(p.subarray(o + 5, o + FACE_STRIDE))
+    }
+  })
+  const ids = groupFaces(vecs)
+  const byPerson = new Map<number, number[]>()
+  ids.forEach((p, f) => byPerson.set(p, [...(byPerson.get(p) ?? []), f]))
+  const list = [...byPerson.values()]
+    .map((faces) => ({
+      files: [...new Set(faces.map((f) => owner[f]))],
+      best: faces.reduce((b, f) => (boxes[f][4] * boxes[f][2] > boxes[b][4] * boxes[b][2] ? f : b))
+    }))
+    .filter((p) => p.files.length >= 2)
+    .sort((a, b) => b.files.length - a.files.length)
+    .slice(0, 60)
+    .map((p) => ({ files: p.files, best: { file: owner[p.best], box: boxes[p.best] } }))
+  if (run !== facesRun) return
+  showPeople(list)
+  setStatus(`${files.length} media files · ${list.length} ${list.length === 1 ? 'person' : 'people'} found`)
+}
+
+function showPeople(list: typeof people) {
+  people = list
+  selectPerson(null)
+  const strip = document.getElementById('people-strip')!
+  strip.hidden = list.length === 0
+  strip.replaceChildren(
+    ...list.map((p, i) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.setAttribute('aria-pressed', 'false')
+      b.setAttribute('aria-label', `Person ${i + 1}, ${p.files.length} photos`)
+      b.title = `${p.files.length} photos`
+      const c = document.createElement('canvas')
+      c.width = c.height = 96
+      const n = document.createElement('span')
+      n.textContent = String(p.files.length)
+      b.append(c, n)
+      b.addEventListener('click', () => selectPerson(activePerson === i ? null : i))
+      void drawFaceChip(c, state.files[p.best.file].file, p.best.box)
+      return b
+    })
+  )
+}
+
+async function drawFaceChip(c: HTMLCanvasElement, file: File, box: Float32Array) {
+  try {
+    const bmp = await createImageBitmap(file, { resizeWidth: 512 })
+    const [x, y, w, h] = [box[0] * bmp.width, box[1] * bmp.height, box[2] * bmp.width, box[3] * bmp.height]
+    const side = Math.max(w, h) * 1.3 // a little margin around the face
+    c.getContext('2d')!.drawImage(bmp, x + w / 2 - side / 2, y + h / 2 - side / 2, side, side, 0, 0, c.width, c.height)
+    bmp.close()
+  } catch (_) {
+    // undecodable now: the chip stays blank but still works
+  }
+}
+
+function selectPerson(i: number | null) {
+  const was = activePerson
+  activePerson = i
+  document.querySelectorAll('#people-strip button').forEach((b, j) => b.setAttribute('aria-pressed', String(j === i)))
+  if (i !== null) {
+    state.searchResults = Int32Array.from(people[i].files)
+    state.searchScores = null
+    state.searchQuery = ''
+    dom.searchInput.value = ''
+  } else if (was !== null) state.searchResults = null
+  scheduleRender()
 }
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
@@ -1209,7 +1333,11 @@ function render() {
 
   // Matches inside the cutoff shrink from full size (best) to 35% (last kept);
   // everything past it is small and dim.
-  const keep = Math.max(1, Math.ceil((pts.length * state.settings.searchPercent) / 100))
+  // A person's photos are all matches; a text search keeps its top percent.
+  const keep =
+    activePerson !== null && state.searchResults
+      ? state.searchResults.length
+      : Math.max(1, Math.ceil((pts.length * state.settings.searchPercent) / 100))
 
   for (const i of visibleIndices) {
     if (isHidden(i)) continue
@@ -2739,6 +2867,7 @@ async function processFiles(files: PhotoFile[]) {
   if (dom.modal.open) closeModal()
 
   state.files = files
+  showPeople([]) // its file indices belong to the previous list
 
   // VIEWER MODE: Skip all AI processing
   if (state.settings.viewerOnly) {
@@ -2775,6 +2904,7 @@ async function processFiles(files: PhotoFile[]) {
     }
 
     dom.openBtn.disabled = false
+    void runFaces()
     return
   }
 
@@ -2849,6 +2979,7 @@ async function processFiles(files: PhotoFile[]) {
         'warn'
       )
     }
+    void runFaces()
   } catch (err) {
     console.error(err)
     setStatus(`Error: ${(err as Error).message}`)
@@ -3494,6 +3625,7 @@ dom.searchInput.addEventListener('keydown', (e) => {
 })
 
 dom.searchClearBtn.addEventListener('click', () => {
+  selectPerson(null)
   dom.searchInput.value = ''
   state.searchResults = null
   state.searchQuery = ''
@@ -4507,6 +4639,16 @@ dom.loopToggle.addEventListener('change', () => {
   saveSettings()
 })
 
+{
+  const t = document.getElementById('find-faces-toggle') as HTMLInputElement
+  t.checked = state.settings.findFaces
+  t.addEventListener('change', () => {
+    state.settings.findFaces = t.checked
+    saveSettings()
+    if (t.checked && state.files.length) void runFaces()
+    else if (!t.checked) showPeople([])
+  })
+}
 dom.lazyCaptionToggle.addEventListener('change', () => {
   state.settings.enableLazyCaption = dom.lazyCaptionToggle.checked
   saveSettings()
