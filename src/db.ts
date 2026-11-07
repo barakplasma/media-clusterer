@@ -262,3 +262,35 @@ export async function captionPutBatch(entries: [CacheKey, string][]): Promise<vo
     transaction.onerror = () => reject(transaction.error)
   })
 }
+
+// ── Bundle export / import ──────────────────────────────────────────────────
+
+/**
+ * Every embedding and caption, optionally only those of the given file keys (`name:size:lastModified`).
+ * shortcut: holds the whole cache in memory at once (≈3 KB per vector); stream through a cursor if exports reach GBs.
+ */
+export async function exportAll(onlyFileKeys?: Set<string>): Promise<{
+  entries: [string, Float32Array][]
+  captions: [string, string][]
+}> {
+  const database = await openDB()
+  const keep = (k: string) => !onlyFileKeys || onlyFileKeys.has(k.slice(k.lastIndexOf('/') + 1))
+  const readStore = <T>(name: string, map: (v: unknown) => T | null) =>
+    new Promise<[string, T][]>((resolve, reject) => {
+      const out: [string, T][] = []
+      const req = database.transaction(name, 'readonly').objectStore(name).openCursor()
+      req.onsuccess = () => {
+        const c = req.result
+        if (!c) return resolve(out)
+        const v = keep(String(c.key)) ? map(c.value) : null
+        if (v !== null) out.push([String(c.key), v])
+        c.continue()
+      }
+      req.onerror = () => reject(req.error)
+    })
+  return {
+    entries: await readStore(STORE_NAME, asFloat32),
+    captions: await readStore(CAPTION_STORE, (v) => (typeof v === 'string' ? v : null))
+  }
+}
+

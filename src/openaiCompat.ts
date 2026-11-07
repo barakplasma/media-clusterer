@@ -123,6 +123,44 @@ export function normalizeBaseUrl(input: string | undefined | null): string {
   return `${url.protocol}//${url.host}${path}`
 }
 
+// ── Browser-blocked requests ────────────────────────────────────────────────
+
+/**
+ * An https page may only fetch http from loopback (a "potentially trustworthy" origin).
+ * Returns why the request will be blocked, or '' when it can go out.
+ */
+export function mixedContentHint(url: string, pageProtocol = globalThis.location?.protocol): string {
+  if (pageProtocol !== 'https:') return ''
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return ''
+  }
+  if (u.protocol !== 'http:') return ''
+  const h = u.hostname.replace(/^\[|\]$/g, '')
+  if (h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127\./.test(h)) return ''
+  return (
+    `This page is https, so the browser refuses plain http to ${u.host} (mixed content) and offers no way to allow it. ` +
+    'Use an https URL instead: on vast.ai or any GPU box, `cloudflared tunnel --url http://localhost:8000` prints a https://….trycloudflare.com URL. ' +
+    'Or run the endpoint on this machine and use http://localhost.'
+  )
+}
+
+/**
+ * fetch() gives no detail when it fails, on purpose. The three causes users hit are a
+ * certificate the browser does not trust, a CORS preflight the server rejects, and a dead URL.
+ */
+export function networkFailureHint(baseUrl: string, sentKey: boolean): string {
+  return (
+    `Open ${baseUrl}/models in a new tab to see which it is. ` +
+    '1) A certificate warning there: the browser cannot skip TLS errors for a page\'s requests. Accept the warning once in that tab, or better, put the server behind a real certificate (a trycloudflare.com tunnel has one; vast.ai\'s direct ports use self-signed ones). ' +
+    `2) JSON there: the server rejected this page's CORS preflight. Its OPTIONS reply must allow origin ${globalThis.location?.origin ?? 'this page'} and the headers Content-Type${sentKey ? ', Authorization' : ''}. ` +
+    "vLLM: --allowed-origins '[\"*\"]' --allowed-headers '[\"*\"]'. Ollama: OLLAMA_ORIGINS=*. llama.cpp server and Infinity allow it by default. " +
+    '3) Nothing loads: the URL, port or tunnel is down (quick tunnels get a new URL on every restart).'
+  )
+}
+
 // ── Secret redaction ────────────────────────────────────────────────────────
 
 function escapeRegExp(s: string): string {
@@ -228,7 +266,7 @@ function classifyStatus(status: number): { kind: OpenAIErrorKind; retryable: boo
     }
   }
   if (status === 429) {
-    return { kind: 'rate-limit', retryable: true, hint: 'Rate limited by the provider.' }
+    return { kind: 'rate-limit', retryable: true, hint: 'Rate limited by the provider, usually a per-minute quota, even after waiting about 3 minutes. Files that failed are not cached, so opening the folder again retries only them. A smaller Batch size spreads requests out.' }
   }
   if (status === 408) {
     return { kind: 'timeout', retryable: true, hint: 'The endpoint timed out.' }
@@ -317,6 +355,19 @@ export function parseRetryAfter(value: string | null, nowMs: number = Date.now()
   return Math.min(Math.max(when - nowMs, 0), MAX_RETRY_AFTER_MS)
 }
 
+/**
+ * Rate limits are usually per minute (Vertex behind OpenRouter: requests per minute per model),
+ * so a 429 waits far longer than other retries, and every request in flight waits with it.
+ */
+const RATE_LIMIT_RETRIES = 6
+const MAX_RATE_LIMIT_WAIT_MS = 65_000
+let rateLimitedUntil = 0
+
+function rateLimitBackoffMs(attempt: number): number {
+  const ceiling = Math.min(5_000 * 2 ** attempt, MAX_RATE_LIMIT_WAIT_MS)
+  return ceiling / 2 + (Math.random() * ceiling) / 2
+}
+
 /** Full-jitter exponential backoff. */
 function backoffMs(attempt: number): number {
   const ceiling = Math.min(BASE_BACKOFF_MS * 2 ** attempt, MAX_BACKOFF_MS)
@@ -348,10 +399,16 @@ export async function requestJSON<T>(
   // servers reject it outright, and they need no key in the first place.
   if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`
 
+  // The browser blocks this before any request leaves, with an opaque TypeError, so say why up front.
+  const mixed = mixedContentHint(url)
+  if (mixed) throw new OpenAICompatError('network', `Blocked request to ${host}: http endpoint from an https page`, { hint: mixed, host })
+
   let lastError: OpenAICompatError | null = null
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+  for (let attempt = 0; attempt <= maxRetries + (lastError?.status === 429 ? RATE_LIMIT_RETRIES : 0); attempt++) {
     if (signal?.aborted) throw abortError(host)
+    const cooldown = rateLimitedUntil - Date.now()
+    if (cooldown > 0) await sleep(cooldown, signal, host)
 
     const timeoutCtrl = new AbortController()
     let timedOut = false
@@ -386,7 +443,7 @@ export async function requestJSON<T>(
           `Could not reach ${host}: ${(err as Error)?.message ?? 'network error'}`,
           {
             retryable: true,
-            hint: 'Check the base URL, your connection, and that the server allows cross-origin requests from this page.',
+            hint: networkFailureHint(cfg.baseUrl, !!cfg.apiKey),
             host,
             key: cfg.apiKey
           }
@@ -425,10 +482,15 @@ export async function requestJSON<T>(
         { status: res.status, retryable, hint, host, key: cfg.apiKey }
       )
 
-      if (!retryable || attempt >= maxRetries) throw err
+      const limit = maxRetries + (res.status === 429 ? RATE_LIMIT_RETRIES : 0)
+      if (!retryable || attempt >= limit) throw err
       lastError = err
 
       const after = parseRetryAfter(res.headers?.get?.('Retry-After') ?? null)
+      if (res.status === 429) {
+        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + Math.max(after ?? 0, rateLimitBackoffMs(attempt)))
+        continue // the cooldown at the top of the loop does the waiting, shared with other requests
+      }
       await sleep(after ?? backoffMs(attempt), signal, host)
       continue
     }

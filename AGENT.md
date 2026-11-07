@@ -42,6 +42,7 @@ End to end only (no unit tests). Needs Google Chrome installed.
 - `npm run test:gpu`: EmbeddingGemma 2 in the phone and desktop profiles. Needs a real GPU; CI runs it on GitHub's macOS runner (`.github/workflows/e2e.yml`), where only the phone profile is required. `SWIFTSHADER=<chrome binary>` runs it on SwiftShader for local debugging.
 - `npx playwright test --project=webnn`: the same test on the WebNN path (`src/vlmWebnn.ts`), which the app prefers whenever the browser has WebNN (the project turns the flag on). No GPU needed; downloads the 880 MB fp16 model. `npu-test.html` measures that path on a real phone and copies a JSON report with its JSON Schema.
 - Chrome AI: `npx playwright test --project=chrome-ai` (Gemini Nano downloads on first run, about 90 s on the hosted Linux runner; run under `xvfb-run` there). On demand: `.github/workflows/chrome-ai.yml` (Run workflow button; also runs on PRs that change the test).
+- Faces: `npx playwright test --project=faces` (on demand; downloads the ~10 MB YuNet/SFace models and OpenCV's reference image from Hugging Face). Checks the match against OpenCV's own result and the People strip end to end.
 - Safari: `e2e/safari/` (node:test + safaridriver), one CI job on macOS 26.
 - Real phone: `.github/workflows/testlab.yml`, Firebase Test Lab, on demand only (Run workflow button). Setup steps are at the top of that file.
 

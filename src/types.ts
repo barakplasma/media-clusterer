@@ -1,3 +1,4 @@
+import type { Provenance } from './aiProvenance'
 /**
  * Core type definitions for Photo Organizer
  */
@@ -14,6 +15,7 @@ export interface PhotoFile {
   objectURL: string | null
   gps?: { latitude: number; longitude: number } | null // null = parsed but no data
   exifData?: Record<string, unknown> | null // null = parsed but no data
+  ai?: Provenance | null // AI-generation evidence the file carries; null = read, none found
   created?: number // EXIF Date Taken in ms, or lastModified when absent; read lazily by fileFilter
   duration?: number // video seconds, NaN when unknown; read lazily by fileFilter
 }
@@ -140,6 +142,7 @@ export interface Settings {
   modelVariant: ModelVariant // Vision embedding model to use
   embedProfile: 'auto' | 'light' | 'full' // EmbeddingGemma 2 image budget; auto = light on phones/Chromebooks
   enableLazyCaption: boolean // Generate captions on modal open via Chrome AI (off by default)
+  findFaces: boolean // YuNet + SFace after a folder opens, grouped into the People strip (off by default)
   doNotTrack: boolean // Disable BugSink error reporting (default false)
   customModelHost: string // Alternative HuggingFace-compatible host (corporate proxy/mirror); '' = huggingface.co
   openai: OpenAISettings // Remote inference endpoint (modelVariant === 'openai')

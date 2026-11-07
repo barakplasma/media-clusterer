@@ -48,6 +48,8 @@ export default defineConfig({
     },
     // No GPU needed: `npm test`, the pre-commit hook and the Linux deploy job.
     { name: 'cpu', testMatch: 'cpu.spec.ts', timeout: 60_000 },
+    // On demand: downloads the face models and a reference image from Hugging Face.
+    { name: 'faces', testMatch: 'faces.spec.ts' },
     // Chrome's built-in Gemini Nano; the spec launches its own persistent
     // Chrome profile, since the Prompt API is off in Playwright's default
     // (incognito-like) contexts.

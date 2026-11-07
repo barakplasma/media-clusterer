@@ -65,8 +65,12 @@ import {
   captionGetBatch,
   captionPutBatch,
   cacheKeys,
-  cacheHasBatch
+  cacheHasBatch,
+  exportAll
 } from './db'
+import { readProvenance, type Provenance } from './aiProvenance'
+import { loadFaceModels, findFaces, groupFaces, FACE_PREFIX, FACE_STRIDE, type FaceModels } from './faces'
+import { BUNDLE_FILE, encodeBundle, decodeBundle, rekeyBundle, sha256Hex, fileKeyOf } from './embeddingBundle'
 import { runOvernight, formatDuration, type ChildMsg, type OvernightStats, type RunMsg } from './overnight'
 import {
   DEFAULT_FILTER,
@@ -314,6 +318,7 @@ const DEFAULT_SETTINGS: Settings = {
   modelVariant: 'gpu' in navigator || USE_WEBNN ? 'embeddinggemma2' : NO_WEBGPU_MODEL,
   embedProfile: 'auto',
   enableLazyCaption: false,
+  findFaces: false,
   doNotTrack: false,
   customModelHost: '',
   openai: { baseUrl: '', model: '', maxImageWidth: 384 }
@@ -820,7 +825,9 @@ async function extractVideoFrames(file: File, n: number, px: number): Promise<Im
     }
 
     video.onerror = () => {
-      console.debug('Video load error (unsupported format):', file.name)
+      // MEDIA_ERR_NETWORK on a blob: is usually a truncated file (index points past EOF) or one changed since it was picked.
+      const e = video.error
+      console.debug(`Video load error (${e ? `code ${e.code}${e.message ? `: ${e.message}` : ''}` : 'unknown'}):`, file.name)
       finish()
     }
 
@@ -945,6 +952,7 @@ async function embedText(text: string): Promise<Float32Array> {
 
 // ── Text search (exact cosine scan over normalized vectors) ─────────────────
 async function searchImages(query: string) {
+  selectPerson(null)
   if (!query.trim() || !state.vectors.length) {
     state.searchResults = null
     state.searchQuery = ''
@@ -976,6 +984,132 @@ async function searchImages(query: string) {
   } finally {
     dom.searchWrap.classList.remove('loading')
   }
+}
+
+// ── Faces: find, group into people, highlight a person ──────────────────────
+let faceModels: Promise<FaceModels> | null = null
+let activePerson: number | null = null
+let people: { files: number[]; best: { file: number; box: Float32Array } }[] = []
+let facesRun = 0
+
+/** Find faces in the open folder's photos (cached under FACE_PREFIX), then show the People strip. */
+async function runFaces() {
+  if (!state.settings.findFaces) return
+  const run = ++facesRun
+  const files = state.files
+  const keys = files.map((f) => `${FACE_PREFIX}${makeCacheKey(f)}` as CacheKey)
+  const found = await cacheGetBatch(keys)
+  const todo = files.flatMap((f, i) => (found[i] || VIDEO_EXTS.has(f.name.split('.').pop()?.toLowerCase() ?? '') ? [] : [i]))
+  if (todo.length) {
+    try {
+      setStatus('Loading face models…')
+      faceModels ??= loadFaceModels(state.settings.customModelHost || undefined)
+      const m = await faceModels
+      const batch: [CacheKey, Float32Array][] = []
+      for (let n = 0; n < todo.length; n++) {
+        if (run !== facesRun || state.files !== files) return // another folder opened meanwhile
+        const i = todo[n]
+        try {
+          const full = await createImageBitmap(files[i].file)
+          const k = Math.min(1, 1280 / Math.max(full.width, full.height))
+          const bmp = await createImageBitmap(full, { resizeWidth: Math.round(full.width * k), resizeHeight: Math.round(full.height * k) })
+          full.close()
+          found[i] = await findFaces(m, bmp)
+          bmp.close()
+          batch.push([keys[i], found[i]!])
+        } catch (err) {
+          console.warn('Face detection failed for one file:', files[i].name, (err as Error).message)
+        }
+        if (batch.length >= 20 || n === todo.length - 1) await cachePutBatch(batch.splice(0))
+        if (n % 10 === 0) setStatus(`Finding faces… ${n + 1} / ${todo.length}`)
+        await yieldMain()
+      }
+    } catch (err) {
+      faceModels = null
+      showToast(`Face detection unavailable: ${(err as Error).message}`, 'warn', 10000)
+      return
+    }
+  }
+  // One entry per face, then people with faces in at least two photos, biggest first.
+  const owner: number[] = []
+  const vecs: Float32Array[] = []
+  const boxes: Float32Array[] = []
+  found.forEach((p, i) => {
+    for (let o = 0; p && o + FACE_STRIDE <= p.length; o += FACE_STRIDE) {
+      owner.push(i)
+      boxes.push(p.subarray(o, o + 5))
+      vecs.push(p.subarray(o + 5, o + FACE_STRIDE))
+    }
+  })
+  const ids = groupFaces(vecs, owner)
+  const byPerson = new Map<number, number[]>()
+  ids.forEach((p, f) => byPerson.set(p, [...(byPerson.get(p) ?? []), f]))
+  const list = [...byPerson.values()]
+    .map((faces) => ({
+      files: [...new Set(faces.map((f) => owner[f]))],
+      best: faces.reduce((b, f) => (boxes[f][4] * boxes[f][2] > boxes[b][4] * boxes[b][2] ? f : b))
+    }))
+    .sort((a, b) => b.files.length - a.files.length)
+    .slice(0, 60)
+    .map((p) => ({ files: p.files, best: { file: owner[p.best], box: boxes[p.best] } }))
+  if (run !== facesRun) return
+  showPeople(list)
+  const inPhotos = found.filter((p) => p && p.length).length
+  const repeat = list.filter((p) => p.files.length >= 2).length
+  setStatus(
+    vecs.length === 0
+      ? `No faces found in ${todo.length ? 'the' : 'these'} ${files.length.toLocaleString()} files`
+      : `${vecs.length.toLocaleString()} faces in ${inPhotos.toLocaleString()} photos · ${byPerson.size.toLocaleString()} people, ${repeat.toLocaleString()} in more than one photo`
+  )
+}
+
+function showPeople(list: typeof people) {
+  people = list
+  selectPerson(null)
+  const strip = document.getElementById('people-strip')!
+  strip.hidden = list.length === 0
+  strip.replaceChildren(
+    ...list.map((p, i) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.setAttribute('aria-pressed', 'false')
+      b.setAttribute('aria-label', `Person ${i + 1}, ${p.files.length} photos`)
+      b.title = `${p.files.length} photos`
+      const c = document.createElement('canvas')
+      c.width = c.height = 96
+      const n = document.createElement('span')
+      n.textContent = String(p.files.length)
+      b.append(c, n)
+      b.addEventListener('click', () => selectPerson(activePerson === i ? null : i))
+      void drawFaceChip(c, state.files[p.best.file].file, p.best.box)
+      return b
+    })
+  )
+}
+
+async function drawFaceChip(c: HTMLCanvasElement, file: File, box: Float32Array) {
+  try {
+    const bmp = await createImageBitmap(file, { resizeWidth: 512 })
+    const [x, y, w, h] = [box[0] * bmp.width, box[1] * bmp.height, box[2] * bmp.width, box[3] * bmp.height]
+    const side = Math.max(w, h) * 1.3 // a little margin around the face
+    c.getContext('2d')!.drawImage(bmp, x + w / 2 - side / 2, y + h / 2 - side / 2, side, side, 0, 0, c.width, c.height)
+    bmp.close()
+  } catch (_) {
+    // undecodable now: the chip stays blank but still works
+  }
+}
+
+function selectPerson(i: number | null) {
+  const was = activePerson
+  activePerson = i
+  document.querySelectorAll('#people-strip button').forEach((b, j) => b.setAttribute('aria-pressed', String(j === i)))
+  if (i !== null) {
+    state.searchResults = Int32Array.from(people[i].files)
+    state.searchScores = null
+    state.searchQuery = ''
+    dom.searchInput.value = ''
+  } else if (was !== null) state.searchResults = null
+  scheduleRender()
 }
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
@@ -1205,7 +1339,11 @@ function render() {
 
   // Matches inside the cutoff shrink from full size (best) to 35% (last kept);
   // everything past it is small and dim.
-  const keep = Math.max(1, Math.ceil((pts.length * state.settings.searchPercent) / 100))
+  // A person's photos are all matches; a text search keeps its top percent.
+  const keep =
+    activePerson !== null && state.searchResults
+      ? state.searchResults.length
+      : Math.max(1, Math.ceil((pts.length * state.settings.searchPercent) / 100))
 
   for (const i of visibleIndices) {
     if (isHidden(i)) continue
@@ -2735,6 +2873,7 @@ async function processFiles(files: PhotoFile[]) {
   if (dom.modal.open) closeModal()
 
   state.files = files
+  showPeople([]) // its file indices belong to the previous list
 
   // VIEWER MODE: Skip all AI processing
   if (state.settings.viewerOnly) {
@@ -2771,6 +2910,7 @@ async function processFiles(files: PhotoFile[]) {
     }
 
     dom.openBtn.disabled = false
+    void runFaces()
     return
   }
 
@@ -2845,6 +2985,7 @@ async function processFiles(files: PhotoFile[]) {
         'warn'
       )
     }
+    void runFaces()
   } catch (err) {
     console.error(err)
     setStatus(`Error: ${(err as Error).message}`)
@@ -2936,7 +3077,85 @@ function writeFilterForm(f: FileFilter) {
 }
 
 /** Let the user narrow a scanned folder. Resolves to the matches, or null on cancel. */
-async function openFilterDialog(files: PhotoFile[]): Promise<PhotoFile[] | null> {
+// ── Saved-embeddings bundles (export / import / next to the photos) ──────────
+const BUNDLE_SEEN = 'mc_bundleSeen' // size:lastModified of bundle files already imported from folders
+
+/** Store a bundle's entries. With `files`, entries of another device's copies are moved onto them by sha256. */
+async function importBundle(buf: ArrayBuffer, files?: PhotoFile[]): Promise<number> {
+  let bundle = decodeBundle(buf)
+  if (files) {
+    const byKey = new Map(files.map((f) => [makeCacheKey(f), f]))
+    let hashed = 0
+    ;({ bundle } = await rekeyBundle(bundle, [...byKey.keys()], (k) => {
+      if (++hashed % 50 === 0) setStatus(`Matching saved embeddings to this folder's files… ${hashed} hashed`)
+      return sha256Hex(byKey.get(k)!.file)
+    }))
+  }
+  const { entries, captions } = bundle
+  for (let i = 0; i < entries.length; i += 1000) {
+    await cachePutBatch(entries.slice(i, i + 1000) as [CacheKey, Float32Array][])
+  }
+  await captionPutBatch(captions as [CacheKey, string][])
+  refreshCacheSize()
+  return entries.length
+}
+
+/** With `onlyFiles`, just their entries, plus each file's sha256 so other devices can match them. */
+async function bundleBlob(onlyFiles?: PhotoFile[]): Promise<{ blob: Blob; count: number }> {
+  const byKey = new Map((onlyFiles ?? []).map((f) => [makeCacheKey(f), f]))
+  const { entries, captions } = await exportAll(onlyFiles && new Set(byKey.keys()))
+  const sha256: Record<string, string> = {}
+  for (const fk of new Set(entries.map(([k]) => fileKeyOf(k)))) {
+    const f = byKey.get(fk)
+    const h = f && (await sha256Hex(f.file))
+    if (h) sha256[fk] = h
+    if (Object.keys(sha256).length % 50 === 0) setStatus(`Hashing files for the embeddings file… ${Object.keys(sha256).length}`)
+  }
+  return { blob: encodeBundle({ entries, captions, sha256 }), count: entries.length }
+}
+
+/** Write the folder's own embeddings into it as BUNDLE_FILE. Needs readwrite permission on `dir`. */
+async function saveBundleToFolder(dir: DirectoryHandle, files: PhotoFile[]): Promise<number> {
+  const { blob, count } = await bundleBlob(files)
+  const handle = await dir.getFileHandle(BUNDLE_FILE, { create: true })
+  const w = await handle.createWritable()
+  await w.write(blob)
+  await w.close()
+  // Our own write is not news on the next open of this folder.
+  const f = await handle.getFile()
+  rememberBundle(f)
+  return count
+}
+
+function rememberBundle(f: File) {
+  try {
+    const seen = JSON.parse(localStorage.getItem(BUNDLE_SEEN) ?? '[]') as string[]
+    localStorage.setItem(BUNDLE_SEEN, JSON.stringify([...seen.slice(-50), `${f.size}:${f.lastModified}`]))
+  } catch (_) {
+    // storage full: the bundle is imported again next time, which is harmless
+  }
+}
+
+/** Import a BUNDLE_FILE found in an opened folder, once per version of that file. */
+async function importFolderBundle(f: File | null | undefined, files: PhotoFile[]) {
+  if (!f) return
+  try {
+    const seen = JSON.parse(localStorage.getItem(BUNDLE_SEEN) ?? '[]') as string[]
+    if (seen.includes(`${f.size}:${f.lastModified}`)) return
+    setStatus(`Importing saved embeddings from ${BUNDLE_FILE}…`)
+    const n = await importBundle(await f.arrayBuffer(), files)
+    rememberBundle(f)
+    showToast(`Imported ${n.toLocaleString()} saved embeddings from this folder.`, 'info')
+  } catch (err) {
+    showToast(`Could not import ${BUNDLE_FILE}: ${(err as Error).message}`, 'warn', 10000)
+  }
+}
+
+const bundleInFolder = (dir: DirectoryHandle) =>
+  dir.getFileHandle(BUNDLE_FILE).then((h) => h.getFile(), () => null)
+
+async function openFilterDialog(files: PhotoFile[], bundle?: File | null): Promise<PhotoFile[] | null> {
+  await importFolderBundle(bundle, files)
   const embedded = await loadEmbeddedSets()
   writeFilterForm(loadFileFilter())
   const sample = state.settings.randomSampleSize
@@ -3026,7 +3245,7 @@ async function run(dirHandle: DirectoryHandle, basePath: string = '') {
     setStatus('Scanning folder…')
     // Scan everything so the filters see the whole folder; sampling happens after.
     const all = await collectImages(dirHandle, 0, basePath)
-    const files = await openFilterDialog(all)
+    const files = await openFilterDialog(all, await bundleInFolder(dirHandle))
     if (!files) {
       setStatus('Cancelled.')
       dom.openBtn.disabled = false
@@ -3412,6 +3631,7 @@ dom.searchInput.addEventListener('keydown', (e) => {
 })
 
 dom.searchClearBtn.addEventListener('click', () => {
+  selectPerson(null)
   dom.searchInput.value = ''
   state.searchResults = null
   state.searchQuery = ''
@@ -3640,6 +3860,18 @@ const openFileModal = (index: number) => {
       })
   }
 
+  // AI provenance: read lazily from the file's own bytes, once per file.
+  const aiBtn = document.getElementById('modal-ai-btn') as HTMLButtonElement
+  const showAi = (ai: Provenance | null | undefined) => {
+    aiBtn.hidden = !ai
+    ;(document.getElementById('modal-ai-sep') as HTMLElement).hidden = !ai
+    if (ai) aiBtn.textContent = `✨ AI · ${ai.generator}${ai.model ? ` · ${ai.model}` : ''} ▸`
+  }
+  showAi(f.ai)
+  if (f.ai === undefined && !VIDEO_EXTS.has(f.name.split('.').pop()?.toLowerCase() ?? '')) {
+    void readFileProvenance(f).then(() => state.activeFileIndex === index && showAi(f.ai))
+  }
+
   // Cancel any in-flight lazy caption and pending debounce from a previous modal open
   captionAbortController?.abort()
   captionAbortController = null
@@ -3813,12 +4045,52 @@ function formatExifValue(key: string, val: unknown): string {
   return String(val)
 }
 
+/** Fill f.ai from the file. shortcut: reads the whole file, so files over 64 MB are skipped; read only the header regions if huge PNGs matter. */
+async function readFileProvenance(f: PhotoFile) {
+  try {
+    if (f.size > 64 << 20) return void (f.ai = null)
+    const exif = await exifr.parse(f.file, { pick: ['UserComment', 'Software', 'ImageDescription'] }).catch(() => null)
+    f.ai = await readProvenance(new Uint8Array(await f.file.arrayBuffer()), exif ?? null)
+  } catch (err) {
+    console.warn('AI provenance read failed:', (err as Error).message)
+    f.ai = null
+  }
+}
+
+document.getElementById('modal-ai-btn')!.addEventListener('click', () => {
+  const ai = state.activeFileIndex === null ? null : state.files[state.activeFileIndex]?.ai
+  if (!ai) return
+  ;(document.getElementById('exif-dialog-title') as HTMLElement).textContent = 'AI-generated'
+  exifDialogBody.innerHTML = ''
+  const dl = document.createElement('dl')
+  dl.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0;'
+  const row = (label: string, value: string | undefined) => {
+    if (!value) return
+    const dt = document.createElement('dt')
+    dt.style.cssText = 'color:var(--text-dim);white-space:nowrap;'
+    dt.textContent = label
+    const dd = document.createElement('dd')
+    dd.style.cssText = 'margin:0;color:var(--text-main);white-space:pre-wrap;word-break:break-word;'
+    dd.textContent = value
+    dl.append(dt, dd)
+  }
+  row('Generator', ai.generator)
+  row('Model', ai.model)
+  row('Prompt', ai.prompt)
+  row('Negative prompt', ai.negative)
+  row('Settings', ai.settings)
+  row('Evidence', ai.evidence.map((e) => `• ${e}`).join('\n'))
+  exifDialogBody.appendChild(dl)
+  exifDialog.showModal()
+})
+
 dom.modalExifBtn.addEventListener('click', () => {
   const idx = state.activeFileIndex
   if (idx === null) return
   const exif = state.files[idx]?.exifData
   if (!exif) return
 
+  ;(document.getElementById('exif-dialog-title') as HTMLElement).textContent = 'EXIF Data'
   exifDialogBody.innerHTML = ''
   const dl = document.createElement('dl')
   dl.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0;'
@@ -4130,6 +4402,8 @@ if (dom.openaiBaseUrl) {
     reloadIfModelLoaded()
   })
 
+  // The form only exists to silence Chrome's "password field is not contained in a form"; Enter must not reload.
+  dom.openaiKey.form?.addEventListener('submit', (e) => e.preventDefault())
   dom.openaiKey.addEventListener('change', () => {
     setOpenAIKey(dom.openaiKey.value.trim(), dom.openaiRemember.checked)
     // Never leave the key sitting in the input's value.
@@ -4423,6 +4697,16 @@ dom.loopToggle.addEventListener('change', () => {
   saveSettings()
 })
 
+{
+  const t = document.getElementById('find-faces-toggle') as HTMLInputElement
+  t.checked = state.settings.findFaces
+  t.addEventListener('change', () => {
+    state.settings.findFaces = t.checked
+    saveSettings()
+    if (t.checked && state.files.length) void runFaces()
+    else if (!t.checked) showPeople([])
+  })
+}
 dom.lazyCaptionToggle.addEventListener('change', () => {
   state.settings.enableLazyCaption = dom.lazyCaptionToggle.checked
   saveSettings()
@@ -4632,7 +4916,8 @@ dom.fileInput.addEventListener('change', async () => {
     }
   }
 
-  const filtered = await openFilterDialog(files)
+  const bundle = [...fileList].find((f) => f.name === BUNDLE_FILE && f.webkitRelativePath.split('/').length <= 2)
+  const filtered = await openFilterDialog(files, bundle)
   if (!filtered) {
     setStatus('Cancelled.')
     dom.openBtn.disabled = false
@@ -4765,6 +5050,8 @@ dom.resumeBtn.addEventListener('click', async () => {
     fitCamera()
     scheduleRender()
     setProgress(100)
+    showPeople([])
+    void runFaces()
     const modeSuffix = wasViewerMode ? 'viewer mode' : 'restored'
     const finalMsg = `${matched.length} media files · ${modeSuffix}`
     setStatus(`${matched.length} media files — resumed from session`)
@@ -4845,7 +5132,7 @@ const overnightBtn = document.getElementById('overnight-btn') as HTMLButtonEleme
 const overnightEl = document.getElementById('overnight') as HTMLDivElement
 const $on = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
-function savedOvernightJob(): { models: ModelVariant[] } | null {
+function savedOvernightJob(): { models: ModelVariant[]; sample?: boolean } | null {
   try {
     return JSON.parse(localStorage.getItem(OVERNIGHT_JOB) ?? 'null')
   } catch {
@@ -4859,14 +5146,33 @@ if (savedOvernightJob()) {
 
 /** Models offered for overnight runs: what this device can run, minus ones that need a person. */
 function overnightModelChoices() {
+  const remoteReady = !!normalizeBaseUrl(state.settings.openai.baseUrl) && !!state.settings.openai.model
   return [...dom.modelSelect.querySelectorAll('option')]
     .filter((o) => o.value !== 'chrome-ai') // its download and sessions need a click
-    .filter((o) => {
-      if (o.value !== 'openai') return true
-      const base = normalizeBaseUrl(state.settings.openai.baseUrl)
-      return !!base && !!state.settings.openai.model && hasOpenAIConsent(base)
-    })
-    .map((o) => ({ id: o.value as ModelVariant, label: o.textContent ?? o.value, disabled: o.disabled }))
+    .map((o) => ({
+      id: o.value as ModelVariant,
+      label: o.textContent ?? o.value,
+      // Remote is configured right in the overnight dialog, so it is listed even before it is set up.
+      disabled: o.value === 'openai' ? !remoteReady : o.disabled
+    }))
+}
+
+/**
+ * The same n files every time for the same folder, so a resumed overnight run continues the
+ * sample it started instead of drawing a new one (sampleFiles is random per call).
+ */
+function stableSample(files: PhotoFile[], n: number): PhotoFile[] {
+  if (n <= 0 || files.length <= n) return files
+  const hash = (k: string) => {
+    let h = 0x811c9dc5 // FNV-1a
+    for (let i = 0; i < k.length; i++) h = Math.imul(h ^ k.charCodeAt(i), 0x01000193)
+    return h >>> 0
+  }
+  return files
+    .map((f) => [hash(makeCacheKey(f)), f] as const)
+    .sort((a, b) => a[0] - b[0])
+    .slice(0, n)
+    .map(([, f]) => f)
 }
 
 function renderOvernight(st: OvernightStats) {
@@ -4937,35 +5243,68 @@ async function startOvernightFlow() {
     return
   }
   setStatus('Scanning folder…')
-  const files = await openFilterDialog(await collectImages(dir, 0, ''))
-  if (!files) {
+  const all = await openFilterDialog(await collectImages(dir, 0, ''), await bundleInFolder(dir))
+  if (!all) {
     setStatus('Cancelled.')
     return
   }
+  let files: PhotoFile[] = all
   setStatus(`${files.length} files selected for overnight embedding.`)
 
   const keys = await cacheKeys().catch(() => [] as string[])
-  const saved = savedOvernightJob()?.models ?? [state.settings.modelVariant]
+  const job = savedOvernightJob()
+  const checked = new Set<string>(job?.models ?? [state.settings.modelVariant])
   const list = $on('overnight-models')
-  list.replaceChildren(
-    ...overnightModelChoices().map((m) => {
-      const done = buildEmbeddedSets(keys, currentCachePrefix(m.id)).current
-      const todo = files.filter((f) => !done.has(fileKey(f))).length
-      const label = document.createElement('label')
-      label.className = 'on-pick'
-      const box = document.createElement('input')
-      box.type = 'checkbox'
-      box.value = m.id
-      box.disabled = m.disabled
-      box.checked = !m.disabled && saved.includes(m.id)
-      label.append(box, ` ${m.label} `)
-      const n = document.createElement('span')
-      n.className = 'on-dim'
-      n.textContent = todo === 0 ? '— all embedded' : `— ${todo.toLocaleString()} of ${files.length.toLocaleString()} to embed`
-      label.append(n)
-      return label
-    })
-  )
+  const sampleBox = $on<HTMLInputElement>('overnight-sample')
+  const saveBox = $on<HTMLInputElement>('overnight-save-bundle')
+  const sampleN = state.settings.randomSampleSize
+  $on('overnight-sample-row').hidden = !(sampleN > 0 && files.length > sampleN)
+  $on('overnight-sample-label').textContent =
+    `Only a sample of ${sampleN.toLocaleString()} of the ${files.length.toLocaleString()} files (the Random sample setting; the same files each time, so Resume continues it)`
+  sampleBox.checked = job?.sample ?? true
+  const chosen = () => (sampleBox.checked && !$on('overnight-sample-row').hidden ? stableSample(all, sampleN) : all)
+
+  // The remote endpoint form lives in Settings and only shows for the Remote model; borrow it here.
+  const remoteForm = dom.openaiSetting
+  const remoteHome = [remoteForm.parentElement!, remoteForm.nextSibling] as const
+  $on('overnight-remote').append(remoteForm)
+  remoteForm.style.display = ''
+  const remoteToggle = $on<HTMLDetailsElement>('overnight-remote')
+  remoteToggle.hidden = !overnightModelChoices().some((m) => m.id === 'openai')
+  const giveBackRemoteForm = () => {
+    remoteHome[0].insertBefore(remoteForm, remoteHome[1])
+    updateChromeAIPromptVisibility()
+  }
+
+  const render = () => {
+    for (const b of list.querySelectorAll<HTMLInputElement>('input')) b.checked ? checked.add(b.value) : checked.delete(b.value)
+    const sel = chosen()
+    list.replaceChildren(
+      ...overnightModelChoices().map((m) => {
+        const done = buildEmbeddedSets(keys, currentCachePrefix(m.id)).current
+        const todo = sel.filter((f) => !done.has(fileKey(f))).length
+        const label = document.createElement('label')
+        label.className = 'on-pick'
+        const box = document.createElement('input')
+        box.type = 'checkbox'
+        box.value = m.id
+        box.disabled = m.disabled
+        box.checked = !m.disabled && checked.has(m.id)
+        label.append(box, ` ${m.label} `)
+        const n = document.createElement('span')
+        n.className = 'on-dim'
+        n.textContent =
+          m.id === 'openai' && m.disabled
+            ? '— set the endpoint URL and model below first'
+            : todo === 0
+              ? '— all embedded'
+              : `— ${todo.toLocaleString()} of ${sel.length.toLocaleString()} to embed`
+        label.append(n)
+        return label
+      })
+    )
+  }
+  render()
   $on('overnight-folder').textContent = `${dir.name} · ${files.length.toLocaleString()} files after filters`
   $on('overnight-setup').hidden = false
   $on('overnight-run').hidden = true
@@ -4973,11 +5312,23 @@ async function startOvernightFlow() {
 
   const picked = await new Promise<ModelVariant[] | null>((resolve) => {
     const ac = new AbortController()
+    sampleBox.addEventListener('change', render, { signal: ac.signal })
+    remoteForm.addEventListener('change', render, { signal: ac.signal })
     $on('overnight-start').addEventListener(
       'click',
-      () => {
+      async () => {
+        render()
         const ids = [...list.querySelectorAll<HTMLInputElement>('input:checked')].map((b) => b.value as ModelVariant)
         if (ids.length === 0) return showToast('Pick at least one model.', 'warn')
+        // Write access is asked for now: at the end of the run there is no click to ask with.
+        if (saveBox.checked) {
+          const h = dir as DirectoryHandle & { requestPermission?: (d: { mode: 'readwrite' }) => Promise<PermissionState> }
+          if ((await h.requestPermission?.({ mode: 'readwrite' }).catch(() => 'denied' as const)) !== 'granted') {
+            return showToast('No write access to the folder; untick "save into this folder" to run without it.', 'warn')
+          }
+        }
+        // Ask now, while someone is here: the worker frames cannot show the consent dialog.
+        if (ids.includes('openai') && !(await showRemoteConsentModal(normalizeBaseUrl(state.settings.openai.baseUrl)))) return
         ac.abort()
         resolve(ids)
       },
@@ -4992,12 +5343,15 @@ async function startOvernightFlow() {
       { signal: ac.signal }
     )
   })
+  giveBackRemoteForm()
   if (!picked) {
     overnightEl.hidden = true
     return
   }
+  const sample = sampleBox.checked
+  files = chosen()
 
-  localStorage.setItem(OVERNIGHT_JOB, JSON.stringify({ models: picked }))
+  localStorage.setItem(OVERNIGHT_JOB, JSON.stringify({ models: picked, sample }))
   $on('overnight-setup').hidden = true
   $on('overnight-run').hidden = false
   const stopBtn = $on<HTMLButtonElement>('overnight-stop')
@@ -5045,8 +5399,15 @@ async function startOvernightFlow() {
   }
   // Kept only while work is left, so the button offers to resume it.
   const unfinished = !final || final.models.some((m) => m.state === 'stopped' || m.remaining > 0)
-  if (unfinished) localStorage.setItem(OVERNIGHT_JOB, JSON.stringify({ models: picked }))
+  if (unfinished) localStorage.setItem(OVERNIGHT_JOB, JSON.stringify({ models: picked, sample }))
   else localStorage.removeItem(OVERNIGHT_JOB)
+  if (final && saveBox.checked) {
+    // Also after Stop: whatever finished is worth carrying to another device.
+    await saveBundleToFolder(dir, files).then(
+      (n) => showToast(`Saved ${n.toLocaleString()} embeddings into ${dir.name}/${BUNDLE_FILE}.`, 'info', 8000),
+      (err) => showToast(`Saving ${BUNDLE_FILE} into the folder failed: ${(err as Error).message}`, 'warn', 12000)
+    )
+  }
   if (final && !ac.signal.aborted) {
     await projectOvernightResult(files, final).catch((err) =>
       showToast(`Saving the overnight layout failed: ${(err as Error).message}`, 'warn', 12000)
@@ -5105,6 +5466,53 @@ async function projectOvernightResult(files: PhotoFile[], final: OvernightStats)
     saveSettings()
   }
   line.textContent = `Saved a ${model} layout of ${kept.length.toLocaleString()} files — reload and press Resume, then pick this folder.`
+}
+
+// ── Saved-embeddings controls (Settings) ────────────────────────────────────
+{
+  const out = $on('bundle-result')
+  const guard = (btn: string, fn: () => Promise<string>) =>
+    $on<HTMLButtonElement>(btn).addEventListener('click', async (e) => {
+      const b = e.currentTarget as HTMLButtonElement
+      b.disabled = true
+      out.textContent = 'Working…'
+      try {
+        out.textContent = await fn()
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') out.textContent = `❌ ${(err as Error).message}`
+        else out.textContent = ''
+      } finally {
+        b.disabled = false
+      }
+    })
+  guard('bundle-export', async () => {
+    const { blob, count } = await bundleBlob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = BUNDLE_FILE
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000)
+    return `✅ Exported ${count.toLocaleString()} embeddings (${(blob.size / 1048576).toFixed(1)} MB).`
+  })
+  const fileInput = $on<HTMLInputElement>('bundle-file')
+  fileInput.addEventListener('change', async () => {
+    const f = fileInput.files?.[0]
+    fileInput.value = ''
+    if (!f) return
+    try {
+      out.textContent = `✅ Imported ${(await importBundle(await f.arrayBuffer())).toLocaleString()} embeddings.`
+    } catch (err) {
+      out.textContent = `❌ ${(err as Error).message}`
+    }
+  })
+  $on('bundle-import').addEventListener('click', () => fileInput.click())
+  guard('bundle-folder', async () => {
+    if (!window.showDirectoryPicker) throw new Error('This browser cannot write into folders. Use Export file instead.')
+    const dir = await window.showDirectoryPicker({ mode: 'readwrite' })
+    setStatus('Scanning folder…')
+    const n = await saveBundleToFolder(dir, await collectImages(dir))
+    return `✅ Saved ${n.toLocaleString()} embeddings of this folder's files into ${dir.name}/${BUNDLE_FILE}.`
+  })
 }
 
 overnightBtn.addEventListener('click', () => void startOvernightFlow())
@@ -5573,6 +5981,7 @@ debugCopyBtn.addEventListener('click', async () => {
   processFiles,
   collectImages,
   openFilterDialog,
+  openFileModal,
   searchImages,
   extractVideoFrames,
   buildDebugInfo
