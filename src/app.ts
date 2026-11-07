@@ -446,8 +446,10 @@ function zeroVector(): Float32Array {
 }
 
 /** zeroVector() for file `idx`, recorded so the map can badge or hide it. */
-function failedVector(idx: number): Float32Array {
+function failedVector(idx: number, reason: string): Float32Array {
   embedFailed.add(idx)
+  // Without a reason the end-of-run report says only "1/100 failed" (Bugsink bc6155f9).
+  embedFailReason ||= reason
   return zeroVector()
 }
 let lazyCaptionManager: ChromeAISessionManager | null = null // On-demand caption for non-chrome-ai modes
@@ -2378,7 +2380,7 @@ async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
             // turns it into {}) or where the worker expects decoded frames —
             // either way taking the whole batch, and every valid item in it,
             // down with one bad video.
-            vectors[idx] = failedVector(idx)
+            vectors[idx] = failedVector(idx, `no frame could be decoded from a .${ext} video`)
             return
           } else {
             missInputs.push(f.file)
@@ -2389,7 +2391,7 @@ async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
           } catch {
             // Undecodable image — skip it rather than uploading the original
             // at full size, which is what this downscale exists to prevent.
-            vectors[idx] = failedVector(idx)
+            vectors[idx] = failedVector(idx, `could not decode a .${ext} image`)
             return
           }
         } else if (isSapiens2) {
@@ -2402,7 +2404,7 @@ async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
           } catch {
             // Undecodable image. A zero vector keeps this session going but is
             // never cached (see failedInputs below), so a later build can retry.
-            vectors[idx] = failedVector(idx)
+            vectors[idx] = failedVector(idx, `could not decode a .${ext} image`)
             return
           }
         } else if (isChromeAI) {
@@ -2430,7 +2432,7 @@ async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
             missInputs.push(resized)
           } else {
             // Cannot resize — use zero vector rather than risking OOM with full-res
-            vectors[i + bi] = failedVector(i + bi)
+            vectors[i + bi] = failedVector(i + bi, `could not decode a .${ext} image`)
             return
           }
         }
@@ -2545,7 +2547,7 @@ async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
           const idx = i + bi
           // Zero-length: this item failed alone in the worker (see embedWithVlm).
           if (extracted[m].length === 0) {
-            vectors[idx] = failedVector(idx)
+            vectors[idx] = failedVector(idx, embedFailReason || 'worker could not embed this file')
             continue
           }
           vectors[idx] = extracted[m]
@@ -2570,7 +2572,7 @@ async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
           }
         }
         for (const bi of missIndices) {
-          vectors[i + bi] = failedVector(i + bi)
+          vectors[i + bi] = failedVector(i + bi, (err as Error).message)
         }
       }
     }
@@ -4751,7 +4753,7 @@ dom.resumeBtn.addEventListener('click', async () => {
       // width is from a different embedding space, and mixing the two yields
       // plausible, meaningless rankings with nothing to trip on.
       state.vectors = cachedVectors.map((v, i) =>
-        v && v.length === activeEmbeddingDim ? v : failedVector(i)
+        v && v.length === activeEmbeddingDim ? v : failedVector(i, 'no cached embedding for this model')
       )
       dom.searchInput.disabled = false
     }
@@ -5045,8 +5047,64 @@ async function startOvernightFlow() {
   const unfinished = !final || final.models.some((m) => m.state === 'stopped' || m.remaining > 0)
   if (unfinished) localStorage.setItem(OVERNIGHT_JOB, JSON.stringify({ models: picked }))
   else localStorage.removeItem(OVERNIGHT_JOB)
+  if (final && !ac.signal.aborted) {
+    await projectOvernightResult(files, final).catch((err) =>
+      showToast(`Saving the overnight layout failed: ${(err as Error).message}`, 'warn', 12000)
+    )
+  }
   overnightBtn.querySelector('.btn-label')!.textContent = unfinished ? 'Resume overnight' : 'Overnight'
   refreshCacheSize()
+}
+
+/**
+ * Projects one finished overnight model and writes the slot the Resume button
+ * reads, so the morning view opens without re-projecting. The model selected
+ * in Settings wins if it finished; otherwise the first finished one.
+ * shortcut: one saved projection (the Resume slot), not one per model; store per model in IndexedDB if switching models after an overnight run becomes common.
+ */
+async function projectOvernightResult(files: PhotoFile[], final: OvernightStats) {
+  const done = final.models.filter((m) => m.state === 'done').map((m) => m.id)
+  const model = done.includes(state.settings.modelVariant) ? state.settings.modelVariant : done[0]
+  if (!model) return
+  const line = $on('overnight-line')
+  const prefix = currentCachePrefix(model)
+  const kept: PhotoFile[] = []
+  const vectors: Float32Array[] = []
+  const CHUNK = 500
+  for (let c = 0; c < files.length; c += CHUNK) {
+    const chunk = files.slice(c, c + CHUNK)
+    const { cached, migrate } = await readCachedEmbeddings(chunk, prefix)
+    if (migrate.length > 0) await cachePutBatch(migrate)
+    cached.forEach((v, i) => {
+      if (v) (kept.push(chunk[i]), vectors.push(v))
+    })
+    line.textContent = `Reading ${model} embeddings… ${Math.min(c + CHUNK, files.length).toLocaleString()} / ${files.length.toLocaleString()}`
+    await yieldMain()
+  }
+  if (vectors.length < 3) return
+  line.textContent = `Projecting ${vectors.length.toLocaleString()} files with ${state.settings.projectionMethod} (${model})…`
+  await yieldMain()
+  const nNeighbors = Math.max(2, Math.min(15, vectors.length - 1))
+  const raw = await runProjection(vectors, state.settings.projectionMethod, nNeighbors, { silent: true })
+  const k = Math.min(8, Math.max(2, Math.ceil(Math.sqrt(vectors.length / 2))))
+  const clusters = await kmeansAsync(raw, k, 60)
+  const points = await spreadPointsAsync(raw, state.settings.density)
+  try {
+    localStorage.setItem('po_fileKeys', JSON.stringify(kept.map((f) => `${f.name}:${f.size}:${f.lastModified}`)))
+    localStorage.setItem('po_projectedPoints', JSON.stringify(points))
+    localStorage.setItem('po_clusters', JSON.stringify(Array.from(clusters)))
+    localStorage.removeItem('po_viewerMode')
+  } catch {
+    line.textContent = 'Projection done, but browser storage is full — it could not be saved for Resume.'
+    return
+  }
+  // Resume reads vectors under the selected model's namespace.
+  if (state.settings.modelVariant !== model) {
+    state.settings.modelVariant = model
+    dom.modelSelect.value = model
+    saveSettings()
+  }
+  line.textContent = `Saved a ${model} layout of ${kept.length.toLocaleString()} files — reload and press Resume, then pick this folder.`
 }
 
 overnightBtn.addEventListener('click', () => void startOvernightFlow())

@@ -243,6 +243,15 @@ test('overnight: two models, a crashing file and a hanging file, then resume', a
   expect(stored.keys.length).toBe(10)
   // Nothing left but a file that hangs, so there is no job to resume.
   expect(await page.evaluate(() => localStorage.getItem('mc_overnight_job'))).toBeNull()
+  // The finished run left a projected layout in the Resume slot, for one of the run's models.
+  await expect(page.locator('#overnight-line')).toContainText('press Resume', { timeout: 30_000 })
+  const slot = await page.evaluate(() => ({
+    keys: JSON.parse(localStorage.getItem('po_fileKeys')!).length,
+    points: JSON.parse(localStorage.getItem('po_projectedPoints')!).length,
+    model: JSON.parse(localStorage.getItem('mc_settings')!).modelVariant
+  }))
+  expect(slot).toMatchObject({ keys: 5, points: 5 })
+  expect(ids).toContain(slot.model)
 
   // A second run finds everything cached except the file that never embeds.
   await page.locator('#overnight-close').click()
