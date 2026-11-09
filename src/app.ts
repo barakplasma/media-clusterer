@@ -6,7 +6,7 @@ import * as Sentry from '@sentry/browser'
 import './sentry'
 import exifr from '@modernized/exifr'
 import { pipeline, env, RawImage } from '@huggingface/transformers'
-import * as druid from '@saehrimnir/druidjs'
+import { projectInWorker } from './projection'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
 import { loadVlm, embedWithVlm, embedTextWithVlm, disposeVlm, vlmDevice } from './vlm'
@@ -154,7 +154,7 @@ const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
 const BATCH_SIZE = IS_MOBILE ? 4 : 16 // fallback before settings load
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400
 const MAX_THUMBNAILS_CACHE = 2000 // Max decoded thumbnails to keep in memory (LRU)
-const MAX_FULL_IMAGES = 100 // Max full-res images to keep in memory (LRU)
+const FULL_TILE_BUDGET = (IS_MOBILE ? 128 : 256) * 1024 * 1024 // decoded bytes of zoomed-in tiles (LRU)
 const CLUSTER_COLORS = [
   '#f87171',
   '#fb923c',
@@ -862,6 +862,11 @@ function lazyDecodeThumbnail(idx: number) {
   const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
 
   const done = (bm: ImageBitmap | null) => {
+    // The file list was replaced mid-decode: this bitmap belongs to an old file.
+    if (state.files[idx] !== f) {
+      bm?.close()
+      return
+    }
     state.thumbnails[idx] = bm
     thumbDecoding.delete(idx)
 
@@ -892,11 +897,11 @@ function lazyDecodeThumbnail(idx: number) {
   if (VIDEO_EXTS.has(ext)) {
     videoFrameLimit(() => extractVideoFrame(f.file))
       .then((result) => {
-        if (!result) thumbFailed.add(idx)
+        if (!result && state.files[idx] === f) thumbFailed.add(idx)
         done(result)
       })
       .catch((err) => {
-        thumbFailed.add(idx)
+        if (state.files[idx] === f) thumbFailed.add(idx)
         done(null)
       })
   } else {
@@ -1113,8 +1118,76 @@ function selectPerson(i: number | null) {
 }
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
-const fullImages = new Map<number, HTMLImageElement>() // index → HTMLImageElement
-const fullImageLRU = new Set<number>() // LRU tracking for full-res images
+// Zoomed-in tiles are bitmaps resized near their on-screen size: a decoded 12 MP original is 48 MB.
+interface FullTile {
+  bmp: ImageBitmap
+  px: number // long-side bucket it was decoded at
+  frame: number // last frame that drew it
+}
+const fullImages = new Map<number, FullTile>() // index → tile, least recently drawn first
+const fullPending = new Map<number, { px: number; frame: number }>() // index → queued or running decode
+const fullFailed = new Set<number>() // undecodable files, so render() does not retry them every frame
+let fullBytes = 0 // decoded bytes held by fullImages
+let fullFrame = 0
+const fullDecodeLimit = pLimit(4)
+
+function dropFullTile(i: number) {
+  const t = fullImages.get(i)
+  if (!t) return
+  fullBytes -= t.bmp.width * t.bmp.height * 4
+  t.bmp.close()
+  fullImages.delete(i)
+}
+
+function clearFullTiles(filesChanged: boolean) {
+  for (const t of fullImages.values()) t.bmp.close()
+  fullImages.clear()
+  fullPending.clear() // decodes still running see their job gone and close their bitmap
+  fullBytes = 0
+  if (filesChanged) fullFailed.clear()
+}
+
+/** Closes tiles the current frame did not draw, oldest first, until at most `limit` bytes are held. */
+function evictStaleFullTiles(limit: number) {
+  for (const [i, t] of fullImages) {
+    if (fullBytes <= limit || t.frame === fullFrame) break
+    dropFullTile(i)
+  }
+}
+
+function requestFullTile(i: number, px: number) {
+  const f = state.files[i]
+  const job = { px, frame: fullFrame }
+  fullPending.set(i, job)
+  void fullDecodeLimit(async () => {
+    if (fullPending.get(i) !== job) return // scrolled away or files replaced while queued
+    const thumb = state.thumbnails[i]
+    let bmp: ImageBitmap | null = null
+    try {
+      // px bounds the long side; the thumbnail, when still cached, says which side that is.
+      bmp = await createImageBitmap(f.file, {
+        ...(thumb && thumb.height > thumb.width ? { resizeHeight: px } : { resizeWidth: px }),
+        resizeQuality: 'medium'
+      })
+    } catch {
+      // undecodable: recorded below
+    }
+    const current = fullPending.get(i) === job
+    if (current) fullPending.delete(i)
+    if (!current || state.files[i] !== f) {
+      bmp?.close()
+      return
+    }
+    if (!bmp) {
+      fullFailed.add(i)
+      return
+    }
+    dropFullTile(i) // the smaller bucket this one replaces
+    fullImages.set(i, { bmp, px, frame: job.frame })
+    fullBytes += bmp.width * bmp.height * 4
+    scheduleRender()
+  })
+}
 const thumbDecoding = new Set<number>() // indices currently being decoded
 const thumbFailed = new Set<number>() // indices where video frame extraction permanently failed
 const embedFailed = new Set<number>() // indices whose embedding failed (zero vector stand-in)
@@ -1219,9 +1292,7 @@ function resetAll() {
   for (const bmp of state.thumbnails) {
     if (bmp?.close) bmp.close()
   }
-  for (const img of fullImages.values()) img.src = ''
-  fullImages.clear()
-  fullImageLRU.clear()
+  clearFullTiles(true)
   thumbDecoding.clear()
   thumbFailed.clear()
   embedFailed.clear()
@@ -1309,7 +1380,8 @@ function render() {
   const drawSize = THUMB_WORLD * s
   const half = drawSize / 2
   const useFull = drawSize > FULL_LOD_SIZE
-  const drawnFull = useFull ? new Set<number>() : null
+  if (useFull) fullFrame++
+  const fullMisses: [index: number, px: number][] = []
 
   // Find index closest to center for highlighting if nothing viewed yet
   let currentActive = state.lastViewedIndex
@@ -1381,45 +1453,25 @@ function render() {
         : '#6b7280')
     let drawn = false
 
-    if (useFull && drawnFull) {
-      drawnFull.add(i)
-      let fullImg = fullImages.get(i)
-      if (!fullImg) {
-        // Evict LRU full images if over limit
-        while (fullImageLRU.size >= MAX_FULL_IMAGES) {
-          const lruIdx = fullImageLRU.values().next().value
-          if (lruIdx !== undefined) {
-            fullImageLRU.delete(lruIdx)
-            const oldImg = fullImages.get(lruIdx)
-            if (oldImg) oldImg.src = ''
-            fullImages.delete(lruIdx)
-          }
-        }
-
-        // Ensure objectURL exists
-        const f = state.files[i]
-        if (!f) continue
-        if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file)
-
-        fullImg = new Image()
-        fullImg.onload = () => {
-          if (fullImg) {
-            fullImg
-              .decode()
-              .then(() => scheduleRender())
-              .catch(() => scheduleRender())
-          }
-        }
-        fullImg.src = f.objectURL
-        fullImages.set(i, fullImg)
+    const file = state.files[i]
+    // A video is never a tile source: createImageBitmap would read the whole file just to reject it.
+    if (useFull && file && !isVideoName(file.name)) {
+      const want = ds <= 512 ? 512 : 1024 // zoom stops at scale 20, a 960 px tile
+      const tile = fullImages.get(i)
+      if (tile) {
+        tile.frame = fullFrame
+        fullImages.delete(i)
+        fullImages.set(i, tile)
+      }
+      if ((!tile || tile.px < want) && !fullFailed.has(i)) {
+        const job = fullPending.get(i)
+        if (job) job.frame = fullFrame
+        else fullMisses.push([i, want])
       }
 
-      // Update LRU for full image access
-      fullImageLRU.delete(i)
-      fullImageLRU.add(i)
-
-      if (fullImg.complete && fullImg.naturalWidth > 0) {
-        const ratio = fullImg.naturalWidth / fullImg.naturalHeight
+      if (tile) {
+        const fullImg = tile.bmp
+        const ratio = fullImg.width / fullImg.height
         const dw = ratio >= 1 ? ds : ds * ratio
         const dh = ratio >= 1 ? ds / ratio : ds
         ctx.globalAlpha = 0.9 * alphaMultiplier
@@ -1484,20 +1536,23 @@ function render() {
   drawClusterLabels(ctx, pts, s, cxW, cyW, drawSize)
   drawFolderLabels(ctx, pts, s, cxW, cyW, drawSize)
 
-  if (useFull && drawnFull) {
-    // Evict full images that weren't drawn this frame
-    for (const [idx, img] of fullImages) {
-      if (!drawnFull.has(idx)) {
-        img.src = ''
-        fullImages.delete(idx)
-        fullImageLRU.delete(idx)
-      }
+  if (useFull) {
+    let pending = 0
+    for (const [i, job] of fullPending) {
+      if (job.frame !== fullFrame) fullPending.delete(i)
+      else pending += job.px * job.px * 4
     }
+    for (const [i, px] of fullMisses) {
+      const need = px * px * 4
+      evictStaleFullTiles(FULL_TILE_BUDGET - pending - need)
+      // The tiles on screen fill the budget: the rest stay thumbnails rather than evict each other.
+      if (fullBytes + pending + need > FULL_TILE_BUDGET) break
+      requestFullTile(i, px)
+      pending += need
+    }
+    evictStaleFullTiles(FULL_TILE_BUDGET - pending)
   } else {
-    // Full-res disabled, clear all
-    for (const img of fullImages.values()) img.src = ''
-    fullImages.clear()
-    fullImageLRU.clear()
+    clearFullTiles(false)
   }
 }
 
@@ -1693,56 +1748,8 @@ async function runProjection(
   if (vectors.length < 3) return vectors.map((_, i) => [i, 0])
   try {
     if (!silent) setStatus(`Projecting with ${method}…`)
-    // Druid accepts Float64Array rows directly; copy each f32 row to f64
-    // transiently instead of materializing a number[][] of the whole dataset.
-    const matrix = druid.Matrix.from(vectors.map((v) => Float64Array.from(v)))
-    let result: druid.Matrix
-
-    // Small yield to allow UI update
-    await yieldMain()
-
-    switch (method) {
-      case 'TSNE':
-        result = new druid.TSNE(matrix, {
-          d: 2,
-          perplexity: Math.min(30, Math.floor(vectors.length / 3))
-        }).transform()
-        break
-      case 'PCA':
-        result = new druid.PCA(matrix, { d: 2 }).transform()
-        break
-      case 'ISOMAP':
-        result = new druid.ISOMAP(matrix, {
-          d: 2,
-          neighbors: nNeighbors
-        }).transform()
-        break
-      case 'LLE':
-        result = new druid.LLE(matrix, {
-          d: 2,
-          neighbors: nNeighbors
-        }).transform()
-        break
-      case 'MDS':
-        result = new druid.MDS(matrix, { d: 2 }).transform()
-        break
-      case 'SAMMON':
-        result = new druid.SAMMON(matrix, { d: 2 }).transform()
-        break
-      case 'TriMap':
-        result = new druid.TriMap(matrix, { d: 2 }).transform()
-        break
-      case 'UMAP':
-      default:
-        result = new druid.UMAP(matrix, {
-          d: 2,
-          n_neighbors: nNeighbors,
-          local_connectivity: 1
-        }).transform()
-        break
-    }
-
-    return result.to2dArray().map((row) => Array.from(row))
+    // DruidJS runs in a worker (src/projectionWorker.ts); its transform() is one long synchronous call.
+    return await projectInWorker(vectors, method, nNeighbors)
   } catch (err) {
     setStatus(`${method} projection failed: ${(err as Error).message}`)
     throw err
@@ -2390,6 +2397,20 @@ interface EmbedOptions {
 let lastEmbedStop: EmbedStop = 'ok'
 
 async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
+  // Models and embeddings are best-effort storage until this is granted. Not awaited: it may prompt.
+  void navigator.storage?.persist?.().catch(() => false)
+  // A headless (overnight) frame's parent already holds the wake lock.
+  if (opts.headless) return embedAllInner(files, opts)
+  awakeWanted++
+  void keepAwake()
+  try {
+    return await embedAllInner(files, opts)
+  } finally {
+    if (--awakeWanted === 0) void overnightWakeLock?.release().catch(() => {})
+  }
+}
+
+async function embedAllInner(files: PhotoFile[], opts: EmbedOptions = {}) {
   const headless = opts.headless ?? false
   const minFreeRatio = opts.minFreeRatio ?? 0.2
   lastEmbedStop = 'ok'
@@ -2828,6 +2849,7 @@ async function showFolderGrid(files: PhotoFile[]): Promise<PhotoFile[]> {
   for (const [, folderFiles] of sortedFolders) folderFiles.sort((a, b) => a.lastModified - b.lastModified)
   const sorted = sortedFolders.flatMap(([, g]) => g)
   state.files = sorted
+  thumbDecoding.clear() // in-flight decodes of the old order drop their results
   state.thumbnails = initThumbnails(sorted)
   state.rawPoints = generateMetadataBasedLayout(sorted).map((p) => [p[0], p[1]])
   resizeCanvas()
@@ -2860,6 +2882,7 @@ async function processFiles(files: PhotoFile[]) {
   embedFailReason = ''
   updateFailedChip()
   thumbnailLRU.clear()
+  clearFullTiles(true)
 
   // Clear points immediately so render() exits early while state.files is being replaced.
   // Without this, a render triggered during async embedding would iterate old point indices
@@ -5002,6 +5025,7 @@ dom.resumeBtn.addEventListener('click', async () => {
     const wasViewerMode = localStorage.getItem('po_viewerMode') === 'true'
 
     state.files = matched
+    clearFullTiles(true)
     randomHistory = []
     state.rawPoints = savedPoints
     state.points = savedPoints.slice(0, matched.length)
@@ -5043,6 +5067,7 @@ dom.resumeBtn.addEventListener('click', async () => {
       dom.searchInput.disabled = false
     }
 
+    thumbDecoding.clear() // in-flight decodes of the old list drop their results
     state.thumbnails = initThumbnails(matched)
     state.phase = 'done'
     updateFailedChip()
@@ -5216,10 +5241,14 @@ function renderOvernight(st: OvernightStats) {
 }
 
 let overnightWakeLock: WakeLockSentinel | null = null
-let overnightRunning = false
+let awakeWanted = 0 // overnight runs and interactive embeds that want the screen on
 async function keepAwake() {
+  if (overnightWakeLock) return
   try {
-    overnightWakeLock = (await navigator.wakeLock?.request('screen')) ?? null
+    const lock = (await navigator.wakeLock?.request('screen')) ?? null
+    // Granted after the last holder finished, or a concurrent request won: drop this one.
+    if (lock && (awakeWanted === 0 || overnightWakeLock)) return void lock.release().catch(() => {})
+    overnightWakeLock = lock
     overnightWakeLock?.addEventListener('release', () => (overnightWakeLock = null))
   } catch {
     overnightWakeLock = null // denied or unsupported; the stats line says so
@@ -5227,7 +5256,7 @@ async function keepAwake() {
 }
 // The browser drops the lock whenever the tab is hidden.
 document.addEventListener('visibilitychange', () => {
-  if (overnightRunning && document.visibilityState === 'visible' && !overnightWakeLock) void keepAwake()
+  if (awakeWanted > 0 && document.visibilityState === 'visible' && !overnightWakeLock) void keepAwake()
 })
 
 async function startOvernightFlow() {
@@ -5366,7 +5395,7 @@ async function startOvernightFlow() {
     ac.abort()
   }
   stopBtn.addEventListener('click', onStop)
-  overnightRunning = true
+  awakeWanted++
   await keepAwake()
   // Unpersisted storage can be evicted under pressure overnight, and every fresh
   // worker frame reloads the model from the browser cache, so ask to keep it.
@@ -5390,8 +5419,7 @@ async function startOvernightFlow() {
   } catch (err) {
     showToast(`Overnight embedding stopped: ${(err as Error).message}`, 'error', 15000)
   } finally {
-    overnightRunning = false
-    await overnightWakeLock?.release().catch(() => {})
+    if (--awakeWanted === 0) await overnightWakeLock?.release().catch(() => {})
     stopBtn.removeEventListener('click', onStop)
     stopBtn.textContent = 'Stop'
     stopBtn.hidden = true

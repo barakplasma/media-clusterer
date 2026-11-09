@@ -233,7 +233,7 @@ export async function loadSapiens2(
   fromCache: boolean
   fallbackReason?: Sapiens2FallbackReason
 }> {
-  ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/'
+  ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ort.env.versions.web}/dist/`
   ort.env.logLevel = 'error'
   // Use as many threads as the browser allows.
   // SharedArrayBuffer (required for multithreading) is available when the page
