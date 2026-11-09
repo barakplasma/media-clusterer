@@ -368,6 +368,9 @@ const state: AppState = {
 const camera: Camera = { x: 0, y: 0, scale: 1 }
 
 const WEBGPU_HELP_KEY = 'mc_hideWebGpuHelp'
+// Set while the WebNN model loads. WebNN holds the whole ~880 MB model several times over; on an 8 GB
+// Chromebook the OS killed the tab mid-load (npu-test.html). Still set at the next start = that happened.
+const WEBNN_LOADING_KEY = 'mc_webnnLoading'
 
 /**
  * Tell a Chromium user how to turn WebGPU on when the browser has it but
@@ -1881,6 +1884,13 @@ async function loadModelOnce(signal?: AbortSignal) {
     setStatus(`Loading ${tier.id} (${tier.downloadMB} MB)…`)
     try {
       activeEmbeddingDim = tier.visionDim
+      if (tier.backend === 'webnn') {
+        try {
+          localStorage.setItem(WEBNN_LOADING_KEY, __GIT_COMMIT__)
+        } catch {
+          /* storage full: the crash guard is lost, the load is not */
+        }
+      }
       await loadVlm(state.settings.modelVariant, normalizeHost(state.settings.customModelHost), (pct) => {
         setProgress(pct)
         setStatus(`Downloading ${tier.id}… ${pct.toFixed(0)}%`)
@@ -1888,6 +1898,8 @@ async function loadModelOnce(signal?: AbortSignal) {
     } catch (err) {
       signal?.throwIfAborted()
       throw err
+    } finally {
+      localStorage.removeItem(WEBNN_LOADING_KEY)
     }
     vlmTier = tier
     updateDeviceBadge()
@@ -4326,7 +4338,16 @@ async function runSetupWizard() {
   const d = await diagnoseDevice()
   chromeAIAvailability = d.chromeAI
   // Most native first: WebNN (NPU > GPU > CPU) whenever offered, then WebGPU, then CPU models.
-  useWebnn(d.webnn)
+  // A load the OS killed on this build would be killed again at every start; a new build tries once more.
+  const killed = localStorage.getItem(WEBNN_LOADING_KEY) === __GIT_COMMIT__
+  useWebnn(killed ? [] : d.webnn)
+  if (killed && d.webnn.length) {
+    showToast(
+      'The tab was killed while loading EmbeddingGemma 2 on WebNN (out of memory?), so WebNN is off for this version. It is tried again after the next update or after clearing site data.',
+      'warn',
+      15000
+    )
+  }
   const ranked = renderModelOptions({
     // "webgpu" here means EmbeddingGemma 2 has a path: WebNN, or a usable WebGPU.
     webgpu: (!!d.adapter && !d.powerVR) || USE_WEBNN,
