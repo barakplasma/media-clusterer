@@ -154,7 +154,7 @@ const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
 const BATCH_SIZE = IS_MOBILE ? 4 : 16 // fallback before settings load
 const MAX_DRAW_PER_FRAME = IS_MOBILE ? 150 : 400
 const MAX_THUMBNAILS_CACHE = 2000 // Max decoded thumbnails to keep in memory (LRU)
-const MAX_FULL_IMAGES = 100 // Max full-res images to keep in memory (LRU)
+const FULL_TILE_BUDGET = (IS_MOBILE ? 128 : 256) * 1024 * 1024 // decoded bytes of zoomed-in tiles (LRU)
 const CLUSTER_COLORS = [
   '#f87171',
   '#fb923c',
@@ -1118,8 +1118,76 @@ function selectPerson(i: number | null) {
 }
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
-const fullImages = new Map<number, HTMLImageElement>() // index → HTMLImageElement
-const fullImageLRU = new Set<number>() // LRU tracking for full-res images
+// Zoomed-in tiles are bitmaps resized near their on-screen size: a decoded 12 MP original is 48 MB.
+interface FullTile {
+  bmp: ImageBitmap
+  px: number // long-side bucket it was decoded at
+  frame: number // last frame that drew it
+}
+const fullImages = new Map<number, FullTile>() // index → tile, least recently drawn first
+const fullPending = new Map<number, { px: number; frame: number }>() // index → queued or running decode
+const fullFailed = new Set<number>() // undecodable files, so render() does not retry them every frame
+let fullBytes = 0 // decoded bytes held by fullImages
+let fullFrame = 0
+const fullDecodeLimit = pLimit(4)
+
+function dropFullTile(i: number) {
+  const t = fullImages.get(i)
+  if (!t) return
+  fullBytes -= t.bmp.width * t.bmp.height * 4
+  t.bmp.close()
+  fullImages.delete(i)
+}
+
+function clearFullTiles(filesChanged: boolean) {
+  for (const t of fullImages.values()) t.bmp.close()
+  fullImages.clear()
+  fullPending.clear() // decodes still running see their job gone and close their bitmap
+  fullBytes = 0
+  if (filesChanged) fullFailed.clear()
+}
+
+/** Closes tiles the current frame did not draw, oldest first, until at most `limit` bytes are held. */
+function evictStaleFullTiles(limit: number) {
+  for (const [i, t] of fullImages) {
+    if (fullBytes <= limit || t.frame === fullFrame) break
+    dropFullTile(i)
+  }
+}
+
+function requestFullTile(i: number, px: number) {
+  const f = state.files[i]
+  const job = { px, frame: fullFrame }
+  fullPending.set(i, job)
+  void fullDecodeLimit(async () => {
+    if (fullPending.get(i) !== job) return // scrolled away or files replaced while queued
+    const thumb = state.thumbnails[i]
+    let bmp: ImageBitmap | null = null
+    try {
+      // px bounds the long side; the thumbnail, when still cached, says which side that is.
+      bmp = await createImageBitmap(f.file, {
+        ...(thumb && thumb.height > thumb.width ? { resizeHeight: px } : { resizeWidth: px }),
+        resizeQuality: 'medium'
+      })
+    } catch {
+      // undecodable: recorded below
+    }
+    const current = fullPending.get(i) === job
+    if (current) fullPending.delete(i)
+    if (!current || state.files[i] !== f) {
+      bmp?.close()
+      return
+    }
+    if (!bmp) {
+      fullFailed.add(i)
+      return
+    }
+    dropFullTile(i) // the smaller bucket this one replaces
+    fullImages.set(i, { bmp, px, frame: job.frame })
+    fullBytes += bmp.width * bmp.height * 4
+    scheduleRender()
+  })
+}
 const thumbDecoding = new Set<number>() // indices currently being decoded
 const thumbFailed = new Set<number>() // indices where video frame extraction permanently failed
 const embedFailed = new Set<number>() // indices whose embedding failed (zero vector stand-in)
@@ -1224,9 +1292,7 @@ function resetAll() {
   for (const bmp of state.thumbnails) {
     if (bmp?.close) bmp.close()
   }
-  for (const img of fullImages.values()) img.src = ''
-  fullImages.clear()
-  fullImageLRU.clear()
+  clearFullTiles(true)
   thumbDecoding.clear()
   thumbFailed.clear()
   embedFailed.clear()
@@ -1314,7 +1380,8 @@ function render() {
   const drawSize = THUMB_WORLD * s
   const half = drawSize / 2
   const useFull = drawSize > FULL_LOD_SIZE
-  const drawnFull = useFull ? new Set<number>() : null
+  if (useFull) fullFrame++
+  const fullMisses: [index: number, px: number][] = []
 
   // Find index closest to center for highlighting if nothing viewed yet
   let currentActive = state.lastViewedIndex
@@ -1386,45 +1453,25 @@ function render() {
         : '#6b7280')
     let drawn = false
 
-    if (useFull && drawnFull) {
-      drawnFull.add(i)
-      let fullImg = fullImages.get(i)
-      if (!fullImg) {
-        // Evict LRU full images if over limit
-        while (fullImageLRU.size >= MAX_FULL_IMAGES) {
-          const lruIdx = fullImageLRU.values().next().value
-          if (lruIdx !== undefined) {
-            fullImageLRU.delete(lruIdx)
-            const oldImg = fullImages.get(lruIdx)
-            if (oldImg) oldImg.src = ''
-            fullImages.delete(lruIdx)
-          }
-        }
-
-        // Ensure objectURL exists
-        const f = state.files[i]
-        if (!f) continue
-        if (!f.objectURL) f.objectURL = URL.createObjectURL(f.file)
-
-        fullImg = new Image()
-        fullImg.onload = () => {
-          if (fullImg) {
-            fullImg
-              .decode()
-              .then(() => scheduleRender())
-              .catch(() => scheduleRender())
-          }
-        }
-        fullImg.src = f.objectURL
-        fullImages.set(i, fullImg)
+    const file = state.files[i]
+    // A video is never a tile source: createImageBitmap would read the whole file just to reject it.
+    if (useFull && file && !isVideoName(file.name)) {
+      const want = ds <= 512 ? 512 : 1024 // zoom stops at scale 20, a 960 px tile
+      const tile = fullImages.get(i)
+      if (tile) {
+        tile.frame = fullFrame
+        fullImages.delete(i)
+        fullImages.set(i, tile)
+      }
+      if ((!tile || tile.px < want) && !fullFailed.has(i)) {
+        const job = fullPending.get(i)
+        if (job) job.frame = fullFrame
+        else fullMisses.push([i, want])
       }
 
-      // Update LRU for full image access
-      fullImageLRU.delete(i)
-      fullImageLRU.add(i)
-
-      if (fullImg.complete && fullImg.naturalWidth > 0) {
-        const ratio = fullImg.naturalWidth / fullImg.naturalHeight
+      if (tile) {
+        const fullImg = tile.bmp
+        const ratio = fullImg.width / fullImg.height
         const dw = ratio >= 1 ? ds : ds * ratio
         const dh = ratio >= 1 ? ds / ratio : ds
         ctx.globalAlpha = 0.9 * alphaMultiplier
@@ -1489,20 +1536,23 @@ function render() {
   drawClusterLabels(ctx, pts, s, cxW, cyW, drawSize)
   drawFolderLabels(ctx, pts, s, cxW, cyW, drawSize)
 
-  if (useFull && drawnFull) {
-    // Evict full images that weren't drawn this frame
-    for (const [idx, img] of fullImages) {
-      if (!drawnFull.has(idx)) {
-        img.src = ''
-        fullImages.delete(idx)
-        fullImageLRU.delete(idx)
-      }
+  if (useFull) {
+    let pending = 0
+    for (const [i, job] of fullPending) {
+      if (job.frame !== fullFrame) fullPending.delete(i)
+      else pending += job.px * job.px * 4
     }
+    for (const [i, px] of fullMisses) {
+      const need = px * px * 4
+      evictStaleFullTiles(FULL_TILE_BUDGET - pending - need)
+      // The tiles on screen fill the budget: the rest stay thumbnails rather than evict each other.
+      if (fullBytes + pending + need > FULL_TILE_BUDGET) break
+      requestFullTile(i, px)
+      pending += need
+    }
+    evictStaleFullTiles(FULL_TILE_BUDGET - pending)
   } else {
-    // Full-res disabled, clear all
-    for (const img of fullImages.values()) img.src = ''
-    fullImages.clear()
-    fullImageLRU.clear()
+    clearFullTiles(false)
   }
 }
 
@@ -2832,6 +2882,7 @@ async function processFiles(files: PhotoFile[]) {
   embedFailReason = ''
   updateFailedChip()
   thumbnailLRU.clear()
+  clearFullTiles(true)
 
   // Clear points immediately so render() exits early while state.files is being replaced.
   // Without this, a render triggered during async embedding would iterate old point indices
@@ -4974,6 +5025,7 @@ dom.resumeBtn.addEventListener('click', async () => {
     const wasViewerMode = localStorage.getItem('po_viewerMode') === 'true'
 
     state.files = matched
+    clearFullTiles(true)
     randomHistory = []
     state.rawPoints = savedPoints
     state.points = savedPoints.slice(0, matched.length)

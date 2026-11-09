@@ -36,6 +36,54 @@ test('viewer mode lays out photos without loading a model', async ({ page }) => 
 
 })
 
+test('zoomed-in tiles are resized bitmaps, closed again on zoom out', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true }))
+    // Count the tile decodes (the 96 px thumbnails stay below 512) and how many of them get closed.
+    const t = ((window as any).__tiles = { made: 0, closed: 0, videos: 0 })
+    const tiles = new WeakSet<ImageBitmap>()
+    const decode = window.createImageBitmap.bind(window) as (s: ImageBitmapSource, o?: ImageBitmapOptions) => Promise<ImageBitmap>
+    window.createImageBitmap = (async (src: ImageBitmapSource, opts?: ImageBitmapOptions) => {
+      const bmp = await decode(src, opts)
+      if ((opts?.resizeWidth ?? opts?.resizeHeight ?? 0) >= 512 && src instanceof File) {
+        if (src.type.startsWith('video/')) t.videos++
+        tiles.add(bmp)
+        t.made++
+      }
+      return bmp
+    }) as typeof window.createImageBitmap
+    const close = ImageBitmap.prototype.close
+    ImageBitmap.prototype.close = function () {
+      if (tiles.has(this)) t.closed++
+      close.call(this)
+    }
+  })
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const names = ['cats.jpg', 'tiger.png', 'football.webp', 'butterfly.jpg', 'cats.mp4']
+    const files = await Promise.all(
+      names.map(async (n, i) => {
+        const blob = await (await fetch(`/e2e/fixtures/${n}`)).blob()
+        const file = new File([blob], n, { type: blob.type, lastModified: 1e12 + i * 1000 })
+        return { name: `album/${n}`, size: file.size, lastModified: file.lastModified, file, objectURL: null }
+      })
+    )
+    await window.__debug.processFiles(files)
+  })
+  const tiles = () => page.evaluate(() => (window as any).__tiles)
+  const zoom = async (deltaY: number, done: (scale: number) => boolean) => {
+    while (!done(await page.evaluate(() => window.__debug.camera.scale))) await page.mouse.wheel(0, deltaY)
+  }
+  const { width, height } = page.viewportSize()!
+  await page.mouse.move(width / 2, height / 2)
+  await zoom(-100, (s) => s * 48 > 130) // tiles are 48 world units; past 120 px they leave the thumbnail tier
+  await expect.poll(async () => (await tiles()).made).toBe(4)
+  await page.waitForTimeout(500)
+  expect(await tiles(), 'one decode per photo, none for the video').toMatchObject({ made: 4, videos: 0 })
+  await zoom(100, (s) => s * 48 < 100) // below the 120 px threshold every tile is released
+  await expect.poll(async () => { const t = await tiles(); return t.made - t.closed }).toBe(0)
+})
+
 test('date links: year and month filters round-trip through the URL', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true })))
   await page.goto('/')
