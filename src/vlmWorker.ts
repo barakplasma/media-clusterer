@@ -41,12 +41,13 @@ env.cacheDir = 'models'
 // `vite dev`. Unguarded on purpose: `env.backends.onnx.wasm` is a read-only
 // accessor that always exists, so if that ever stops being true a TypeError at
 // startup beats a silent skip that only surfaces as a broken deploy.
-const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/'
 const ortWasm = env.backends.onnx.wasm
-if (!ortWasm) {
-  throw new Error('onnxruntime-web WASM env missing; cannot point it at the CDN build')
+// transformers.js bundles its own onnxruntime-web; pin the CDN to that exact build.
+const ortVersion = env.backends.onnx.versions?.web
+if (!ortWasm || !ortVersion) {
+  throw new Error('onnxruntime-web WASM env or version missing; cannot point it at the CDN build')
 }
-ortWasm.wasmPaths = ORT_CDN
+ortWasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/`
 ortWasm.numThreads = navigator.hardwareConcurrency || 4
 
 interface VisionOutput {

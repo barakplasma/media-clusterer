@@ -862,6 +862,11 @@ function lazyDecodeThumbnail(idx: number) {
   const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
 
   const done = (bm: ImageBitmap | null) => {
+    // The file list was replaced mid-decode: this bitmap belongs to an old file.
+    if (state.files[idx] !== f) {
+      bm?.close()
+      return
+    }
     state.thumbnails[idx] = bm
     thumbDecoding.delete(idx)
 
@@ -892,11 +897,11 @@ function lazyDecodeThumbnail(idx: number) {
   if (VIDEO_EXTS.has(ext)) {
     videoFrameLimit(() => extractVideoFrame(f.file))
       .then((result) => {
-        if (!result) thumbFailed.add(idx)
+        if (!result && state.files[idx] === f) thumbFailed.add(idx)
         done(result)
       })
       .catch((err) => {
-        thumbFailed.add(idx)
+        if (state.files[idx] === f) thumbFailed.add(idx)
         done(null)
       })
   } else {
@@ -2390,6 +2395,20 @@ interface EmbedOptions {
 let lastEmbedStop: EmbedStop = 'ok'
 
 async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
+  // Models and embeddings are best-effort storage until this is granted. Not awaited: it may prompt.
+  void navigator.storage?.persist?.().catch(() => false)
+  // A headless (overnight) frame's parent already holds the wake lock.
+  if (opts.headless) return embedAllInner(files, opts)
+  awakeWanted++
+  void keepAwake()
+  try {
+    return await embedAllInner(files, opts)
+  } finally {
+    if (--awakeWanted === 0) void overnightWakeLock?.release().catch(() => {})
+  }
+}
+
+async function embedAllInner(files: PhotoFile[], opts: EmbedOptions = {}) {
   const headless = opts.headless ?? false
   const minFreeRatio = opts.minFreeRatio ?? 0.2
   lastEmbedStop = 'ok'
@@ -2828,6 +2847,7 @@ async function showFolderGrid(files: PhotoFile[]): Promise<PhotoFile[]> {
   for (const [, folderFiles] of sortedFolders) folderFiles.sort((a, b) => a.lastModified - b.lastModified)
   const sorted = sortedFolders.flatMap(([, g]) => g)
   state.files = sorted
+  thumbDecoding.clear() // in-flight decodes of the old order drop their results
   state.thumbnails = initThumbnails(sorted)
   state.rawPoints = generateMetadataBasedLayout(sorted).map((p) => [p[0], p[1]])
   resizeCanvas()
@@ -5043,6 +5063,7 @@ dom.resumeBtn.addEventListener('click', async () => {
       dom.searchInput.disabled = false
     }
 
+    thumbDecoding.clear() // in-flight decodes of the old list drop their results
     state.thumbnails = initThumbnails(matched)
     state.phase = 'done'
     updateFailedChip()
@@ -5216,10 +5237,14 @@ function renderOvernight(st: OvernightStats) {
 }
 
 let overnightWakeLock: WakeLockSentinel | null = null
-let overnightRunning = false
+let awakeWanted = 0 // overnight runs and interactive embeds that want the screen on
 async function keepAwake() {
+  if (overnightWakeLock) return
   try {
-    overnightWakeLock = (await navigator.wakeLock?.request('screen')) ?? null
+    const lock = (await navigator.wakeLock?.request('screen')) ?? null
+    // Granted after the last holder finished, or a concurrent request won: drop this one.
+    if (lock && (awakeWanted === 0 || overnightWakeLock)) return void lock.release().catch(() => {})
+    overnightWakeLock = lock
     overnightWakeLock?.addEventListener('release', () => (overnightWakeLock = null))
   } catch {
     overnightWakeLock = null // denied or unsupported; the stats line says so
@@ -5227,7 +5252,7 @@ async function keepAwake() {
 }
 // The browser drops the lock whenever the tab is hidden.
 document.addEventListener('visibilitychange', () => {
-  if (overnightRunning && document.visibilityState === 'visible' && !overnightWakeLock) void keepAwake()
+  if (awakeWanted > 0 && document.visibilityState === 'visible' && !overnightWakeLock) void keepAwake()
 })
 
 async function startOvernightFlow() {
@@ -5366,7 +5391,7 @@ async function startOvernightFlow() {
     ac.abort()
   }
   stopBtn.addEventListener('click', onStop)
-  overnightRunning = true
+  awakeWanted++
   await keepAwake()
   // Unpersisted storage can be evicted under pressure overnight, and every fresh
   // worker frame reloads the model from the browser cache, so ask to keep it.
@@ -5390,8 +5415,7 @@ async function startOvernightFlow() {
   } catch (err) {
     showToast(`Overnight embedding stopped: ${(err as Error).message}`, 'error', 15000)
   } finally {
-    overnightRunning = false
-    await overnightWakeLock?.release().catch(() => {})
+    if (--awakeWanted === 0) await overnightWakeLock?.release().catch(() => {})
     stopBtn.removeEventListener('click', onStop)
     stopBtn.textContent = 'Stop'
     stopBtn.hidden = true
