@@ -56,7 +56,8 @@ Secondary main-thread costs found alongside:
 
 ### Proposed approach
 
-1. **Projection worker first** (biggest freeze): a `projection.worker.ts` that imports
+1. **Done** (`src/projectionWorker.ts`, facade `src/projection.ts`; whole-result only, no in-worker progressive messages).
+   Original plan: **Projection worker first** (biggest freeze): a `projection.worker.ts` that imports
    DruidJS and receives embeddings as **transferable** Float32Array buffers, posting
    progressive results back as messages (replacing the current in-loop progressive-PCA
    yields). `compute.ts` is already DOM-free and can be imported by the worker as-is.

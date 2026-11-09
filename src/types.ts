@@ -109,6 +109,21 @@ export type VlmResponse =
   | { type: 'embedded'; id: number; vectors: Float32Array[]; errors?: string[] }
   | { type: 'error'; id: number; message: string; name: string }
 
+/** Request sent from the main thread to the projection worker: `n` vectors of width `dim`, row-major. */
+export interface ProjectionRequest {
+  id: number
+  method: ProjectionMethod
+  nNeighbors: number
+  flat: Float32Array
+  n: number
+  dim: number
+}
+
+/** Response from the projection worker; `points` is n × 2, row-major. */
+export type ProjectionResponse =
+  | { type: 'projected'; id: number; points: Float64Array }
+  | { type: 'error'; id: number; message: string; name: string }
+
 /** Backend the worker actually got, after the webgpu→wasm fallback. */
 export type WebnnDevice = 'npu' | 'gpu' | 'cpu'
 export type VlmDevice = 'webgpu' | 'wasm' | `webnn-${WebnnDevice}`

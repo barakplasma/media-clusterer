@@ -6,7 +6,7 @@ import * as Sentry from '@sentry/browser'
 import './sentry'
 import exifr from '@modernized/exifr'
 import { pipeline, env, RawImage } from '@huggingface/transformers'
-import * as druid from '@saehrimnir/druidjs'
+import { projectInWorker } from './projection'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
 import { loadVlm, embedWithVlm, embedTextWithVlm, disposeVlm, vlmDevice } from './vlm'
@@ -1698,56 +1698,8 @@ async function runProjection(
   if (vectors.length < 3) return vectors.map((_, i) => [i, 0])
   try {
     if (!silent) setStatus(`Projecting with ${method}…`)
-    // Druid accepts Float64Array rows directly; copy each f32 row to f64
-    // transiently instead of materializing a number[][] of the whole dataset.
-    const matrix = druid.Matrix.from(vectors.map((v) => Float64Array.from(v)))
-    let result: druid.Matrix
-
-    // Small yield to allow UI update
-    await yieldMain()
-
-    switch (method) {
-      case 'TSNE':
-        result = new druid.TSNE(matrix, {
-          d: 2,
-          perplexity: Math.min(30, Math.floor(vectors.length / 3))
-        }).transform()
-        break
-      case 'PCA':
-        result = new druid.PCA(matrix, { d: 2 }).transform()
-        break
-      case 'ISOMAP':
-        result = new druid.ISOMAP(matrix, {
-          d: 2,
-          neighbors: nNeighbors
-        }).transform()
-        break
-      case 'LLE':
-        result = new druid.LLE(matrix, {
-          d: 2,
-          neighbors: nNeighbors
-        }).transform()
-        break
-      case 'MDS':
-        result = new druid.MDS(matrix, { d: 2 }).transform()
-        break
-      case 'SAMMON':
-        result = new druid.SAMMON(matrix, { d: 2 }).transform()
-        break
-      case 'TriMap':
-        result = new druid.TriMap(matrix, { d: 2 }).transform()
-        break
-      case 'UMAP':
-      default:
-        result = new druid.UMAP(matrix, {
-          d: 2,
-          n_neighbors: nNeighbors,
-          local_connectivity: 1
-        }).transform()
-        break
-    }
-
-    return result.to2dArray().map((row) => Array.from(row))
+    // DruidJS runs in a worker (src/projectionWorker.ts); its transform() is one long synchronous call.
+    return await projectInWorker(vectors, method, nNeighbors)
   } catch (err) {
     setStatus(`${method} projection failed: ${(err as Error).message}`)
     throw err

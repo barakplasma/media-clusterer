@@ -194,6 +194,10 @@ test('overnight: two models, a crashing file and a hanging file, then resume', a
       return dir
     }
   })
+  let projectionWorkerLoaded = false
+  page.on('request', (r) => {
+    if (r.url().includes('projectionWorker')) projectionWorkerLoaded = true
+  })
   await page.goto('/')
 
   const pickModels = async () => {
@@ -252,6 +256,7 @@ test('overnight: two models, a crashing file and a hanging file, then resume', a
   }))
   expect(slot).toMatchObject({ keys: 5, points: 5 })
   expect(ids).toContain(slot.model)
+  expect(projectionWorkerLoaded, 'the layout was projected in the worker (src/projectionWorker.ts)').toBe(true)
 
   // A second run finds everything cached except the file that never embeds.
   await page.locator('#overnight-close').click()

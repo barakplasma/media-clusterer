@@ -3,9 +3,9 @@
  *
  * Callers see promises; the request/response correlation, worker lifecycle and
  * bitmap transfer all live here. The message protocol is deliberately generic
- * (numeric id, typed request union) so the projection worker that
- * IMPROVEMENT_PLAN.md P1-1 wants can reuse the same shape rather than inventing
- * a second one.
+ * (numeric id, typed request union) and the projection worker
+ * facade (`src/projection.ts`) uses the same shape rather than inventing a
+ * second one.
  */
 
 import type { ModelVariant, VlmDevice, VlmRequest, VlmResponse, VlmTier } from './types'
