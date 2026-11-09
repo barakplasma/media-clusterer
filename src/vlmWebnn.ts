@@ -51,22 +51,25 @@ async function fetchFile(url: string, file: string, progress: Progress): Promise
     throw new Error(`${file} is not deployed`)
   const putting = hit ? null : cache?.put(url, res.clone()).catch(() => {})
   const total = Number(res.headers.get('content-length')) || 0
-  const chunks: Uint8Array[] = []
+  // Read straight into one buffer: collecting chunks and joining them held a 543 MB file twice at once.
+  let out = new Uint8Array(total)
   let loaded = 0
   const reader = res.body!.getReader()
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
-    chunks.push(value)
+    if (loaded + value.byteLength > out.byteLength) {
+      // shortcut: no content-length (or a compressed one) grows the buffer per chunk, so it is copied once per chunk; HF sends the length.
+      const grown = new Uint8Array(loaded + value.byteLength)
+      grown.set(out.subarray(0, loaded))
+      out = grown
+    }
+    out.set(value, loaded)
     loaded += value.byteLength
     progress(file, loaded, total)
   }
   await putting
-  if (chunks.length === 1) return chunks[0]
-  const out = new Uint8Array(loaded)
-  let at = 0
-  for (const c of chunks) out.set(c, (at += c.byteLength) - c.byteLength)
-  return out
+  return loaded === out.byteLength ? out : out.slice(0, loaded)
 }
 
 const toOrt = (x: unknown) => {

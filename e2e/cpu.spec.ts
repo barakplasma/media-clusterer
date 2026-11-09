@@ -131,6 +131,27 @@ test('first visit: the setup wizard checks the device and waits before downloadi
   expect(await page.evaluate(() => localStorage.getItem('mc_settings')), 'first visit stays a first visit').toBeNull()
 })
 
+test('a WebNN load the OS killed turns WebNN off for that build only', async ({ page }) => {
+  // WebNN on (a fake context), no WebGPU adapter: the wizard recommends EmbeddingGemma 2 only through WebNN.
+  await page.addInitScript(() => {
+    ;(navigator as unknown as { ml: unknown }).ml = { createContext: async () => ({}) }
+  })
+  await page.goto('/')
+  await expect(page.locator('#wizard-options [aria-checked="true"]')).toContainText('EmbeddingGemma 2')
+  const build = (await page.locator('#version-info').innerText()).split('@').pop()!
+
+  // The flag a killed load leaves behind, from this build: WebNN stays off and the user is told.
+  await page.evaluate((b) => localStorage.setItem('mc_webnnLoading', b), build)
+  await page.reload()
+  await expect(page.locator('#wizard-options [aria-checked="true"]')).toContainText('nomic')
+  await expect(page.locator('#toast')).toContainText('WebNN is off for this version')
+
+  // From an older build it is ignored, so a new deploy tries WebNN again.
+  await page.evaluate(() => localStorage.setItem('mc_webnnLoading', 'an-older-build'))
+  await page.reload()
+  await expect(page.locator('#wizard-options [aria-checked="true"]')).toContainText('EmbeddingGemma 2')
+})
+
 test('folder filter: type, size, video length, date taken and embedded status', async ({ page }) => {
   await page.addInitScript(() =>
     localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true, modelVariant: 'nomic', randomSampleSize: 0 }))
