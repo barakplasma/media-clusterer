@@ -776,6 +776,7 @@ async function extractVideoFrames(file: File, n: number, px: number): Promise<Im
     let cursor = 0
     let settled = false
     let probingDuration = false
+    let timer: ReturnType<typeof setTimeout> | undefined
 
     // video.remove() is a no-op when the element was never added to the DOM.
     // The only way to release a WebMediaPlayer in Chrome is: pause → clear src → load().
@@ -796,6 +797,7 @@ async function extractVideoFrames(file: File, n: number, px: number): Promise<Im
     const finish = () => {
       if (settled) return
       settled = true
+      clearTimeout(timer)
       cleanup()
       resolve(frames)
     }
@@ -844,6 +846,15 @@ async function extractVideoFrames(file: File, n: number, px: number): Promise<Im
       console.debug(`Video load error (${e ? `code ${e.code}${e.message ? `: ${e.message}` : ''}` : 'unknown'}):`, file.name)
       finish()
     }
+
+    // A seek that never completes, or a file whose drive is still fetching it, would hold the run for good. An
+    // overnight frame that hears nothing for 5 minutes is killed and its chunk halved down to the culprit,
+    // a stall per halving: hours for one video. Give up and keep the frames taken so far.
+    const limit = (window as Window & { __mcFrameTimeoutMs?: number }).__mcFrameTimeoutMs ?? 60_000
+    timer = setTimeout(() => {
+      console.debug(`Video frame extraction timed out after ${limit / 1000}s:`, file.name)
+      finish()
+    }, limit)
 
     video.src = url
   })
@@ -2595,16 +2606,13 @@ async function embedAllInner(files: PhotoFile[], opts: EmbedOptions = {}) {
                 missInputs.push(f.file)
               }
             }
-          } else if (isRemote || isVlm) {
-            // No frame to send. Falling through to the File below would put a
-            // File where embedImages expects a data URI (remote: JSON.stringify
-            // turns it into {}) or where the worker expects decoded frames —
-            // either way taking the whole batch, and every valid item in it,
-            // down with one bad video.
+          } else {
+            // No frame to send, so this video fails here. Handing the model the File instead (as the
+            // non-VLM models once got) takes the whole batch, and every valid item in it, down with
+            // one bad video: remote JSON.stringifies it to {}, the worker wants decoded frames, and
+            // nomic's batch failed and halved down to 1 per such video, leaving its batch size at 1.
             vectors[idx] = failedVector(idx, `no frame could be decoded from a .${ext} video`)
             return
-          } else {
-            missInputs.push(f.file)
           }
         } else if (isRemote) {
           try {

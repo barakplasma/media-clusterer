@@ -656,3 +656,64 @@ test('npu-test.html?hybrid=webgpu,cpu: cpu is the WASM backend, never WebNN', as
   await expect(page.locator('#status')).toContainText('failed in', { timeout: 30_000 })
   expect(await page.locator('#report').innerText()).toContain('two different devices')
 })
+
+test('a video that never answers gives up at the deadline instead of hanging the run', async ({ page }) => {
+  await page.addInitScript(() => {
+    ;(window as unknown as { __mcFrameTimeoutMs: number }).__mcFrameTimeoutMs = 400
+    // A video element that never loads and never errors: no loadedmetadata, no error.
+    Object.defineProperty(HTMLMediaElement.prototype, 'src', { set() {}, get: () => '' })
+  })
+  await page.goto('/')
+  const r = await page.evaluate(async () => {
+    const d = (window as unknown as { __debug: { extractVideoFrames: (f: File, n: number, px: number) => Promise<unknown[]> } }).__debug
+    const t = performance.now()
+    const frames = await d.extractVideoFrames(new File([new Uint8Array(10)], 'stuck.mp4'), 4, 64)
+    return { frames: frames.length, ms: performance.now() - t }
+  })
+  expect(r.frames).toBe(0)
+  expect(r.ms, 'waited for the deadline').toBeGreaterThan(300)
+  expect(r.ms, 'and no longer').toBeLessThan(5000)
+})
+
+test('overnight: a hanging file costs two restarts (stall, then alone), not one per halving of the chunk', async ({ page }) => {
+  test.setTimeout(240_000)
+  await page.addInitScript(() => {
+    if (window === window.top && !sessionStorage.getItem('mc_test_seeded')) {
+      sessionStorage.setItem('mc_test_seeded', '1')
+      localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true, modelVariant: 'nomic', randomSampleSize: 0 }))
+    }
+    const w = window as any
+    w.__mcOvernightTest = { chunkSize: 8, stallMs: 2000, loadStallMs: 30000 }
+    // The first file it is ever asked for hangs, wherever the folder lists it: the whole chunk is still ahead of it.
+    w.__mcTestEmbedder = async (_m: string, f: { name: string }) => {
+      if (!localStorage.getItem('hangs')) localStorage.setItem('hangs', f.name)
+      if (f.name === localStorage.getItem('hangs')) return new Promise(() => {})
+      return new Float32Array(8).fill(1)
+    }
+    w.showDirectoryPicker = async () => {
+      const root = await navigator.storage.getDirectory()
+      const dir = await root.getDirectoryHandle('overnight-hang', { create: true })
+      for (const n of ['cats.jpg', 'tiger.png', 'football.webp', 'butterfly.jpg', 'cats.mp4', 'tiger.webm']) {
+        const h = await dir.getFileHandle(n, { create: true })
+        if ((await h.getFile()).size === 0) {
+          const wr = await h.createWritable()
+          await wr.write(await (await fetch(`/e2e/fixtures/${n}`)).blob())
+          await wr.close()
+        }
+      }
+      return dir
+    }
+  })
+  await page.goto('/')
+  await page.locator('#overnight-btn').click()
+  await page.locator('#filter-load').click()
+  for (const box of await page.locator('#overnight-models input:checked').all()) await box.uncheck()
+  await page.locator('#overnight-models input[value="nomic"]').check()
+  await page.locator('#overnight-start').click()
+  await expect(page.locator('#overnight-close')).toBeVisible({ timeout: 200_000 })
+  await expect(page.locator('.on-model').first()).toContainText('embedded 5 ')
+  await expect(page.locator('.on-model').first()).toContainText('failed 1 ')
+  // Chunk of 6 stalls on its first file; that file alone stalls again and is skipped. Halving would take a third.
+  const restarts = Number((await page.locator('#overnight-stats').textContent())!.match(/restarts (\d+)/)![1])
+  expect(restarts).toBe(2)
+})
