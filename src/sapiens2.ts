@@ -239,7 +239,7 @@ export async function loadSapiens2(
   // SharedArrayBuffer (required for multithreading) is available when the page
   // is served with COOP: same-origin + COEP: credentialless headers.
   // Without those headers ORT silently falls back to a single thread.
-  ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4
+  ort.env.wasm.numThreads = crossOriginIsolated ? navigator.hardwareConcurrency || 4 : 1
 
   const cfg = VARIANT_CONFIG[variant]
   // Cache is always keyed on the canonical Hub URL so a proxy host or local
