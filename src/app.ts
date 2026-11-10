@@ -459,9 +459,16 @@ function zeroVector(): Float32Array {
 /** zeroVector() for file `idx`, recorded so the map can badge or hide it. */
 function failedVector(idx: number, reason: string): Float32Array {
   embedFailed.add(idx)
+  if (/^(no frame could be|could not) decode/.test(reason)) undecodable.add(idx)
   // Without a reason the end-of-run report says only "1/100 failed" (Bugsink bc6155f9).
   embedFailReason ||= reason
   return zeroVector()
+}
+/** End-of-run failure line. A corrupt file is not an app error, so only model failures reach Bugsink. */
+function reportEmbedFailures(total: number) {
+  const why = embedFailReason ? `: ${embedFailReason}` : ''
+  const log = undecodable.size === embedFailed.size ? console.warn : console.error
+  log(`Embedding failed for ${embedFailed.size}/${total} files (${state.settings.modelVariant})${why}`)
 }
 let lazyCaptionManager: ChromeAISessionManager | null = null // On-demand caption for non-chrome-ai modes
 let captionAbortController: AbortController | null = null // Cancels in-flight lazy caption
@@ -1197,6 +1204,7 @@ function requestFullTile(i: number, px: number) {
 const thumbDecoding = new Set<number>() // indices currently being decoded
 const thumbFailed = new Set<number>() // indices where video frame extraction permanently failed
 const embedFailed = new Set<number>() // indices whose embedding failed (zero vector stand-in)
+const undecodable = new Set<number>() // subset of embedFailed: the file itself could not be decoded
 let hideFailed = false
 let embedFailReason = '' // first error message of the run, shown in the end-of-run toast
 const isHidden = (i: number) => hideFailed && embedFailed.has(i)
@@ -1302,6 +1310,7 @@ function resetAll() {
   thumbDecoding.clear()
   thumbFailed.clear()
   embedFailed.clear()
+  undecodable.clear()
   embedFailReason = ''
   updateFailedChip()
   thumbnailLRU.clear()
@@ -2855,6 +2864,8 @@ async function embedAllInner(files: PhotoFile[], opts: EmbedOptions = {}) {
       )
       await cachePutBatch(writeQueue)
       writeQueue.length = 0
+      // Overnight frames never reach runMain's report, so their failures were never logged.
+      if (headless && embedFailed.size > 0) reportEmbedFailures(files.length)
       lastEmbedStop = 'low-memory'
       return vectors.slice(0, done)
     }
@@ -2864,6 +2875,7 @@ async function embedAllInner(files: PhotoFile[], opts: EmbedOptions = {}) {
   }
 
   refreshCacheSize()
+  if (headless && embedFailed.size > 0) reportEmbedFailures(files.length)
   return vectors
 }
 
@@ -2912,6 +2924,7 @@ async function processFiles(files: PhotoFile[]) {
   thumbDecoding.clear()
   thumbFailed.clear()
   embedFailed.clear()
+  undecodable.clear()
   embedFailReason = ''
   updateFailedChip()
   thumbnailLRU.clear()
@@ -3008,9 +3021,7 @@ async function processFiles(files: PhotoFile[]) {
       // Failures only reach the console otherwise, which a phone can't show.
       const why = embedFailReason ? `: ${embedFailReason}` : ''
       showToast(`${embedFailed.size} of ${files.length} files could not be embedded${why}`, 'warn', 12000)
-      console.error(
-        `Embedding failed for ${embedFailed.size}/${files.length} files (${state.settings.modelVariant})${why}`
-      )
+      reportEmbedFailures(files.length)
     }
     resizeCanvas()
     setStatus('Arranging layout…')
