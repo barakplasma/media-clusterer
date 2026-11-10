@@ -86,6 +86,16 @@ test('EmbeddingGemma 2 embeds photos and videos and finds them by text', async (
   expect(run.phase).toBe('done')
   expect(run.dims).toEqual(FIXTURES.map(() => 768))
 
+  // The app remembers its own photo speed for the accelerator choice (src/benchStore.ts).
+  const remembered = await page.evaluate(
+    () => JSON.parse(localStorage.getItem('mc_bench') ?? '{"runs":[]}').runs as { source: string; device: string; embedMs: number }[]
+  )
+  console.log('remembered speeds', remembered)
+  expect(
+    remembered.some((r) => r.source === 'app' && r.embedMs > 0 && (webnn ? r.device.startsWith('webnn') : r.device === 'webgpu')),
+    'the run left no speed behind for the accelerator choice'
+  ).toBe(true)
+
   for (const [q, want] of QUERIES) {
     const top = await page.evaluate(async (q) => {
       const d = window.__debug
@@ -156,6 +166,6 @@ test('overnight embedding runs the real model in recycled worker frames', async 
   expect(vecs.filter((v) => v.key.includes('-f2/'))).toHaveLength(2)
   for (const v of vecs) {
     expect(v).toMatchObject({ len: 768, owns: true })
-    expect(v.norm).toBeGreaterThan(0.99)
+    expect(v.norm, `vector ${v.key}`).toBeGreaterThan(0.99)
   }
 })

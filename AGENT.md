@@ -39,8 +39,8 @@
 End to end only (no unit tests). Needs Google Chrome installed.
 
 - `npm test`: the CPU-only checks (viewer mode; WebGPU-only model falling back with no adapter; the first-visit setup wizard). Pre-commit hook and the deploy job run these.
-- `npm run test:gpu`: EmbeddingGemma 2 in the phone and desktop profiles. Needs a real GPU; CI runs it on GitHub's macOS runner (`.github/workflows/e2e.yml`), where only the phone profile is required. `SWIFTSHADER=<chrome binary>` runs it on SwiftShader for local debugging.
-- `npx playwright test --project=webnn`: the same test on the WebNN path (`src/vlmWebnn.ts`), which the app prefers whenever the browser has WebNN (the project turns the flag on). No GPU needed; downloads the 880 MB fp16 model. `npu-test.html` measures that path on a real phone and copies a JSON report with its JSON Schema.
+- `npm run test:gpu`: EmbeddingGemma 2 in the phone (light image budget, the Chromebook/Pixel profile) and desktop profiles. Needs a real GPU. CI runs the desktop profile as `e2e (webgpu)` on GitHub's macOS runner (`.github/workflows/e2e.yml`; the phone profile is for local runs). `SWIFTSHADER=<chrome binary>` runs it on SwiftShader for local debugging.
+- `npx playwright test --project=webnn`: the same test on the WebNN path (`src/vlmWebnn.ts`), which the app prefers whenever the browser has WebNN (the project turns the flag on, and the test fails if the app did not end up on WebNN). Downloads the 880 MB fp16 model. CI runs it on the macOS runner as `e2e (webnn)` (Chrome there has a real WebNN backend). `npu-test.html` measures that path on a real phone and copies a JSON report with its JSON Schema.
 - Chrome AI: `npx playwright test --project=chrome-ai` (Gemini Nano downloads on first run, about 90 s on the hosted Linux runner; run under `xvfb-run` there). On demand: `.github/workflows/chrome-ai.yml` (Run workflow button; also runs on PRs that change the test).
 - Faces: `npx playwright test --project=faces` (on demand; downloads the ~10 MB YuNet/SFace models and OpenCV's reference image from Hugging Face). Checks the match against OpenCV's own result and the People strip end to end.
 - Safari: `e2e/safari/` (node:test + safaridriver), one CI job on macOS 26.
@@ -65,6 +65,16 @@ End to end only (no unit tests). Needs Google Chrome installed.
   under `videoDraftPrefix(variant)` (the tier's prefix plus `-f2`), never under the full one. Opening a folder
   or resuming reads a video's full vector first and its quick one if that is all there is
   (`readCachedEmbeddings`); only overnight worker frames skip that fallback, so the bonus pass can replace them.
+
+## Accelerator choice
+
+EmbeddingGemma 2 can run on WebGPU (q4) or on WebNN (fp16: npu, gpu or cpu). `src/benchStore.ts` keeps every speed
+measured in this browser under localStorage `mc_bench`: `npu-test.html` runs (including its hybrid run, two devices
+at once: `?hybrid=webgpu,webnn-cpu`) and the app's own embedding runs (`recordAppBench`, median ms per photo).
+At start-up the setup wizard asks `fastestAccelerator` which of the accelerators on this device is fastest, by the
+median of its runs, and orders WebNN accordingly (WebNN off when WebGPU is fastest). Until two accelerators have
+been measured it keeps the default: WebNN first, most native device first. A speed only compares with the same model
+file (`dtype`), so the benchmark page's fp16 WebGPU run never stands in for the app's q4 one.
 
 ## Architecture
 

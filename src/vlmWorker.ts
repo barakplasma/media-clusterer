@@ -264,7 +264,11 @@ async function embedGemma2(inputs: Record<string, unknown>): Promise<Float32Arra
   const out = await (model as unknown as Gemma2Model)(inputs)
   const emb = out.sentence_embedding
   assertVisionDim(loadedTier!, emb.dims[emb.dims.length - 1])
-  return Float32Array.from(emb.data)
+  const v = Float32Array.from(emb.data)
+  // fp16 overflow or a bad GPU dispatch shows up as NaN. One such vector would poison every projection and search
+  // it is part of, and the cache would keep it for good, so it fails like any input the model cannot embed.
+  if (v.some((x) => !Number.isFinite(x))) throw new Error('the model returned non-finite values (NaN) for this input')
+  return v
 }
 
 /**

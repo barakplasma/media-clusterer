@@ -542,3 +542,83 @@ test('AI provenance parsers: ComfyUI graph in compressed iTXt, A1111 in a UTF-16
   expect(r.c2paR.generator).toBe('Google')
   expect(r.c2paR.evidence.join(' ')).toContain('C2PA manifest by Google Gemini 1.0, declares AI generation (signature not verified)')
 })
+
+test('benchmark store: bad data is ignored, runs are capped, the fastest wins by median, WebNN is reordered', async ({ page }) => {
+  await page.goto('/device-test.html')
+  const r = await page.evaluate(async () => {
+    const m = await import('/src/benchStore.ts' as string)
+    const run = (device: string, embedMs: number, dtype = 'fp16', at = Date.now()) => ({ at, source: 'bench', device, dtype, embedMs, n: 3 })
+    localStorage.setItem('mc_bench', 'not json')
+    const garbage = m.benchRuns().length
+    localStorage.removeItem('mc_bench')
+    m.recordBench(run('bogus', 3000)) // unknown device
+    m.recordBench(run('webgpu', -5)) // not a time
+    const rejected = m.benchRuns().length
+    for (let i = 0; i < 35; i++) m.recordBench(run('webnn-npu', 1000 + i))
+    const kept = m.benchRuns().filter((x: { device: string }) => x.device === 'webnn-npu').map((x: { embedMs: number }) => x.embedMs)
+    for (let i = 0; i < 25; i++) m.recordHybrid({ at: i, devices: ['webgpu', 'webnn-cpu'], seconds: 60, combinedPerSec: 1, bestAlonePerSec: 1, cosine: 1 })
+    const hybrid = m.hybridRuns().length
+    localStorage.removeItem('mc_bench')
+    const cand = (device: string, dtype = 'fp16') => ({ device, dtype })
+    const alone = m.fastestAccelerator([cand('webnn-npu'), cand('webgpu', 'q4')], [run('webnn-npu', 3000)])
+    // A fast outlier must not beat a steadier device: medians, not bests.
+    const runs = [run('webnn-npu', 1000), run('webnn-npu', 9000), run('webnn-npu', 9500), run('webnn-gpu', 4000), run('webnn-gpu', 4100)]
+    const median = m.fastestAccelerator([cand('webnn-npu'), cand('webnn-gpu')], runs)
+    // A speed only compares with the same model file: the q4 and fp16 WebGPU runs are not the same thing.
+    const dtype = m.fastestAccelerator([cand('webgpu', 'q4'), cand('webnn-npu')], [run('webgpu', 100, 'fp16'), run('webnn-npu', 3000)])
+    return {
+      garbage, rejected, kept, hybrid, alone, median, dtype,
+      order: [
+        m.webnnOrder(['npu', 'gpu', 'cpu'], 'webnn-cpu'),
+        m.webnnOrder(['npu', 'gpu', 'cpu'], 'webgpu'),
+        m.webnnOrder(['npu', 'gpu', 'cpu'], undefined),
+        m.webnnOrder(['npu', 'gpu', 'cpu'], 'webnn-npu')
+      ]
+    }
+  })
+  expect(r.garbage).toBe(0)
+  expect(r.rejected).toBe(0)
+  expect(r.kept).toHaveLength(30)
+  expect(r.kept[0]).toBe(1005) // the five oldest were dropped
+  expect(r.hybrid).toBe(20)
+  expect(r.alone, 'one measured device proves nothing').toBeNull()
+  expect(r.median).toMatchObject({ device: 'webnn-gpu' })
+  expect(r.dtype, 'an fp16 run says nothing about q4').toBeNull()
+  expect(r.order).toEqual([['cpu', 'npu', 'gpu'], [], ['npu', 'gpu', 'cpu'], ['npu', 'gpu', 'cpu']])
+})
+
+test.describe('the wizard picks the fastest accelerator by remembered runs', () => {
+  const seed = async (page: import('@playwright/test').Page, runs: [string, string, number][]) => {
+    await page.addInitScript((runs) => {
+      // WebNN offered (all three devices) and a usable WebGPU adapter, so both paths are candidates.
+      ;(navigator as unknown as { ml: unknown }).ml = { createContext: async () => ({}) }
+      navigator.gpu.requestAdapter = async () =>
+        ({ info: { vendor: 'test', architecture: 'gpu', description: '', device: '', isFallbackAdapter: false }, features: new Set(), limits: {} }) as unknown as GPUAdapter
+      const at = Date.now()
+      const all = runs.flatMap(([device, dtype, ms]) => [0, 1, 2].map((i) => ({ at: at + i, source: 'bench', device, dtype, embedMs: ms + i, n: 3 })))
+      localStorage.setItem('mc_bench', JSON.stringify({ runs: all, hybrid: [] }))
+    }, runs)
+    await page.goto('/')
+    await expect(page.locator('#wizard-go')).toBeVisible()
+  }
+  const reason = (page: import('@playwright/test').Page) =>
+    page.locator('#wizard-options button', { hasText: 'EmbeddingGemma 2' }).locator('small')
+
+  test('WebNN when it measured faster', async ({ page }) => {
+    await seed(page, [['webgpu', 'q4', 5000], ['webnn-npu', 'fp16', 3500]])
+    await expect(page.locator('#wizard-checks')).toContainText('Fastest in your earlier runs: webnn-npu')
+    await expect(reason(page)).toContainText('Runs on WebNN')
+  })
+
+  test('WebGPU when it measured faster', async ({ page }) => {
+    await seed(page, [['webgpu', 'q4', 2000], ['webnn-npu', 'fp16', 3500]])
+    await expect(page.locator('#wizard-checks')).toContainText('Fastest in your earlier runs: webgpu')
+    await expect(reason(page)).toContainText('Runs on your graphics chip (WebGPU)')
+  })
+
+  test('the default order while only one accelerator has been measured', async ({ page }) => {
+    await seed(page, [['webgpu', 'q4', 2000]])
+    await expect(page.locator('#wizard-checks')).not.toContainText('Fastest in your earlier runs')
+    await expect(reason(page)).toContainText('Runs on WebNN')
+  })
+})
