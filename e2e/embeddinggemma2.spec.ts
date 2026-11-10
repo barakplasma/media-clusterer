@@ -156,6 +156,6 @@ test('overnight embedding runs the real model in recycled worker frames', async 
   expect(vecs.filter((v) => v.key.includes('-f2/'))).toHaveLength(2)
   for (const v of vecs) {
     expect(v).toMatchObject({ len: 768, owns: true })
-    expect(v.norm).toBeGreaterThan(0.99)
+    expect(v.norm, `vector ${v.key}`).toBeGreaterThan(0.99)
   }
 })
