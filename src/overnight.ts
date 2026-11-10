@@ -270,6 +270,7 @@ export async function runOvernight(deps: OvernightDeps): Promise<OvernightStats>
         publish()
         const chunk = pending.slice(0, size)
         const res = await runChunk(model, chunk, st)
+        const reached = inFlight // files it finished before it ended; the next one is where it stopped
         stats.recycles++
         const have = await deps.cacheHasBatch(chunk.map((f) => `${model.prefix}${makeCacheKey(f)}`))
         const rest = chunk.filter((_, i) => !have[i])
@@ -308,8 +309,14 @@ export async function runOvernight(deps: OvernightDeps): Promise<OvernightStats>
           st.message = `Restarted after ${res.reason}${res.message ? `: ${res.message}` : ''}`
           if (chunk.length === 1 && rest.length === 1) st.failed++
           else {
+            // A stall or crash happens on the file being worked on: try that one alone next, instead of halving
+            // the chunk down to it, which cost a 5-minute stall per halving (9 for a chunk of 500). GPU loss is
+            // not tied to a file, so that still narrows by halves.
+            const stuck = rest.indexOf(chunk[reached])
+            if (stuck > 0) rest.unshift(...rest.splice(stuck, 1))
             pending.unshift(...rest)
-            size = Math.max(1, Math.floor(Math.min(size, rest.length) / 2))
+            const aFile = res.reason === 'stall' || res.reason === 'error'
+            size = aFile ? 1 : Math.max(1, Math.floor(Math.min(size, rest.length) / 2))
           }
         }
         st.remaining = pending.length
