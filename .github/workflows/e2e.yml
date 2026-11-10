@@ -25,9 +25,8 @@ jobs:
             project: desktop
           - name: webnn
             project: webnn
-    # WebGPU is required. WebNN is informational until it has passed on a Mac runner: nobody knows yet
-    # whether Chrome there has a WebNN backend (the test fails, rather than quietly using WebGPU, if not).
-    continue-on-error: ${{ matrix.name == 'webnn' }}
+    # Chrome on the Mac runner has a real WebNN backend (ORT's WebNN provider takes ~99% of the graph). The
+    # webnn spec fails, rather than quietly using WebGPU, if the app does not end up on WebNN.
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
