@@ -14,6 +14,7 @@
 
 import { AutoProcessor, RawImage, env } from '@huggingface/transformers'
 import * as ort from 'onnxruntime-web'
+import { median, recordBench, recordHybrid, type Accelerator } from './benchStore'
 
 const REPO = 'onnx-community/embeddinggemma-2-ONNX'
 const IMAGE_TOKENS = 70 // phone profile (src/vlmTiers.ts PHONE_OVERRIDES)
@@ -28,6 +29,9 @@ const params = new URLSearchParams(location.search)
 const device = params.get('device') ?? 'webnn-npu'
 // fp16 everywhere, so the three backends compare the same model (WASM runs the stock graph as a reference).
 const dtype = params.get('dtype') ?? 'fp16'
+// ?hybrid=a,b: two devices embedding at the same time, to see whether their speeds add up.
+const hybridDevices = params.get('hybrid')?.split(',').filter(Boolean) ?? null
+const ACCELERATORS: string[] = ['webgpu', 'webnn-npu', 'webnn-gpu', 'webnn-cpu', 'wasm']
 
 // ── Report: the TypeScript shape and the JSON Schema shipped with the copy ──
 
@@ -96,7 +100,20 @@ interface NpuReport {
     queryVsB?: number
     vsOtherRuns: Record<string, number>
   }
+  /** Only on a hybrid run (?hybrid=a,b). */
+  hybrid?: HybridReport
   warnings: string[]
+}
+interface HybridReport {
+  devices: string[]
+  seconds: number
+  perDevice: { device: string; aloneMs: number; embeds: number; perSec: number }[]
+  combinedPerSec: number
+  bestAlonePerSec: number
+  /** combinedPerSec / bestAlonePerSec: above 1 means running both at once pays. */
+  speedup: number
+  /** The two devices' vectors for picture A: how close their embedding spaces are. */
+  cosine: number
 }
 
 const num = { type: 'number' }
@@ -243,6 +260,30 @@ const REPORT_SCHEMA = {
         }
       }
     },
+    hybrid: {
+      type: 'object',
+      description: 'Two devices embedding at the same time (?hybrid=a,b); absent on a single-device run',
+      properties: {
+        devices: { type: 'array', items: str },
+        seconds: num,
+        perDevice: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              device: str,
+              aloneMs: { ...num, description: 'median embed time of picture A with the device to itself' },
+              embeds: { ...num, description: 'embeds it finished during the shared window' },
+              perSec: num
+            }
+          }
+        },
+        combinedPerSec: num,
+        bestAlonePerSec: num,
+        speedup: { ...num, description: 'combinedPerSec / bestAlonePerSec; above 1 means running both pays' },
+        cosine: { ...num, description: "cosine of the two devices' vectors for picture A" }
+      }
+    },
     warnings: { type: 'array', items: str }
   }
 } as const
@@ -251,7 +292,7 @@ const nav = navigator as Navigator & { deviceMemory?: number; ml?: ML }
 const report: NpuReport = {
   build: __GIT_COMMIT__,
   startedAt: new Date().toISOString(),
-  device,
+  device: hybridDevices ? hybridDevices.join('+') : device,
   dtype,
   status: 'running',
   phase: 'diagnostics',
@@ -424,13 +465,32 @@ function render(): void {
         `<p class="${good ? 'ok' : 'bad'}">${good ? 'Near-copy and matching query score higher, as expected.' : 'Near-copy or matching query does not score higher: the output looks broken.'}</p>`
     )
   }
+  if (r.hybrid) {
+    const h = r.hybrid
+    html += card(
+      `Hybrid · ${h.devices.map(esc).join(' + ')}`,
+      table(
+        ['Device', 'Alone', 'Finished together', 'Per second'],
+        h.perDevice.map((d) => [esc(d.device), s(d.aloneMs), d.embeds, d.perSec.toFixed(3)])
+      ) +
+        `<p>Together: <b>${h.combinedPerSec.toFixed(3)}</b> photos/s over ${h.seconds}&nbsp;s, against ${h.bestAlonePerSec.toFixed(3)} for the better device alone: ` +
+        `<b class="${h.speedup > 1.05 ? 'ok' : 'bad'}">×${h.speedup.toFixed(2)}</b>. ` +
+        `Their vectors for the same picture: cosine ${h.cosine.toFixed(4)} ` +
+        `<span class="muted">(near 1 means one search space could hold both)</span></p>`
+    )
+  }
   if (r.warnings.length) html += card('Warnings', `<pre>${esc(r.warnings.join('\n'))}</pre>`)
   $('report').innerHTML = html
 }
 
 for (const a of document.querySelectorAll<HTMLAnchorElement>('#devices a')) {
   const p = new URLSearchParams(a.search)
-  if (params.has('diag') ? p.has('diag') : p.get('device') === device) a.classList.add('on')
+  const here = params.has('diag')
+    ? p.has('diag')
+    : hybridDevices
+      ? p.get('hybrid') === params.get('hybrid')
+      : p.get('device') === device
+  if (here) a.classList.add('on')
 }
 const flash = (btn: HTMLElement, text: string) => {
   const old = btn.textContent
@@ -637,6 +697,45 @@ type Proc = ((
   image_processor: { max_soft_tokens: number }
 }
 
+/** Processor and pinned shapes for the benchmark pictures, shared by a single-device and a hybrid run. */
+async function prepare(step: (phase: string) => void) {
+  step('processor')
+  const proc = (await AutoProcessor.from_pretrained(REPO)) as unknown as Proc
+  proc.image_processor.max_soft_tokens = IMAGE_TOKENS
+  const opts = { padding: 'max_length', max_length: SEQ_LEN, truncation: true }
+  const pics = {
+    A: await picture(0, 'A'),
+    'A shifted': await picture(0, 'A', 12),
+    B: await picture(200, 'B'),
+    'A portrait': await picture(0, 'A', 0, 480, 640)
+  }
+  const inputs: Record<string, Record<string, { dims: number[] }>> = {}
+  for (const [name, img] of Object.entries(pics))
+    inputs[name] = await proc(null, [[img]], null, null, opts)
+  // A search query: text only, so zero image tokens.
+  inputs.query = await proc(['task: search result | query: ' + QUERY], null, null, null, opts)
+  for (const [k, v] of Object.entries(inputs.A)) if (v?.dims) report.inputShapes[k] = v.dims
+
+  // Pin the free dimensions that stay fixed (names from the ONNX graphs).
+  // Image/video token counts depend on the aspect ratio and are 0 for a
+  // query, so they stay free: only the small merge step that consumes them
+  // falls back to CPU, and the layers after it see a fixed [1, 296, 512].
+  const overrides = report.freeDimensionOverrides
+  Object.assign(overrides, {
+    s11: 1,
+    s35: inputs.A.pixel_values.dims[1],
+    batch_size: 1,
+    sequence_length: SEQ_LEN,
+    num_audio_tokens: 0
+  })
+  log(`shapes ${JSON.stringify(report.inputShapes)}`)
+  // Time one more pass over picture A, now the processor is warm: a real embed pays this too.
+  const tP = performance.now()
+  await proc(null, [[pics.A]], null, null, opts)
+  const prepMs = performance.now() - tP
+  return { inputs, overrides, prepMs }
+}
+
 async function run(): Promise<void> {
   const t0 = performance.now()
   const step = (phase: string) => {
@@ -654,36 +753,7 @@ async function run(): Promise<void> {
       return
     }
 
-    step('processor')
-    const proc = (await AutoProcessor.from_pretrained(REPO)) as unknown as Proc
-    proc.image_processor.max_soft_tokens = IMAGE_TOKENS
-    const opts = { padding: 'max_length', max_length: SEQ_LEN, truncation: true }
-    const pics = {
-      A: await picture(0, 'A'),
-      'A shifted': await picture(0, 'A', 12),
-      B: await picture(200, 'B'),
-      'A portrait': await picture(0, 'A', 0, 480, 640)
-    }
-    const inputs: Record<string, Record<string, { dims: number[] }>> = {}
-    for (const [name, img] of Object.entries(pics))
-      inputs[name] = await proc(null, [[img]], null, null, opts)
-    // A search query: text only, so zero image tokens.
-    inputs.query = await proc(['task: search result | query: ' + QUERY], null, null, null, opts)
-    for (const [k, v] of Object.entries(inputs.A)) if (v?.dims) report.inputShapes[k] = v.dims
-
-    // Pin the free dimensions that stay fixed (names from the ONNX graphs).
-    // Image/video token counts depend on the aspect ratio and are 0 for a
-    // query, so they stay free: only the small merge step that consumes them
-    // falls back to CPU, and the layers after it see a fixed [1, 296, 512].
-    const overrides = report.freeDimensionOverrides
-    Object.assign(overrides, {
-      s11: 1,
-      s35: inputs.A.pixel_values.dims[1],
-      batch_size: 1,
-      sequence_length: SEQ_LEN,
-      num_audio_tokens: 0
-    })
-    log(`shapes ${JSON.stringify(report.inputShapes)}`)
+    const { inputs, overrides, prepMs } = await prepare(step)
 
     // Two ORT sessions, created one at a time, so a failure names its half.
     const sessions: Record<string, ort.InferenceSession> = {}
@@ -821,6 +891,178 @@ async function run(): Promise<void> {
       localStorage.setItem(key, JSON.stringify(Array.from(vecs.A)))
     } catch {}
     log(`similarity ${JSON.stringify(report.similarity)}`)
+    // Remembered, so the app can pick the fastest accelerator over every run (src/benchStore.ts).
+    const aMs = report.embeds.filter((e) => e.image === 'A' && e.nonFinite === 0).map((e) => e.ms)
+    if (aMs.length && ACCELERATORS.includes(device)) {
+      recordBench({ at: Date.now(), source: 'bench', device: device as Accelerator, dtype, embedMs: median(aMs) + prepMs, n: aMs.length })
+    }
+    report.status = 'pass'
+  } catch (e) {
+    report.status = 'fail'
+    report.error = errMsg(e)
+  } finally {
+    clearInterval(beat)
+    report.totalMs = performance.now() - t0
+    log(
+      `DONE ${report.status}${report.error ? ` in ${report.phase}: ${report.error}` : ''} total=${(report.totalMs / 1000).toFixed(1)}s`
+    )
+    render()
+  }
+}
+
+// ── Hybrid: two devices at once ─────────────────────────────────────────────
+
+const HYBRID_SECONDS = 60
+type Inp = Record<string, { dims: number[] }>
+/** This page's ORT tensor from a processor output (transformers.js bundles its own ORT; run() checks instanceof). */
+const tensor = (inp: Record<string, unknown>, k: string) => {
+  const x = inp[k] as { type: ort.Tensor.Type; data: ort.Tensor.DataType; dims: number[] }
+  return new ort.Tensor(x.type, x.data, x.dims)
+}
+
+/** The two sessions run() builds for one device, for `dev`, with an embed that runs the vision part, then the text part. */
+async function loadRunner(
+  dev: string,
+  overrides: Record<string, number>,
+  step: (phase: string) => void
+): Promise<(inp: Inp) => Promise<Float32Array>> {
+  const [epName, epType] = dev.split('-')
+  const ep = epType ? { name: epName, deviceType: epType } : epName
+  const suffix = dtype === 'fp32' ? '' : `_${dtype}`
+  const sessions: Record<string, ort.InferenceSession> = {}
+  let table: Uint16Array | null = null
+  for (const name of ['vision_encoder', 'model'] as const) {
+    const embedInJs = name === 'model' && dtype === 'fp16'
+    step(`${dev}: download ${name}`)
+    const graph = embedInJs
+      ? await ownGraph('model_fp16_noembed.onnx')
+      : await cachedFetch(`${name}${suffix}.onnx`)
+    const data = await cachedFetch(`${name}${suffix}.onnx_data`)
+    // A copy, so this device's 543 MB buffer can go once its session has it: two devices hold two.
+    if (embedInJs)
+      table = new Uint16Array(data.slice(EMBED_OFFSET, EMBED_OFFSET + EMBED_ROWS * EMBED_WIDTH * 2).buffer)
+    step(`${dev}: compile ${name}`)
+    sessions[name] = await Promise.race([
+      ort.InferenceSession.create(graph, {
+        executionProviders: [ep],
+        freeDimensionOverrides: overrides,
+        externalData: [{ path: `${name}${suffix}.onnx_data`, data }],
+        logSeverityLevel: params.has('verbose') ? 0 : 2
+      }),
+      failed
+    ])
+  }
+  const empty = new ort.Tensor('float32', new Float32Array(0), [0, 512])
+  return async (inp) => {
+    const image = (
+      await sessions.vision_encoder.run({
+        pixel_values: tensor(inp, 'pixel_values'),
+        pixel_position_ids: tensor(inp, 'image_position_ids')
+      })
+    ).image_features
+    const ids = tensor(inp, 'input_ids')
+    const feeds: Record<string, ort.Tensor> = {}
+    if (table) {
+      const idData = ids.data as BigInt64Array
+      const rows = new Uint16Array(idData.length * EMBED_WIDTH)
+      idData.forEach((id, i) =>
+        rows.set(table!.subarray(Number(id) * EMBED_WIDTH, (Number(id) + 1) * EMBED_WIDTH), i * EMBED_WIDTH)
+      )
+      feeds.inputs_embeds = new ort.Tensor('float16', rows, [...ids.dims, EMBED_WIDTH])
+    }
+    const out = await sessions.model.run({
+      ...feeds,
+      input_ids: ids,
+      attention_mask: tensor(inp, 'attention_mask'),
+      image_features: image,
+      video_features: empty,
+      audio_features: empty
+    })
+    return Float32Array.from(out.sentence_embedding.data as Float32Array)
+  }
+}
+
+/**
+ * Two devices embedding picture A at the same time for HYBRID_SECONDS, against each alone: does running a CPU
+ * and a GPU together add up? Both sessions run on this page; WebGPU and WebNN work happens off its thread, so
+ * they overlap. A WASM session would run on the page's own thread and hold the other up, so it is refused.
+ */
+async function runHybrid(devs: string[]): Promise<void> {
+  const t0 = performance.now()
+  const step = (phase: string) => {
+    report.phase = phase
+    render()
+  }
+  const beat = setInterval(
+    () => log(`… still in ${report.phase} (${((performance.now() - t0) / 1000).toFixed(0)}s)`),
+    30_000
+  )
+  try {
+    if (devs.length !== 2 || devs[0] === devs[1] || devs.some((d) => !ACCELERATORS.includes(d)))
+      throw new Error('?hybrid= wants two different devices, for example webgpu,webnn-cpu')
+    if (devs.includes('wasm'))
+      throw new Error('wasm cannot run beside another device on one page; use webnn-cpu as the CPU side')
+    await diagnostics()
+    const { inputs, overrides, prepMs } = await prepare(step)
+    const embeds: ((inp: Inp) => Promise<Float32Array>)[] = []
+    for (const dev of devs) embeds.push(await loadRunner(dev, overrides, step))
+
+    // Each device alone first, the baseline (the first embed pays warm-up).
+    const alone: number[][] = [[], []]
+    const vecs: Float32Array[] = []
+    for (const [i, embed] of embeds.entries()) {
+      for (let rep = 1; rep <= 3; rep++) {
+        step(`${devs[i]} alone #${rep}`)
+        const t = performance.now()
+        const v = await embed(inputs.A)
+        alone[i].push(performance.now() - t)
+        if (nonFinite(v)) throw new Error(`${devs[i]} produced non-finite values`)
+        if (rep === 3) vecs.push(v)
+      }
+    }
+
+    step(`both at once (${HYBRID_SECONDS} s)`)
+    const end = performance.now() + HYBRID_SECONDS * 1000
+    const done = await Promise.all(
+      embeds.map(async (embed) => {
+        let n = 0
+        for (;;) {
+          await embed(inputs.A)
+          if (performance.now() >= end) return n // finished after the window: not counted
+          n++
+        }
+      })
+    )
+
+    const perDevice = devs.map((device, i) => ({
+      device,
+      aloneMs: median(alone[i].slice(1)),
+      embeds: done[i],
+      perSec: done[i] / HYBRID_SECONDS
+    }))
+    const combinedPerSec = perDevice.reduce((a, d) => a + d.perSec, 0)
+    const bestAlonePerSec = Math.max(...perDevice.map((d) => 1000 / d.aloneMs))
+    report.hybrid = {
+      devices: devs,
+      seconds: HYBRID_SECONDS,
+      perDevice,
+      combinedPerSec,
+      bestAlonePerSec,
+      speedup: combinedPerSec / bestAlonePerSec,
+      cosine: cos(vecs[0], vecs[1])
+    }
+    // Remembered like a single-device run (src/benchStore.ts): each device's speed alone, and the pair.
+    for (const d of perDevice)
+      recordBench({ at: Date.now(), source: 'bench', device: d.device as Accelerator, dtype, embedMs: d.aloneMs + prepMs, n: 2 })
+    recordHybrid({
+      at: Date.now(),
+      devices: devs as Accelerator[],
+      seconds: HYBRID_SECONDS,
+      combinedPerSec,
+      bestAlonePerSec,
+      cosine: report.hybrid.cosine
+    })
+    log(`hybrid ${JSON.stringify(report.hybrid)}`)
     report.status = 'pass'
   } catch (e) {
     report.status = 'fail'
@@ -841,4 +1083,4 @@ if (unschemed.length)
   report.warnings.push(`schema is missing report fields: ${unschemed.join(', ')}`)
 
 render()
-void run()
+void (hybridDevices ? runHybrid(hybridDevices) : run())

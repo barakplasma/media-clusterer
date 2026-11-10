@@ -60,8 +60,12 @@
       <a href="?device=webnn-cpu">WebNN CPU</a>
       <a href="?device=webgpu">WebGPU</a>
       <a href="?device=wasm">WASM (reference)</a>
+      <a href="?hybrid=webgpu,webnn-cpu">Hybrid: WebGPU + WebNN CPU</a>
+      <a href="?hybrid=webnn-gpu,webnn-cpu">Hybrid: WebNN GPU + CPU</a>
+      <a href="?hybrid=webnn-npu,webnn-cpu">Hybrid: WebNN NPU + CPU</a>
       <a href="?diag=1">Diagnostics only</a>
     </nav>
+    <p class="muted">Each run is remembered in this browser. The app uses the remembered speeds to pick the fastest accelerator.</p>
     <div class="actions">
       <button id="copy-json" type="button">Copy JSON</button>
       <button id="copy-log" type="button" class="secondary">Copy log</button>

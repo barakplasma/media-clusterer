@@ -66,6 +66,16 @@ End to end only (no unit tests). Needs Google Chrome installed.
   or resuming reads a video's full vector first and its quick one if that is all there is
   (`readCachedEmbeddings`); only overnight worker frames skip that fallback, so the bonus pass can replace them.
 
+## Accelerator choice
+
+EmbeddingGemma 2 can run on WebGPU (q4) or on WebNN (fp16: npu, gpu or cpu). `src/benchStore.ts` keeps every speed
+measured in this browser under localStorage `mc_bench`: `npu-test.html` runs (including its hybrid run, two devices
+at once: `?hybrid=webgpu,webnn-cpu`) and the app's own embedding runs (`recordAppBench`, median ms per photo).
+At start-up the setup wizard asks `fastestAccelerator` which of the accelerators on this device is fastest, by the
+median of its runs, and orders WebNN accordingly (WebNN off when WebGPU is fastest). Until two accelerators have
+been measured it keeps the default: WebNN first, most native device first. A speed only compares with the same model
+file (`dtype`), so the benchmark page's fp16 WebGPU run never stands in for the app's q4 one.
+
 ## Architecture
 
 ### Application Modes

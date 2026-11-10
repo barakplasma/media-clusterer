@@ -10,6 +10,7 @@ import { projectInWorker } from './projection'
 import pLimit from 'p-limit'
 import { loadSapiens2, embedWithSapiens2 } from './sapiens2'
 import { loadVlm, embedWithVlm, embedTextWithVlm, disposeVlm, vlmDevice } from './vlm'
+import { median, recordBench, fastestAccelerator, webnnOrder, type Accelerator, type Candidate } from './benchStore'
 import { rankModels, rankProjections, strike, type DeviceCaps } from './modelRanking'
 import { MODEL_BADGES, PROJECTION_RANK } from './benchmarkRanks'
 import {
@@ -2433,17 +2434,36 @@ interface EmbedOptions {
 }
 let lastEmbedStop: EmbedStop = 'ok'
 
+// Milliseconds the worker took per still photo this run, for recordAppBench.
+let appStillMs: number[] = []
+
+/**
+ * A real run's photo speed, remembered next to the benchmark page's (src/benchStore.ts) so the accelerator
+ * choice uses what the app actually runs. The first photo pays warm-up and is left out.
+ */
+function recordAppBench() {
+  const ms = appStillMs.slice(1)
+  appStillMs = []
+  if (ms.length < 3 || !vlmTier) return
+  recordBench({ at: Date.now(), source: 'app', device: vlmDevice(), dtype: vlmTier.dtype, embedMs: median(ms), n: ms.length })
+}
+
 async function embedAll(files: PhotoFile[], opts: EmbedOptions = {}) {
   // Models and embeddings are best-effort storage until this is granted. Not awaited: it may prompt.
   void navigator.storage?.persist?.().catch(() => false)
-  // A headless (overnight) frame's parent already holds the wake lock.
-  if (opts.headless) return embedAllInner(files, opts)
-  awakeWanted++
-  void keepAwake()
+  appStillMs = []
   try {
-    return await embedAllInner(files, opts)
+    // A headless (overnight) frame's parent already holds the wake lock.
+    if (opts.headless) return await embedAllInner(files, opts)
+    awakeWanted++
+    void keepAwake()
+    try {
+      return await embedAllInner(files, opts)
+    } finally {
+      if (--awakeWanted === 0) void overnightWakeLock?.release().catch(() => {})
+    }
   } finally {
-    if (--awakeWanted === 0) void overnightWakeLock?.release().catch(() => {})
+    recordAppBench()
   }
 }
 
@@ -2672,7 +2692,12 @@ async function embedAllInner(files: PhotoFile[], opts: EmbedOptions = {}) {
           extracted = await embedImages(remoteConfig, missInputs as string[])
         } else if (isVlm) {
           if (!vlmTier) throw new Error(`${state.settings.modelVariant} not loaded`)
+          const tVlm = performance.now()
           const res = await embedWithVlm(missInputs as ImageBitmap[][])
+          // One still alone in the batch is a clean per-photo timing; videos and failures are not.
+          if (missInputs.length === 1 && (missInputs[0] as ImageBitmap[]).length === 1 && !res.errors.length) {
+            appStillMs.push(performance.now() - tVlm)
+          }
           extracted = res.vectors
           embedFailReason ||= res.errors[0] ?? ''
         } else if (isSapiens2) {
@@ -4346,7 +4371,17 @@ function modelReason(v: ModelVariant, d: DeviceDiag, blocked: string | null, rec
   return ranks
 }
 
-function renderChecks(d: DeviceDiag) {
+/** What EmbeddingGemma 2 can run on here, with the model file each runs: the app's WebGPU path is q4, WebNN's fp16. */
+const WEBGPU_DTYPE = 'q4' // the embeddinggemma2 tier's dtype in src/vlmTiers.ts
+function accelerators(d: DeviceDiag): Candidate[] {
+  const gpu = !!d.adapter && !d.powerVR && !d.adapter.info?.isFallbackAdapter
+  return [
+    ...(gpu ? [{ device: 'webgpu' as Accelerator, dtype: WEBGPU_DTYPE }] : []),
+    ...d.webnn.map((t) => ({ device: `webnn-${t}` as Accelerator, dtype: 'fp16' }))
+  ]
+}
+
+function renderChecks(d: DeviceDiag, fastest: { device: Accelerator; ms: number } | null = null) {
   const gpu = d.adapter
     ? `${d.adapter.info.vendor || 'GPU'} ${d.adapter.info.architecture}`.trim() +
       (d.powerVR ? ': too slow for AI on WebGPU' : d.adapter.info.isFallbackAdapter ? ': software only (slow)' : ' ✓')
@@ -4354,6 +4389,7 @@ function renderChecks(d: DeviceDiag) {
   const lines = [
     `🎮 Graphics (WebGPU): ${gpu}`,
     `⚡ WebNN: ${d.webnn.length ? `${d.webnn.join(', ').toUpperCase()} ✓` : 'off (chrome://flags → "WebNN API")'}`,
+    ...(fastest ? [`⏱ Fastest in your earlier runs: ${fastest.device}, ${(fastest.ms / 1000).toFixed(1)} s per photo`] : []),
     ...(d.memoryGB ? [`🧠 Memory: ${d.memoryGB} GB`] : []),
     ...(d.chromeAI !== 'unavailable' ? [`💬 Chrome AI: ${d.chromeAI}`] : [])
   ]
@@ -4372,7 +4408,10 @@ async function runSetupWizard() {
   // Most native first: WebNN (NPU > GPU > CPU) whenever offered, then WebGPU, then CPU models.
   // A load the OS killed on this build would be killed again at every start; a new build tries once more.
   const killed = localStorage.getItem(WEBNN_LOADING_KEY) === __GIT_COMMIT__
-  useWebnn(killed ? [] : d.webnn)
+  // Else the fastest of the accelerators here by the remembered runs (src/benchStore.ts), or, until two of them
+  // have been measured, WebNN first with its most native device first.
+  const fastest = killed ? null : fastestAccelerator(accelerators(d))
+  useWebnn(killed ? [] : webnnOrder(d.webnn, fastest?.device))
   if (killed && d.webnn.length) {
     showToast(
       'The tab was killed while loading EmbeddingGemma 2 on WebNN (out of memory?), so WebNN is off for this version. It is tried again after the next update or after clearing site data.',
@@ -4386,7 +4425,7 @@ async function runSetupWizard() {
     slowGpu: d.powerVR && !USE_WEBNN,
     chromeAI: d.chromeAI !== 'unavailable'
   })
-  renderChecks(d)
+  renderChecks(d, fastest)
   const current = document.getElementById('wizard-current')!
   if (savedSettings) {
     // A saved Chrome AI choice that cannot run falls back to the recommendation.
