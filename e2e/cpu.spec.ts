@@ -622,3 +622,37 @@ test.describe('the wizard picks the fastest accelerator by remembered runs', () 
     await expect(reason(page)).toContainText('Runs on WebNN')
   })
 })
+
+test('npu-test.html?hybrid=webgpu,cpu: cpu is the WASM backend, never WebNN', async ({ page }) => {
+  // No model downloads: only the page's argument handling is under test.
+  await page.route(/huggingface\.co|jsdelivr/, (r) => r.abort())
+  await page.addInitScript(() => {
+    // A WebNN that would be used if the page asked for it; it must not.
+    ;(navigator as unknown as { ml: unknown }).ml = {
+      createContext: async () => {
+        ;(window as unknown as { __webnnAsked: boolean }).__webnnAsked = true
+        return {}
+      }
+    }
+  })
+  await page.goto('/npu-test.html?hybrid=webgpu,cpu')
+  await expect(page.locator('#status')).toContainText('failed in', { timeout: 30_000 })
+  const text = await page.locator('#report').innerText()
+  expect(text, 'the pair was accepted').not.toContain('two different devices')
+  // It got as far as the processor download, which is what we blocked.
+  await expect(page.locator('#status')).toContainText('processor')
+  // The nav marks the link as the page in use, and the page names the pair it resolved.
+  await expect(page.locator('#devices a.on')).toHaveText('Hybrid: WebGPU + CPU (WASM)')
+  expect(await page.evaluate(() => document.body.innerText)).toContain('webgpu+wasm')
+  expect(await page.evaluate(() => (window as unknown as { __webnnAsked?: boolean }).__webnnAsked), 'WebNN was not touched').toBeFalsy()
+
+  // A run that does use WebNN still probes it.
+  await page.goto('/npu-test.html?device=webnn-cpu')
+  await expect(page.locator('#status')).toContainText('failed in', { timeout: 30_000 })
+  expect(await page.evaluate(() => (window as unknown as { __webnnAsked?: boolean }).__webnnAsked)).toBe(true)
+
+  // A pair the page cannot make is refused with the reason, before anything loads.
+  await page.goto('/npu-test.html?hybrid=cpu,cpu')
+  await expect(page.locator('#status')).toContainText('failed in', { timeout: 30_000 })
+  expect(await page.locator('#report').innerText()).toContain('two different devices')
+})

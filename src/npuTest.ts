@@ -15,6 +15,7 @@
 import { AutoProcessor, RawImage, env } from '@huggingface/transformers'
 import * as ort from 'onnxruntime-web'
 import { median, recordBench, recordHybrid, type Accelerator } from './benchStore'
+import { loadWasmRunner } from './npuWasmRunner'
 
 const REPO = 'onnx-community/embeddinggemma-2-ONNX'
 const IMAGE_TOKENS = 70 // phone profile (src/vlmTiers.ts PHONE_OVERRIDES)
@@ -30,7 +31,9 @@ const device = params.get('device') ?? 'webnn-npu'
 // fp16 everywhere, so the three backends compare the same model (WASM runs the stock graph as a reference).
 const dtype = params.get('dtype') ?? 'fp16'
 // ?hybrid=a,b: two devices embedding at the same time, to see whether their speeds add up.
-const hybridDevices = params.get('hybrid')?.split(',').filter(Boolean) ?? null
+// `cpu` is the WASM backend, in a worker (src/npuWorker.ts): WebNN is not on every device and has crashed one.
+const hybridDevices =
+  params.get('hybrid')?.split(',').filter(Boolean).map((d) => (d === 'cpu' ? 'wasm' : d)) ?? null
 const ACCELERATORS: string[] = ['webgpu', 'webnn-npu', 'webnn-gpu', 'webnn-cpu', 'wasm']
 
 // ── Report: the TypeScript shape and the JSON Schema shipped with the copy ──
@@ -635,7 +638,9 @@ async function diagnostics(): Promise<void> {
     }
   }
   log(`gpu ${JSON.stringify(report.gpu)}`)
-  if (!nav.ml) return
+  // WebNN is only probed when the run uses it (or for ?diag): it is not on every device and has crashed one.
+  const usesWebnn = params.has('diag') || (hybridDevices ?? [device]).some((d) => d.startsWith('webnn'))
+  if (!nav.ml || !usesWebnn) return
   for (const deviceType of ['npu', 'gpu', 'cpu'] as const) {
     const c: WebnnContext = { deviceType, ok: false }
     try {
@@ -984,8 +989,8 @@ async function loadRunner(
 
 /**
  * Two devices embedding picture A at the same time for HYBRID_SECONDS, against each alone: does running a CPU
- * and a GPU together add up? Both sessions run on this page; WebGPU and WebNN work happens off its thread, so
- * they overlap. A WASM session would run on the page's own thread and hold the other up, so it is refused.
+ * and a GPU together add up? WebGPU and WebNN sessions run on this page (their work happens off its thread, so
+ * they overlap); a WASM one runs on a worker, since on this page's thread it would hold the other up.
  */
 async function runHybrid(devs: string[]): Promise<void> {
   const t0 = performance.now()
@@ -999,13 +1004,13 @@ async function runHybrid(devs: string[]): Promise<void> {
   )
   try {
     if (devs.length !== 2 || devs[0] === devs[1] || devs.some((d) => !ACCELERATORS.includes(d)))
-      throw new Error('?hybrid= wants two different devices, for example webgpu,webnn-cpu')
-    if (devs.includes('wasm'))
-      throw new Error('wasm cannot run beside another device on one page; use webnn-cpu as the CPU side')
+      throw new Error('?hybrid= wants two different devices, for example webgpu,cpu')
     await diagnostics()
     const { inputs, overrides, prepMs } = await prepare(step)
     const embeds: ((inp: Inp) => Promise<Float32Array>)[] = []
-    for (const dev of devs) embeds.push(await loadRunner(dev, overrides, step))
+    for (const dev of devs) {
+      embeds.push(dev === 'wasm' ? await loadWasmRunner(overrides, dtype, params.has('verbose'), step) : await loadRunner(dev, overrides, step))
+    }
 
     // Each device alone first, the baseline (the first embed pays warm-up).
     const alone: number[][] = [[], []]
