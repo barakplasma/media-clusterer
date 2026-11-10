@@ -12,16 +12,22 @@ permissions:
   contents: read
 
 jobs:
+  # The CPU suite (`npm test`) runs on an ordinary Linux runner in deploy.yml; these need a Mac for the GPU.
   e2e:
-    name: e2e (${{ matrix.profile }})
+    name: e2e (${{ matrix.name }})
     runs-on: macos-latest # macos-26 (arm64); GitHub retires macos-14 on 2026-11-02
-    timeout-minutes: 45
+    timeout-minutes: 60 # the WebNN run downloads the 880 MB fp16 model
     strategy:
       fail-fast: false
       matrix:
-        profile: [phone, desktop]
-    # Only the phone profile is required; desktop is informational.
-    continue-on-error: ${{ matrix.profile == 'desktop' }}
+        include:
+          - name: webgpu
+            project: desktop
+          - name: webnn
+            project: webnn
+    # WebGPU is required. WebNN is informational until it has passed on a Mac runner: nobody knows yet
+    # whether Chrome there has a WebNN backend (the test fails, rather than quietly using WebGPU, if not).
+    continue-on-error: ${{ matrix.name == 'webnn' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -31,7 +37,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx playwright test --project=${{ matrix.profile }}
+      - run: npx playwright test --project=${{ matrix.project }}
 
   # Safari: e2e/safari/ (node:test + safaridriver) is kept but has no job.
   # Safari 26.6 on GitHub's macos-26 runner returns no WebGPU adapter (Chrome
