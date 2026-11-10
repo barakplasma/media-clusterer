@@ -104,7 +104,7 @@ test('overnight embedding runs the real model in recycled worker frames', async 
     if (window === window.top)
       localStorage.setItem('mc_settings', JSON.stringify({ viewerOnly: true, modelVariant: 'embeddinggemma2', randomSampleSize: 0 }))
     const w = window as any
-    w.__mcOvernightTest = { chunkSize: 3 } // six fixtures, so two frames
+    w.__mcOvernightTest = { chunkSize: 4 } // one frame each for the photos, the quick videos and the bonus videos
     w.showDirectoryPicker = async () => {
       const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('overnight-gpu', { create: true })
       for (const n of fixtures) {
@@ -126,7 +126,10 @@ test('overnight embedding runs the real model in recycled worker frames', async 
   await page.locator('#overnight-start').click()
   await expect(page.locator('#overnight-close')).toBeVisible({ timeout: 20 * 60_000 })
   console.log(await page.locator('#overnight-run').innerText())
-  await expect(page.locator('.on-model').first()).toContainText('embedded 6 ')
+  // Photos, then the videos from 2 frames, then the bonus pass over those videos from all their frames.
+  const rows = page.locator('.on-model')
+  await expect(rows).toHaveCount(3)
+  for (const [i, n] of [4, 2, 2].entries()) await expect(rows.nth(i)).toContainText(`embedded ${n} `)
 
   const vecs = await page.evaluate(async () => {
     const db: IDBDatabase = await new Promise((res, rej) => {
@@ -147,9 +150,10 @@ test('overnight embedding runs the real model in recycled worker frames', async 
     })
     return all
       .filter((e) => e.key.startsWith('@embeddinggemma2'))
-      .map((e) => ({ len: e.v.length, owns: e.v.byteLength === e.v.buffer.byteLength, norm: Math.hypot(...e.v) }))
+      .map((e) => ({ key: e.key, len: e.v.length, owns: e.v.byteLength === e.v.buffer.byteLength, norm: Math.hypot(...e.v) }))
   })
-  expect(vecs).toHaveLength(6)
+  expect(vecs).toHaveLength(8) // 4 photos, 2 videos from 2 frames, the same 2 from all their frames
+  expect(vecs.filter((v) => v.key.includes('-f2/'))).toHaveLength(2)
   for (const v of vecs) {
     expect(v).toMatchObject({ len: 768, owns: true })
     expect(v.norm).toBeGreaterThan(0.99)

@@ -48,7 +48,8 @@ if (!ortWasm || !ortVersion) {
   throw new Error('onnxruntime-web WASM env or version missing; cannot point it at the CDN build')
 }
 ortWasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/`
-ortWasm.numThreads = navigator.hardwareConcurrency || 4
+// Without cross-origin isolation (GitHub Pages sends no COOP/COEP) ORT falls back to one thread and warns twice per load.
+ortWasm.numThreads = self.crossOriginIsolated ? navigator.hardwareConcurrency || 4 : 1
 
 interface VisionOutput {
   data: Float32Array

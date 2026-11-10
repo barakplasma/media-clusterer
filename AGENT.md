@@ -61,6 +61,10 @@ End to end only (no unit tests). Needs Google Chrome installed.
   and for a model with no such scheme means no prefix on either side. Never mix schemes across the two
   sides. Any change of embedder, model, dimension, or of an input that alters what gets embedded must
   change the IndexedDB cache namespace (`currentCachePrefix`, `src/app.ts:354`).
+  The overnight quick video pass is one such change: a video embedded from `DRAFT_VIDEO_FRAMES` frames lives
+  under `videoDraftPrefix(variant)` (the tier's prefix plus `-f2`), never under the full one. Opening a folder
+  or resuming reads a video's full vector first and its quick one if that is all there is
+  (`readCachedEmbeddings`); only overnight worker frames skip that fallback, so the bonus pass can replace them.
 
 ## Architecture
 

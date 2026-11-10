@@ -276,19 +276,27 @@ test('overnight: two models, a crashing file and a hanging file, then resume', a
     await expect(page.locator('#overnight-setup')).toBeVisible()
   }
   await pickModels()
-  const boxes = page.locator('#overnight-models input:not(:disabled)')
-  const ids = [await boxes.nth(0).inputValue(), await boxes.nth(1).inputValue()]
+  // One model with a quick video pass (EmbeddingGemma 2) and one without (nomic), so both run shapes are covered.
+  const ids = ['embeddinggemma2', 'nomic']
   for (const box of await page.locator('#overnight-models input:checked').all()) await box.uncheck()
   for (const id of ids) await page.locator(`#overnight-models input[value="${id}"]`).check()
   await page.locator('#overnight-start').click()
 
   await expect(page.locator('#overnight-close')).toBeVisible({ timeout: 200_000 })
   await expect(page.locator('#overnight-pct')).toHaveText('100.0%')
+  // EmbeddingGemma 2 runs photos, then videos from 2 frames, and (after every model's first passes) the bonus
+  // pass over those videos; nomic has one pass over everything. The hanging file is a photo.
   const rows = page.locator('.on-model')
-  for (let i = 0; i < 2; i++) {
+  await expect(rows).toHaveCount(4)
+  const expected = [
+    ['photos', 'embedded 3 ', 'already cached 0 ', 'failed 1 '],
+    ['videos, 2 frames', 'embedded 2 ', 'already cached 0 ', 'failed 0 '],
+    ['nomic', 'embedded 5 ', 'already cached 0 ', 'failed 1 '],
+    ['(bonus)', 'embedded 2 ', 'already cached 0 ', 'failed 0 ']
+  ]
+  for (const [i, parts] of expected.entries()) {
     await expect(rows.nth(i)).toContainText('done')
-    await expect(rows.nth(i)).toContainText('embedded 5 ')
-    await expect(rows.nth(i)).toContainText('failed 1 ')
+    for (const part of parts) await expect(rows.nth(i)).toContainText(part)
   }
   // Both the crash and the hang cost a fresh frame; the hanging file was narrowed down and skipped.
   const restarts = Number((await page.locator('#overnight-stats').textContent())!.match(/restarts (\d+)/)![1])
@@ -313,7 +321,8 @@ test('overnight: two models, a crashing file and a hanging file, then resume', a
   })
   expect(stored.bytes).toBe(32)
   expect(stored.keys.filter((k) => k.includes('butterfly'))).toEqual([])
-  expect(stored.keys.length).toBe(10)
+  expect(stored.keys.length).toBe(12) // EmbeddingGemma 2: 3 photos + 2 quick videos + 2 full videos; nomic: 5
+  expect(stored.keys.filter((k) => k.includes('-f2/')).length).toBe(2)
   // Nothing left but a file that hangs, so there is no job to resume.
   expect(await page.evaluate(() => localStorage.getItem('mc_overnight_job'))).toBeNull()
   // The finished run left a projected layout in the Resume slot, for one of the run's models.
@@ -333,6 +342,79 @@ test('overnight: two models, a crashing file and a hanging file, then resume', a
   for (const id of ids) {
     await expect(page.locator('#overnight-models label', { has: page.locator(`input[value="${id}"]`) })).toContainText('1 of 6 to embed')
   }
+})
+
+test('overnight: photos first, videos from 2 frames, then the bonus pass; stopping it still saves a layout', async ({ page }) => {
+  test.setTimeout(240_000)
+  // WebNN on and a first visit: the page decides the cache namespace, and the hidden frames must agree with it.
+  await page.addInitScript(() => {
+    const w = window as any
+    w.navigator.ml = { createContext: async () => ({}) }
+    w.__mcOvernightTest = { chunkSize: 10, stallMs: 60000, loadStallMs: 60000 }
+    w.__mcTestEmbedder = async (_model: string, f: { name: string }, draft: boolean) => {
+      const calls = JSON.parse(localStorage.getItem('calls') ?? '[]')
+      calls.push(`${draft ? 'draft' : 'full'}:${f.name}`)
+      localStorage.setItem('calls', JSON.stringify(calls))
+      // The bonus pass is slow, so the test can press Stop while it works.
+      if (!draft && /\.(mp4|webm)$/.test(f.name)) await new Promise((r) => setTimeout(r, 8000))
+      return new Float32Array(8).fill(1)
+    }
+    w.showDirectoryPicker = async () => {
+      const root = await navigator.storage.getDirectory()
+      const dir = await root.getDirectoryHandle('overnight-passes', { create: true })
+      for (const n of ['cats.jpg', 'tiger.png', 'football.webp', 'butterfly.jpg', 'cats.mp4', 'tiger.webm']) {
+        const h = await dir.getFileHandle(n, { create: true })
+        if ((await h.getFile()).size === 0) {
+          const wr = await h.createWritable()
+          await wr.write(await (await fetch(`/e2e/fixtures/${n}`)).blob())
+          await wr.close()
+        }
+      }
+      return dir
+    }
+  })
+  await page.goto('/')
+  await expect(page.locator('#wizard-go')).toBeVisible() // the device check has decided on WebNN
+  await page.locator('#overnight-btn').click()
+  await page.locator('#filter-load').click()
+  for (const box of await page.locator('#overnight-models input:checked').all()) await box.uncheck()
+  await page.locator('#overnight-models input[value="embeddinggemma2"]').check()
+  await page.locator('#overnight-start').click()
+
+  // The bonus pass has begun once a video is embedded from all its frames.
+  await page.waitForFunction(() =>
+    JSON.parse(localStorage.getItem('calls') ?? '[]').some((c: string) => /^full:.*\.(mp4|webm)$/.test(c))
+  )
+  await page.locator('#overnight-stop').click()
+  await expect(page.locator('#overnight-close')).toBeVisible({ timeout: 60_000 })
+
+  const calls: string[] = await page.evaluate(() => JSON.parse(localStorage.getItem('calls')!))
+  const photos = ['cats.jpg', 'tiger.png', 'football.webp', 'butterfly.jpg']
+  const videos = ['cats.mp4', 'tiger.webm']
+  expect(calls.slice(0, 4).sort()).toEqual(photos.map((n) => `full:${n}`).sort())
+  expect(calls.slice(4, 6).sort()).toEqual(videos.map((n) => `draft:${n}`).sort())
+  expect(calls[6]).toMatch(/^full:.*\.(mp4|webm)$/)
+
+  // Stopped mid-bonus: the layout is saved anyway, and it holds every file, the videos by their quick vectors.
+  await expect(page.locator('#overnight-line')).toContainText('press Resume', { timeout: 30_000 })
+  const keys = await page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((res, rej) => {
+      const r = indexedDB.open('photo-organizer-v1', 2)
+      r.onsuccess = () => res(r.result)
+      r.onerror = () => rej(r.error)
+    })
+    const all: string[] = await new Promise((res) => {
+      const r = db.transaction('embeddings').objectStore('embeddings').getAllKeys()
+      r.onsuccess = () => res(r.result.map(String))
+    })
+    return { all, fileKeys: JSON.parse(localStorage.getItem('po_fileKeys')!).length }
+  })
+  expect(keys.fileKeys).toBe(6)
+  expect(keys.all.length).toBe(6)
+  expect(keys.all.filter((k) => k.includes('webnn') && k.includes('-f2/')).length, 'quick vectors, under the WebNN namespace').toBe(2)
+  expect(keys.all.filter((k) => /cats\.mp4|tiger\.webm/.test(k) && !k.includes('-f2/'))).toEqual([])
+  // Stopped with work left, so the button offers to resume it.
+  expect(await page.evaluate(() => localStorage.getItem('mc_overnight_job'))).not.toBeNull()
 })
 
 test('saved embeddings: a bundle in the folder is imported and matched by sha256; overnight sample toggle', async ({ page }) => {
