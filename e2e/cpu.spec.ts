@@ -717,3 +717,37 @@ test('overnight: a hanging file costs two restarts (stall, then alone), not one 
   const restarts = Number((await page.locator('#overnight-stats').textContent())!.match(/restarts (\d+)/)![1])
   expect(restarts).toBe(2)
 })
+
+test('a layout of many photos places them all without holding an n×n matrix', async ({ page }) => {
+  test.setTimeout(120_000)
+  await page.goto('/')
+  const r = await page.evaluate(async () => {
+    const { projectInWorker } = await import('/src/projection.ts')
+    // 3,000 unit vectors in 3 tight groups: more than the sample the worker lays out (1,500).
+    const n = 3000
+    const dim = 16
+    const vecs = Array.from({ length: n }, (_, i) => {
+      const v = new Float32Array(dim).map((_, k) => (k === i % 3 ? 1 : 0) + 0.05 * Math.sin(i * 7 + k))
+      const norm = Math.hypot(...v)
+      return v.map((x) => x / norm)
+    })
+    const t = performance.now()
+    const pts = await projectInWorker(vecs, 'TSNE', 15)
+    const centre = (g: number) => {
+      const own = pts.filter((_, i) => i % 3 === g)
+      return [own.reduce((s, p) => s + p[0], 0) / own.length, own.reduce((s, p) => s + p[1], 0) / own.length]
+    }
+    const c = [0, 1, 2].map(centre)
+    const spread = (g: number) => Math.hypot(...pts.filter((_, i) => i % 3 === g).map((p) => Math.hypot(p[0] - c[g][0], p[1] - c[g][1])))
+    return {
+      n: pts.length,
+      finite: pts.every((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])),
+      apart: Math.min(Math.hypot(c[0][0] - c[1][0], c[0][1] - c[1][1]), Math.hypot(c[1][0] - c[2][0], c[1][1] - c[2][1])),
+      within: Math.max(spread(0), spread(1), spread(2)) / Math.sqrt(n / 3),
+      seconds: (performance.now() - t) / 1000
+    }
+  })
+  expect(r.n).toBe(3000)
+  expect(r.finite).toBe(true)
+  expect(r.apart, 'groups stay separated').toBeGreaterThan(r.within)
+})
