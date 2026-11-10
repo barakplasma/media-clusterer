@@ -22,7 +22,10 @@ import {
   VLM_FRAME_PX,
   isPowerVRRenderer,
   USE_WEBNN,
-  useWebnn
+  useWebnn,
+  DRAFT_VIDEO_FRAMES,
+  videoDraftPrefix,
+  WEBNN_DEVICES
 } from './vlmTiers'
 import type { Sapiens2Session, Sapiens2Variant, Sapiens2FallbackReason } from './sapiens2'
 import {
@@ -71,7 +74,7 @@ import {
 import { readProvenance, type Provenance } from './aiProvenance'
 import { loadFaceModels, findFaces, groupFaces, FACE_PREFIX, FACE_STRIDE, type FaceModels } from './faces'
 import { BUNDLE_FILE, encodeBundle, decodeBundle, rekeyBundle, sha256Hex, fileKeyOf } from './embeddingBundle'
-import { runOvernight, formatDuration, type ChildMsg, type OvernightStats, type RunMsg } from './overnight'
+import { runOvernight, formatDuration, type ChildMsg, type OvernightModel, type OvernightStats, type RunMsg } from './overnight'
 import {
   DEFAULT_FILTER,
   applyFileFilter,
@@ -2338,7 +2341,9 @@ async function resizeForEmbedding(file: File): Promise<RawImage | null> {
 // future parent/child opens hit directly.
 async function readCachedEmbeddings(
   files: PhotoFile[],
-  cachePrefix: string
+  cachePrefix: string,
+  /** Namespace of quick video vectors, used for a video with no vector under `cachePrefix`. */
+  draftPrefix: string | null = null
 ): Promise<{
   keys: CacheKey[]
   cached: (Float32Array | null)[]
@@ -2359,18 +2364,27 @@ async function readCachedEmbeddings(
     }
   })
 
+  const draftForFile: number[] = [] // queryKeys index -> file index
+  if (draftPrefix) {
+    files.forEach((f, i) => {
+      if (!isVideoName(f.name)) return
+      draftForFile[queryKeys.length] = i
+      queryKeys.push(`${draftPrefix}${makeCacheKey(f)}` as CacheKey)
+    })
+  }
+
   const results = await cacheGetBatch(queryKeys)
   const cached = results.slice(0, files.length)
   const migrate: [CacheKey, Float32Array][] = []
 
+  // Legacy keys come before draft ones in queryKeys, so an old full vector beats a quick one.
   for (let q = files.length; q < results.length; q++) {
-    const i = legacyForFile[q]
-    if (i === undefined || cached[i]) continue // new key already hit
     const v = results[q]
-    if (v) {
-      cached[i] = v
-      migrate.push([keys[i], v])
-    } // migrate to new key
+    const i = legacyForFile[q] ?? draftForFile[q]
+    if (i === undefined || cached[i] || !v) continue // new key already hit
+    cached[i] = v
+    // Legacy vectors move to the new key; a quick vector must never be written as a full one.
+    if (legacyForFile[q] !== undefined) migrate.push([keys[i], v])
   }
   return { keys, cached, migrate }
 }
@@ -2405,6 +2419,8 @@ interface EmbedOptions {
   onProgress?: (done: number, total: number) => void
   /** Stop early once less than this share of the JS heap is free (default 0.2). */
   minFreeRatio?: number
+  /** Overnight quick pass: videos from DRAFT_VIDEO_FRAMES frames, written under videoDraftPrefix. */
+  draft?: boolean
 }
 let lastEmbedStop: EmbedStop = 'ok'
 
@@ -2457,7 +2473,12 @@ async function embedAllInner(files: PhotoFile[], opts: EmbedOptions = {}) {
   // ternary chain that currentCachePrefix() already implements; the two are now
   // one function, so the settings panel's cache count and the keys actually
   // written cannot disagree.
-  const cachePrefix = currentCachePrefix()
+  const variantDraftPrefix = videoDraftPrefix(state.settings.modelVariant)
+  const draft = !!opts.draft && variantDraftPrefix !== null
+  const cachePrefix = draft ? variantDraftPrefix : currentCachePrefix()
+  // A video that only has its quick vector counts as embedded, except in a worker frame, whose whole job is
+  // to write the vector the quick one stands in for.
+  const draftFallback = headless || draft ? null : variantDraftPrefix
 
   for (let i = 0; i < files.length; ) {
     // Remote batches are bounded by request size, not GPU memory, so the
@@ -2470,7 +2491,7 @@ async function embedAllInner(files: PhotoFile[], opts: EmbedOptions = {}) {
 
     // One IDB transaction for the whole batch, with legacy-key fallback so
     // embeddings cached by older builds (full-path keys) are reused and migrated.
-    const { keys, cached, migrate } = await readCachedEmbeddings(batch, cachePrefix)
+    const { keys, cached, migrate } = await readCachedEmbeddings(batch, cachePrefix, draftFallback)
     if (migrate.length > 0) writeQueue.push(...migrate)
 
     // Width guard: a cached vector of the wrong width is from a different
@@ -2521,7 +2542,7 @@ async function embedAllInner(files: PhotoFile[], opts: EmbedOptions = {}) {
               // single frame the thumbnail happened to catch.
               const tier = getVlmTier(state.settings.modelVariant)!
               const frames = await videoFrameLimit(() =>
-                extractVideoFrames(f.file, tier.framesPerVideo, VLM_FRAME_PX)
+                extractVideoFrames(f.file, draft ? DRAFT_VIDEO_FRAMES : tier.framesPerVideo, VLM_FRAME_PX)
               )
               if (frames.length > 0) {
                 missInputs.push(frames)
@@ -5070,7 +5091,7 @@ dom.resumeBtn.addEventListener('click', async () => {
       const cachedVectors: (Float32Array | null)[] = []
       for (let c = 0; c < matched.length; c += RESUME_CHUNK) {
         const chunk = matched.slice(c, c + RESUME_CHUNK)
-        const { cached, migrate } = await readCachedEmbeddings(chunk, resumePrefix)
+        const { cached, migrate } = await readCachedEmbeddings(chunk, resumePrefix, videoDraftPrefix(state.settings.modelVariant))
         if (migrate.length > 0) await cachePutBatch(migrate)
         cachedVectors.push(...cached)
         setStatus(
@@ -5128,7 +5149,7 @@ function autoLoadModel() {
 // ── Overnight embedding ─────────────────────────────────────────────────────
 /** Worker-frame side: load one model, embed the posted files, report, done. */
 function runOvernightChild() {
-  type TestEmbedder = (model: ModelVariant, file: PhotoFile) => Promise<Float32Array | null>
+  type TestEmbedder = (model: ModelVariant, file: PhotoFile, draft: boolean) => Promise<Float32Array | null>
   const fail = (message: string) => postToParent({ type: 'done', reason: 'error', message })
   window.addEventListener('error', (e) => fail(String(e.message)))
   window.addEventListener('unhandledrejection', (e) => fail(String((e.reason as Error)?.message ?? e.reason)))
@@ -5137,15 +5158,16 @@ function runOvernightChild() {
     const msg = e.data as RunMsg
     if (msg?.type !== 'run') return
     try {
+      useWebnn(msg.webnn ?? [])
       state.settings.viewerOnly = false
       state.settings.modelVariant = msg.model
       // e2e seam: stands in for the model so the controller can be tested without a GPU or a download.
       const test = (window as Window & { __mcTestEmbedder?: TestEmbedder }).__mcTestEmbedder
       if (test) {
         postToParent({ type: 'loaded' })
-        const prefix = currentCachePrefix(msg.model)
+        const prefix = (msg.draft && videoDraftPrefix(msg.model)) || currentCachePrefix(msg.model)
         for (let i = 0; i < msg.files.length; i++) {
-          const v = await test(msg.model, msg.files[i])
+          const v = await test(msg.model, msg.files[i], !!msg.draft)
           if (v) await cachePutBatch([[`${prefix}${makeCacheKey(msg.files[i])}` as CacheKey, v]])
           postToParent({ type: 'progress', done: i + 1, total: msg.files.length })
         }
@@ -5161,11 +5183,16 @@ function runOvernightChild() {
       postToParent({ type: 'loaded' })
       await embedAll(msg.files, {
         headless: true,
+        draft: msg.draft,
         // Recycle the frame well before the heap gets tight.
         minFreeRatio: 0.3,
         onProgress: (done, total) => postToParent({ type: 'progress', done, total })
       })
-      postToParent({ type: 'done', reason: lastEmbedStop })
+      postToParent({
+        type: 'done',
+        reason: lastEmbedStop,
+        message: embedFailed.size ? `${embedFailed.size} in the last chunk could not be embedded: ${embedFailReason}` : undefined
+      })
     } catch (err) {
       fail((err as Error)?.message ?? String(err))
     }
@@ -5279,6 +5306,40 @@ async function keepAwake() {
 document.addEventListener('visibilitychange', () => {
   if (awakeWanted > 0 && document.visibilityState === 'visible' && !overnightWakeLock) void keepAwake()
 })
+
+/**
+ * What an overnight run does for each picked model. A model with a quick video pass goes photos, then videos from
+ * DRAFT_VIDEO_FRAMES frames, and only once every model has had those, videos again from all their frames
+ * (the bonus pass). A video costs about a photo per frame, so the order puts a usable library first and the
+ * improvement last, where Stop can cut it short. Other models get one pass over everything.
+ */
+function overnightPasses(picked: ModelVariant[], labels: Map<ModelVariant, string>): OvernightModel[] {
+  const first: OvernightModel[] = []
+  const bonus: OvernightModel[] = []
+  for (const id of picked) {
+    const label = labels.get(id) ?? id
+    const prefix = currentCachePrefix(id)
+    const draftPrefix = videoDraftPrefix(id)
+    const tier = getVlmTier(id)
+    if (!draftPrefix || !tier) {
+      first.push({ id, label, prefix })
+      continue
+    }
+    first.push(
+      { id, label: `${label} · photos`, prefix, only: 'images' },
+      {
+        id,
+        label: `${label} · videos, ${DRAFT_VIDEO_FRAMES} frames`,
+        prefix: draftPrefix,
+        only: 'videos',
+        draft: true,
+        doneUnder: [prefix]
+      }
+    )
+    bonus.push({ id, label: `${label} · videos, ${tier.framesPerVideo} frames (bonus)`, prefix, only: 'videos', bonus: true })
+  }
+  return [...first, ...bonus]
+}
 
 async function startOvernightFlow() {
   if (!window.showDirectoryPicker) {
@@ -5428,7 +5489,8 @@ async function startOvernightFlow() {
   try {
     final = await runOvernight({
       files,
-      models: picked.map((id) => ({ id, label: labels.get(id) ?? id, prefix: currentCachePrefix(id) })),
+      models: overnightPasses(picked, labels),
+      webnn: WEBNN_DEVICES,
       cacheKeys,
       cacheHasBatch: (k) => cacheHasBatch(k as CacheKey[]),
       onUpdate: renderOvernight,
@@ -5457,7 +5519,8 @@ async function startOvernightFlow() {
       (err) => showToast(`Saving ${BUNDLE_FILE} into the folder failed: ${(err as Error).message}`, 'warn', 12000)
     )
   }
-  if (final && !ac.signal.aborted) {
+  // Stopping the bonus pass is how a run normally ends, so the layout is still worth saving then.
+  if (final && (!ac.signal.aborted || final.models.every((m) => m.bonus || m.state === 'done'))) {
     await projectOvernightResult(files, final).catch((err) =>
       showToast(`Saving the overnight layout failed: ${(err as Error).message}`, 'warn', 12000)
     )
@@ -5473,7 +5536,10 @@ async function startOvernightFlow() {
  * shortcut: one saved projection (the Resume slot), not one per model; store per model in IndexedDB if switching models after an overnight run becomes common.
  */
 async function projectOvernightResult(files: PhotoFile[], final: OvernightStats) {
-  const done = final.models.filter((m) => m.state === 'done').map((m) => m.id)
+  // A model is ready once its photos and quick video pass are done; the bonus pass only improves vectors already there.
+  const done = [...new Set(final.models.map((m) => m.id))].filter((id) =>
+    final.models.every((m) => m.id !== id || m.bonus || m.state === 'done')
+  )
   const model = done.includes(state.settings.modelVariant) ? state.settings.modelVariant : done[0]
   if (!model) return
   const line = $on('overnight-line')
@@ -5483,7 +5549,7 @@ async function projectOvernightResult(files: PhotoFile[], final: OvernightStats)
   const CHUNK = 500
   for (let c = 0; c < files.length; c += CHUNK) {
     const chunk = files.slice(c, c + CHUNK)
-    const { cached, migrate } = await readCachedEmbeddings(chunk, prefix)
+    const { cached, migrate } = await readCachedEmbeddings(chunk, prefix, videoDraftPrefix(model))
     if (migrate.length > 0) await cachePutBatch(migrate)
     cached.forEach((v, i) => {
       if (v) (kept.push(chunk[i]), vectors.push(v))
@@ -5491,7 +5557,10 @@ async function projectOvernightResult(files: PhotoFile[], final: OvernightStats)
     line.textContent = `Reading ${model} embeddings… ${Math.min(c + CHUNK, files.length).toLocaleString()} / ${files.length.toLocaleString()}`
     await yieldMain()
   }
-  if (vectors.length < 3) return
+  if (vectors.length < 3) {
+    line.textContent = `Too few ${model} embeddings (${vectors.length}) to lay out; open the folder to embed the rest.`
+    return
+  }
   line.textContent = `Projecting ${vectors.length.toLocaleString()} files with ${state.settings.projectionMethod} (${model})…`
   await yieldMain()
   const nNeighbors = Math.max(2, Math.min(15, vectors.length - 1))

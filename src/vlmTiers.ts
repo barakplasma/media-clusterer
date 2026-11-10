@@ -189,6 +189,22 @@ export function getVlmTier(variant: ModelVariant, phone = USE_LIGHT): VlmTier | 
   return { ...tier, ...phoneRow, ...webnnRow }
 }
 
+/** Frames a video is sampled at in its quick first overnight pass; the tier's `framesPerVideo` is the full pass. */
+export const DRAFT_VIDEO_FRAMES = 2
+
+/**
+ * Cache namespace of `variant`'s quick video embeddings (DRAFT_VIDEO_FRAMES frames), or null when its full pass
+ * is no longer than that. Apart from the full namespace on purpose: a clip embedded from fewer frames is a
+ * different vector, and the full pass must be able to see that it still has work to do (AGENT.md, "Embedding space").
+ */
+export function videoDraftPrefix(variant: ModelVariant): string | null {
+  const tier = getVlmTier(variant)
+  // Tier prefixes end in '/'; dropping it keeps the draft namespace from starting with the full one.
+  return tier && tier.framesPerVideo > DRAFT_VIDEO_FRAMES
+    ? `${tier.cachePrefix.slice(0, -1)}-f${DRAFT_VIDEO_FRAMES}/`
+    : null
+}
+
 /** Every declared tier, including ones not yet offered to users. */
 export function allVlmTiers(): VlmTier[] {
   return Object.values(TIERS).sort((a, b) => a.downloadMB - b.downloadMB)

@@ -10,8 +10,8 @@
  */
 
 import { makeCacheKey } from './embeddings'
-import { keyHasPrefix } from './fileFilter'
-import type { ModelVariant, PhotoFile } from './types'
+import { isVideoName, keyHasPrefix } from './fileFilter'
+import type { ModelVariant, PhotoFile, WebnnDevice } from './types'
 
 export type ChunkEnd = 'ok' | 'gpu-lost' | 'low-memory' | 'error' | 'unsupported' | 'stall' | 'stopped'
 
@@ -28,17 +28,30 @@ export interface RunMsg {
   type: 'run'
   model: ModelVariant
   files: PhotoFile[]
+  /** Embed videos from DRAFT_VIDEO_FRAMES frames, under the draft namespace (see videoDraftPrefix). */
+  draft?: boolean
+  /** WebNN devices the page found. The frame skips the device check, and they decide its cache namespace. */
+  webnn?: WebnnDevice[]
 }
 
 export interface OvernightModel {
   id: ModelVariant
   label: string
   prefix: string // cache namespace, see currentCachePrefix in app.ts
+  /** Only photos or only videos; default both. */
+  only?: 'images' | 'videos'
+  /** The quick video pass: the frame embeds from fewer frames and writes `prefix`, a draft namespace. */
+  draft?: boolean
+  /** Other namespaces whose vectors already count as done for this pass (the full one, for the draft pass). */
+  doneUnder?: string[]
+  /** Improves vectors that exist: left out of "is this model finished", and still worth a layout when stopped. */
+  bonus?: boolean
 }
 
 export interface ModelStats {
   id: ModelVariant
   label: string
+  bonus: boolean
   state: 'waiting' | 'loading' | 'running' | 'done' | 'failed' | 'stopped'
   total: number // files in the folder selection
   cachedAtStart: number
@@ -76,6 +89,7 @@ export interface OvernightDeps {
   onUpdate: (s: OvernightStats) => void
   signal: AbortSignal
   childUrl?: string
+  webnn?: WebnnDevice[]
   chunkSize?: number
   /** Silence after which a running frame counts as hung. */
   stallMs?: number
@@ -119,17 +133,22 @@ export async function runOvernight(deps: OvernightDeps): Promise<OvernightStats>
   const keys = await deps.cacheKeys()
 
   // Work per model, decided once from the cache.
-  const pendingByModel = deps.models.map((m) => {
+  const scopeByModel = deps.models.map((m) =>
+    deps.files.filter((f) => !m.only || isVideoName(f.name) === (m.only === 'videos'))
+  )
+  const pendingByModel = deps.models.map((m, i) => {
     const done = new Set<string>()
-    for (const k of keys) if (keyHasPrefix(k, m.prefix)) done.add(k.slice(k.lastIndexOf('/') + 1))
-    return deps.files.filter((f) => !done.has(makeCacheKey(f)))
+    const prefixes = [m.prefix, ...(m.doneUnder ?? [])]
+    for (const k of keys) if (prefixes.some((p) => keyHasPrefix(k, p))) done.add(k.slice(k.lastIndexOf('/') + 1))
+    return scopeByModel[i].filter((f) => !done.has(makeCacheKey(f)))
   })
   const models: ModelStats[] = deps.models.map((m, i) => ({
     id: m.id,
     label: m.label,
+    bonus: !!m.bonus,
     state: 'waiting',
-    total: deps.files.length,
-    cachedAtStart: deps.files.length - pendingByModel[i].length,
+    total: scopeByModel[i].length,
+    cachedAtStart: scopeByModel[i].length - pendingByModel[i].length,
     embedded: 0,
     failed: 0,
     remaining: pendingByModel[i].length,
@@ -201,7 +220,7 @@ export async function runOvernight(deps: OvernightDeps): Promise<OvernightStats>
         const m = e.data as ChildMsg
         arm()
         if (m.type === 'ready') {
-          frame.contentWindow!.postMessage({ type: 'run', model: model.id, files: chunk } satisfies RunMsg, location.origin)
+          frame.contentWindow!.postMessage({ type: 'run', model: model.id, files: chunk, draft: model.draft, webnn: deps.webnn } satisfies RunMsg, location.origin)
         } else if (m.type === 'loading') {
           st.loadPct = m.pct
         } else if (m.type === 'loaded') {
@@ -267,8 +286,10 @@ export async function runOvernight(deps: OvernightDeps): Promise<OvernightStats>
           pending = []
         } else if (res.reason === 'ok' || (res.reason === 'low-memory' && rest.length < chunk.length)) {
           // A file still missing after a clean run failed on its own (undecodable): it would fail again.
-          if (res.reason === 'ok') st.failed += rest.length
-          else pending.unshift(...rest) // recycled early on purpose; carry on with a fresh frame
+          if (res.reason === 'ok') {
+            st.failed += rest.length
+            if (res.message) st.message = res.message // why the files that failed did
+          } else pending.unshift(...rest) // recycled early on purpose; carry on with a fresh frame
           size = chunkSize
           loadFails = 0
         } else if (!res.loaded) {
